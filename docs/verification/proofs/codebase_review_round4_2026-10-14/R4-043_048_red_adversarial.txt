@@ -1,0 +1,231 @@
+FF.FFFFFF                                                                [100%]
+=================================== FAILURES ===================================
+____________ test_planted_symlink_at_old_tmp_path_is_never_followed ____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1514/test_planted_symlink_at_old_tm0')
+
+    def test_planted_symlink_at_old_tmp_path_is_never_followed(tmp_path: Path) -> None:
+        """RED pre-fix: the writer followed the planted link and clobbered the victim."""
+        target = tmp_path / ".env"
+        target.write_text("ORIGINAL=1\n", encoding="utf-8")
+        victim = tmp_path / "victim.txt"
+        victim.write_text("VICTIM-CONTENT\n", encoding="utf-8")
+        planted = _old_tmp_path(target)
+        planted.symlink_to(victim)
+    
+        env_file_mod.set_env_values({"NEW_KEY": "v"}, target)
+    
+>       assert victim.read_text(encoding="utf-8") == "VICTIM-CONTENT\n", "symlink target clobbered"
+E       AssertionError: symlink target clobbered
+E       assert 'ORIGINAL=1\n\nNEW_KEY=v\n' == 'VICTIM-CONTENT\n'
+E         
+E         - VICTIM-CONTENT
+E         + ORIGINAL=1
+E         + 
+E         + NEW_KEY=v
+
+tests/test_env_file_adversarial.py:52: AssertionError
+________________ test_crash_mid_write_never_leaves_an_empty_env ________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1514/test_crash_mid_write_never_lea0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108bf95b0>
+
+    def test_crash_mid_write_never_leaves_an_empty_env(tmp_path: Path, monkeypatch) -> None:
+        """RED pre-fix: O_TRUNC on the planted link emptied the .env before the crash."""
+        target = tmp_path / ".env"
+        original = "SECRET_VALUE=keep-me\n"
+        target.write_text(original, encoding="utf-8")
+        planted = _old_tmp_path(target)
+        planted.symlink_to(target)  # the unfixed writer truncates through this
+    
+        real_fdopen = os.fdopen
+    
+        class _ExplodingFile:
+            def __enter__(self) -> _ExplodingFile:
+                return self
+    
+            def __exit__(self, *_exc: object) -> bool:
+                return False
+    
+            def write(self, _data: str) -> None:
+                raise OSError("injected crash mid-write")
+    
+        def exploding_fdopen(fd: int, *args: object, **kwargs: object) -> _ExplodingFile:
+            real_fdopen(fd, *args, **kwargs).close()
+            return _ExplodingFile()
+    
+        monkeypatch.setattr(env_file_mod.os, "fdopen", exploding_fdopen)
+        with pytest.raises(OSError, match="injected crash"):
+            env_file_mod.set_env_values({"NEW_KEY": "v"}, target)
+    
+>       assert target.read_text(encoding="utf-8") == original, "crash left the .env truncated"
+E       AssertionError: crash left the .env truncated
+E       assert '' == 'SECRET_VALUE=keep-me\n'
+E         
+E         - SECRET_VALUE=keep-me
+
+tests/test_env_file_adversarial.py:90: AssertionError
+_____________________ test_write_fsyncs_file_and_directory _____________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1514/test_write_fsyncs_file_and_dir0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1099bf8a0>
+
+    def test_write_fsyncs_file_and_directory(tmp_path: Path, monkeypatch) -> None:
+        """RED pre-fix: the writer never called fsync at all."""
+        target = tmp_path / ".env"
+        target.write_text("A_KEY=1\n", encoding="utf-8")
+    
+        calls: list[int] = []
+        real_fsync = os.fsync
+    
+        def spy(fd: int) -> None:
+            calls.append(fd)
+            real_fsync(fd)
+    
+        monkeypatch.setattr(env_file_mod.os, "fsync", spy)
+        env_file_mod.set_env_values({"B_KEY": "2"}, target)
+    
+>       assert len(calls) >= 2, "expected a file fsync and a directory fsync"
+E       AssertionError: expected a file fsync and a directory fsync
+E       assert 0 >= 2
+E        +  where 0 = len([])
+
+tests/test_env_file_adversarial.py:129: AssertionError
+_______________ test_lowercase_existing_line_is_updated_in_place _______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1514/test_lowercase_existing_line_i0')
+
+    def test_lowercase_existing_line_is_updated_in_place(tmp_path: Path) -> None:
+        """RED pre-fix: the lowercase line was neither matched nor normalized."""
+        target = tmp_path / ".env"
+        target.write_text("# keep\nopenrouter_api_key=stale\nOTHER=1\n", encoding="utf-8")
+    
+        env_file_mod.set_env_values({"OPENROUTER_API_KEY": "fresh"}, target)
+    
+        lines = target.read_text(encoding="utf-8").splitlines()
+        assert "# keep" in lines
+        assert lines.count("OPENROUTER_API_KEY=fresh") == 1
+>       assert all("openrouter_api_key" not in line for line in lines)
+E       assert False
+E        +  where False = all(<generator object test_lowercase_existing_line_is_updated_in_place.<locals>.<genexpr> at 0x10a4512f0>)
+
+tests/test_env_file_adversarial.py:146: AssertionError
+_______________ test_lowercase_existing_line_is_removed_cleanly ________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1514/test_lowercase_existing_line_i1')
+
+    def test_lowercase_existing_line_is_removed_cleanly(tmp_path: Path) -> None:
+        """RED pre-fix: removal reported [] and kept the lowercase line."""
+        target = tmp_path / ".env"
+        target.write_text("openrouter_api_key=stale\nKEEP=1\n", encoding="utf-8")
+    
+        removed = env_file_mod.remove_env_values(["OPENROUTER_API_KEY"], path=target)
+    
+>       assert removed == ["OPENROUTER_API_KEY"]
+E       AssertionError: assert [] == ['OPENROUTER_API_KEY']
+E         
+E         Right contains one more item: 'OPENROUTER_API_KEY'
+E         Use -v to get more diff
+
+tests/test_env_file_adversarial.py:157: AssertionError
+_____________________ test_read_normalizes_mixed_case_keys _____________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1514/test_read_normalizes_mixed_cas0')
+
+    def test_read_normalizes_mixed_case_keys(tmp_path: Path) -> None:
+        """RED pre-fix: lowercase keys were skipped entirely by the reader."""
+        target = tmp_path / ".env"
+        target.write_text("openrouter_api_key=stored\nOther_Key=2\n", encoding="utf-8")
+    
+>       assert env_file_mod.read_env_values(target) == {
+            "OPENROUTER_API_KEY": "stored",
+            "OTHER_KEY": "2",
+        }
+E       AssertionError: assert {} == {'OPENROUTER_...HER_KEY': '2'}
+E         
+E         Right contains 2 more items:
+E         {'OPENROUTER_API_KEY': 'stored', 'OTHER_KEY': '2'}
+E         Use -v to get more diff
+
+tests/test_env_file_adversarial.py:168: AssertionError
+_______________ test_provider_removal_deletes_lowercase_env_line _______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1514/test_provider_removal_deletes_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a4baf30>
+
+    def test_provider_removal_deletes_lowercase_env_line(tmp_path: Path, monkeypatch) -> None:
+        """E2E (R4-046): the provider-removal surface finds and deletes the line."""
+        from machina.security import providers as store
+    
+        monkeypatch.setenv("MACHINA_PROVIDERS_FILE", str(tmp_path / "providers.json"))
+        env = tmp_path / ".env"
+        monkeypatch.setenv("MACHINA_ENV_FILE", str(env))
+        monkeypatch.delenv("MACHINA_PROVIDER_ACME_API_KEY", raising=False)
+        store.add_provider("acme", "http://127.0.0.1:9000/v1", api_key="sk-x", env_file=env)
+        env.write_text("machina_provider_acme_api_key=sk-legacy\nKEEP=1\n", encoding="utf-8")
+        monkeypatch.delenv("MACHINA_PROVIDER_ACME_API_KEY", raising=False)
+    
+        report = store.remove_provider("acme")
+    
+        assert report is not None, "provider must be registered before removal"
+>       assert report["envLineRemoved"] is True
+E       assert False is True
+
+tests/test_env_file_adversarial.py:189: AssertionError
+___________ test_installed_wheel_layout_never_targets_site_packages ____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1514/test_installed_wheel_layout_ne0')
+
+    def test_installed_wheel_layout_never_targets_site_packages(tmp_path: Path) -> None:
+        """E2E (R4-048): RED pre-fix; the fallback resolved inside the fake site-packages."""
+        site = tmp_path / "venv" / "lib" / "python3.14" / "site-packages"
+        package = site / "machina"
+        (package / "security").mkdir(parents=True)
+        (package / "observability").mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "security" / "__init__.py").write_text("", encoding="utf-8")
+        (package / "observability" / "__init__.py").write_text("", encoding="utf-8")
+        (package / "observability" / "diagnostics.py").write_text(
+            "def record_failure(*_args, **_kwargs):\n    return None\n",
+            encoding="utf-8",
+        )
+        shutil.copyfile(Path(env_file_mod.__file__).resolve(), package / "security" / "env_file.py")
+    
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        env = dict(os.environ)
+        env.pop("MACHINA_ENV_FILE", None)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(site), *([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])]
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", _WHEEL_PROBE, str(site)],
+            cwd=run_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert proc.returncode == 0, proc.stderr
+        data = json.loads(proc.stdout)
+        site_real = os.path.realpath(str(site))
+    
+        # The simulation is real: the loaded module is the fake site-packages copy.
+        assert _inside(data["module"], site_real), data
+        # No allowed root, resolved path, or written path may target site-packages.
+>       assert not any(_inside(root, site_real) for root in data["roots"]), data["roots"]
+E       AssertionError: ['/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1514/test_installed_wheel_layout_ne...shadow/pytest-1514/test_installed_wheel_layout_ne0/venv/lib/python3.14/site-packages', '/Users/shadow', '/private/tmp']
+E       assert not True
+E        +  where True = any(<generator object test_installed_wheel_layout_never_targets_site_packages.<locals>.<genexpr> at 0x10a4956c0>)
+
+tests/test_env_file_adversarial.py:257: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_env_file_adversarial.py::test_planted_symlink_at_old_tmp_path_is_never_followed
+FAILED tests/test_env_file_adversarial.py::test_crash_mid_write_never_leaves_an_empty_env
+FAILED tests/test_env_file_adversarial.py::test_write_fsyncs_file_and_directory
+FAILED tests/test_env_file_adversarial.py::test_lowercase_existing_line_is_updated_in_place
+FAILED tests/test_env_file_adversarial.py::test_lowercase_existing_line_is_removed_cleanly
+FAILED tests/test_env_file_adversarial.py::test_read_normalizes_mixed_case_keys
+FAILED tests/test_env_file_adversarial.py::test_provider_removal_deletes_lowercase_env_line
+FAILED tests/test_env_file_adversarial.py::test_installed_wheel_layout_never_targets_site_packages
+8 failed, 1 passed in 0.46s

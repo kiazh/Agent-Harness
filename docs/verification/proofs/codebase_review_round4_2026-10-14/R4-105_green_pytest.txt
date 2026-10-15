@@ -1,0 +1,107 @@
+============================= test session starts ==============================
+collected 9 items
+
+tests/test_r4_105_caller_scope_real_run.py ..                            [ 22%]
+tests/test_r4_105_same_session_load_race.py ..                           [ 44%]
+tests/test_r4_105_store_fence_flock.py .                                 [ 55%]
+tests/test_r4_105_approval_view_secrets.py ..x                           [ 88%]
+tests/test_r4_105_advisory_lock_pool.py .                                [100%]
+
+==================================== PASSES ====================================
+_____________ test_scope_probe_sees_real_caller_scope_in_agent_run _____________
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 21:43:24,117 [AUDIT] {"timestamp": 1792028604.1176472, "event": "agent_run_start", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "agent_id": "harness"}
+2026-10-14 21:43:24,194 [AUDIT] {"timestamp": 1792028604.194634, "event": "tool_call_start", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "tool_name": "r4_105_scope_probe_a"}
+2026-10-14 21:43:24,204 [AUDIT] {"timestamp": 1792028604.2046568, "event": "tool_call_start", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "tool_name": "r4_105_scope_probe_b"}
+2026-10-14 21:43:24,207 [AUDIT] {"timestamp": 1792028604.2073221, "event": "permission_allowed", "request_id": "6a9e7dacadc14be9914abe84e0edccb7", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "turn_id": "", "agent_id": "harness", "operation": "tool.r4_105_scope_probe_a", "tool": "r4_105_scope_probe_a", "mode": "ask", "digest_prefix": "83590119dba13bbe", "targets": [], "argv": [], "reason": "in-process operation"}
+2026-10-14 21:43:24,212 [AUDIT] {"timestamp": 1792028604.212192, "event": "permission_allowed", "request_id": "7e472424a11e49c299398b2c0e8e3663", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "turn_id": "", "agent_id": "harness", "operation": "tool.r4_105_scope_probe_b", "tool": "r4_105_scope_probe_b", "mode": "ask", "digest_prefix": "5a152026a79df07c", "targets": [], "argv": [], "reason": "in-process operation"}
+2026-10-14 21:43:24,213 [AUDIT] {"timestamp": 1792028604.213022, "event": "tool_call_complete", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "tool_name": "r4_105_scope_probe_a", "duration_ms": 9}
+2026-10-14 21:43:24,213 [AUDIT] {"timestamp": 1792028604.213241, "event": "tool_call_complete", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "tool_name": "r4_105_scope_probe_b", "duration_ms": 8}
+2026-10-14 21:43:24,229 [AUDIT] {"timestamp": 1792028604.229182, "event": "agent_run_complete", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "iterations": 2, "total_tokens": 2, "tool_calls_count": 2}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.1176472, "event": "agent_run_start", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.skills.registry:registry.py:668 Skipping skill /Users/shadow/machina/skills/cost-optimization/SKILL.md: ValueError
+WARNING  machina.skills.registry:registry.py:668 Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.194634, "event": "tool_call_start", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "tool_name": "r4_105_scope_probe_a"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.2046568, "event": "tool_call_start", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "tool_name": "r4_105_scope_probe_b"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.2073221, "event": "permission_allowed", "request_id": "6a9e7dacadc14be9914abe84e0edccb7", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "turn_id": "", "agent_id": "harness", "operation": "tool.r4_105_scope_probe_a", "tool": "r4_105_scope_probe_a", "mode": "ask", "digest_prefix": "83590119dba13bbe", "targets": [], "argv": [], "reason": "in-process operation"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.212192, "event": "permission_allowed", "request_id": "7e472424a11e49c299398b2c0e8e3663", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "turn_id": "", "agent_id": "harness", "operation": "tool.r4_105_scope_probe_b", "tool": "r4_105_scope_probe_b", "mode": "ask", "digest_prefix": "5a152026a79df07c", "targets": [], "argv": [], "reason": "in-process operation"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.213022, "event": "tool_call_complete", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "tool_name": "r4_105_scope_probe_a", "duration_ms": 9}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.213241, "event": "tool_call_complete", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "tool_name": "r4_105_scope_probe_b", "duration_ms": 8}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.229182, "event": "agent_run_complete", "session_id": "9f2ce014-d5a8-46a5-8974-4ad420a22330", "iterations": 2, "total_tokens": 2, "tool_calls_count": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+__________ test_concurrent_runs_keep_speaker_scope_isolated_per_tool ___________
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 21:43:24,340 [AUDIT] {"timestamp": 1792028604.339988, "event": "agent_run_start", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "agent_id": "harness"}
+2026-10-14 21:43:24,340 [AUDIT] {"timestamp": 1792028604.340395, "event": "agent_run_start", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "agent_id": "researcher"}
+2026-10-14 21:43:24,359 [AUDIT] {"timestamp": 1792028604.359497, "event": "tool_call_start", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "tool_name": "r4_105_scope_probe_c"}
+2026-10-14 21:43:24,361 [AUDIT] {"timestamp": 1792028604.361946, "event": "permission_allowed", "request_id": "784208aea6ed494c8edff439a8412666", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "turn_id": "", "agent_id": "harness", "operation": "tool.r4_105_scope_probe_c", "tool": "r4_105_scope_probe_c", "mode": "ask", "digest_prefix": "c642ff73208bc924", "targets": [], "argv": [], "reason": "in-process operation"}
+2026-10-14 21:43:24,362 [AUDIT] {"timestamp": 1792028604.362796, "event": "tool_call_complete", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "tool_name": "r4_105_scope_probe_c", "duration_ms": 2}
+2026-10-14 21:43:24,365 [AUDIT] {"timestamp": 1792028604.3652601, "event": "tool_call_start", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "tool_name": "r4_105_scope_probe_d"}
+2026-10-14 21:43:24,366 [AUDIT] {"timestamp": 1792028604.366921, "event": "permission_allowed", "request_id": "9f16ecbd309c4d6e93c9b4350883f56f", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "turn_id": "", "agent_id": "researcher", "operation": "tool.r4_105_scope_probe_d", "tool": "r4_105_scope_probe_d", "mode": "ask", "digest_prefix": "e2a2c8c380803a04", "targets": [], "argv": [], "reason": "in-process operation"}
+2026-10-14 21:43:24,367 [AUDIT] {"timestamp": 1792028604.3678, "event": "tool_call_complete", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "tool_name": "r4_105_scope_probe_d", "duration_ms": 2}
+2026-10-14 21:43:24,368 [AUDIT] {"timestamp": 1792028604.36814, "event": "agent_run_complete", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "iterations": 2, "total_tokens": 2, "tool_calls_count": 1}
+2026-10-14 21:43:24,372 [AUDIT] {"timestamp": 1792028604.371993, "event": "agent_run_complete", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "iterations": 2, "total_tokens": 2, "tool_calls_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.339988, "event": "agent_run_start", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.340395, "event": "agent_run_start", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "agent_id": "researcher"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.359497, "event": "tool_call_start", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "tool_name": "r4_105_scope_probe_c"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.361946, "event": "permission_allowed", "request_id": "784208aea6ed494c8edff439a8412666", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "turn_id": "", "agent_id": "harness", "operation": "tool.r4_105_scope_probe_c", "tool": "r4_105_scope_probe_c", "mode": "ask", "digest_prefix": "c642ff73208bc924", "targets": [], "argv": [], "reason": "in-process operation"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.362796, "event": "tool_call_complete", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "tool_name": "r4_105_scope_probe_c", "duration_ms": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.3652601, "event": "tool_call_start", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "tool_name": "r4_105_scope_probe_d"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.366921, "event": "permission_allowed", "request_id": "9f16ecbd309c4d6e93c9b4350883f56f", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "turn_id": "", "agent_id": "researcher", "operation": "tool.r4_105_scope_probe_d", "tool": "r4_105_scope_probe_d", "mode": "ask", "digest_prefix": "e2a2c8c380803a04", "targets": [], "argv": [], "reason": "in-process operation"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.3678, "event": "tool_call_complete", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "tool_name": "r4_105_scope_probe_d", "duration_ms": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.36814, "event": "agent_run_complete", "session_id": "d497524d-561b-41cb-afee-5ad5096059a5", "iterations": 2, "total_tokens": 2, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028604.371993, "event": "agent_run_complete", "session_id": "993c7d22-a59e-448c-86a2-00355c9197b8", "iterations": 2, "total_tokens": 2, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_________ test_argv_secret_is_redacted_across_card_record_and_listing __________
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 21:43:26,279 [AUDIT] {"timestamp": 1792028606.2798111, "event": "permission_pending", "request_id": "aaea123b75e94783927406446df68d86", "session_id": "5f6f598d-7723-4cc7-a5e0-def8b12deea8", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "865188abf99c4a4a", "targets": [], "argv": ["bash", "-lc", "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.com"], "reason": "write/exec or out-of-scope access requires approval"}
+2026-10-14 21:43:26,284 [AUDIT] {"timestamp": 1792028606.284225, "event": "permission_denied", "request_id": "aaea123b75e94783927406446df68d86", "session_id": "5f6f598d-7723-4cc7-a5e0-def8b12deea8", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "865188abf99c4a4a", "targets": [], "argv": ["bash", "-lc", "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.com"], "reason": "approval denied"}
+2026-10-14 21:43:26,288 [AUDIT] {"timestamp": 1792028606.2882612, "event": "permission_pending", "request_id": "aaea123b75e94783927406446df68d86", "session_id": "5f6f598d-7723-4cc7-a5e0-def8b12deea8", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "865188abf99c4a4a", "targets": [], "argv": ["bash", "-lc", "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.com"], "reason": "write/exec or out-of-scope access requires approval"}
+2026-10-14 21:43:26,289 [AUDIT] {"timestamp": 1792028606.289697, "event": "permission_allowed", "request_id": "aaea123b75e94783927406446df68d86", "session_id": "5f6f598d-7723-4cc7-a5e0-def8b12deea8", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "865188abf99c4a4a", "targets": [], "argv": ["bash", "-lc", "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.com"], "reason": "approval resumed"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028606.2798111, "event": "permission_pending", "request_id": "aaea123b75e94783927406446df68d86", "session_id": "5f6f598d-7723-4cc7-a5e0-def8b12deea8", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "865188abf99c4a4a", "targets": [], "argv": ["bash", "-lc", "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.com"], "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028606.284225, "event": "permission_denied", "request_id": "aaea123b75e94783927406446df68d86", "session_id": "5f6f598d-7723-4cc7-a5e0-def8b12deea8", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "865188abf99c4a4a", "targets": [], "argv": ["bash", "-lc", "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.com"], "reason": "approval denied"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028606.2882612, "event": "permission_pending", "request_id": "aaea123b75e94783927406446df68d86", "session_id": "5f6f598d-7723-4cc7-a5e0-def8b12deea8", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "865188abf99c4a4a", "targets": [], "argv": ["bash", "-lc", "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.com"], "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028606.289697, "event": "permission_allowed", "request_id": "aaea123b75e94783927406446df68d86", "session_id": "5f6f598d-7723-4cc7-a5e0-def8b12deea8", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "865188abf99c4a4a", "targets": [], "argv": ["bash", "-lc", "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.com"], "reason": "approval resumed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_________________ test_target_secret_is_redacted_in_live_card __________________
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 21:43:26,400 [AUDIT] {"timestamp": 1792028606.400128, "event": "permission_pending", "request_id": "b45ac8b575144c6e9bc46168bd8413d4", "session_id": "7eefd505-85dc-4cf8-9170-9ee56de83eb1", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "d4a84f323df43ff8", "targets": ["/Users/shadow/machina/https:/api.example.com/v1/export?api_key=[REDACTED_SECRET]"], "argv": ["bash", "-lc", "curl -sS https://api.example.com/v1/export -o /tmp/export.json"], "reason": "write/exec or out-of-scope access requires approval"}
+2026-10-14 21:43:26,404 [AUDIT] {"timestamp": 1792028606.404487, "event": "permission_denied", "request_id": "b45ac8b575144c6e9bc46168bd8413d4", "session_id": "7eefd505-85dc-4cf8-9170-9ee56de83eb1", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "d4a84f323df43ff8", "targets": ["/Users/shadow/machina/https:/api.example.com/v1/export?api_key=[REDACTED_SECRET]"], "argv": ["bash", "-lc", "curl -sS https://api.example.com/v1/export -o /tmp/export.json"], "reason": "approval denied"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028606.400128, "event": "permission_pending", "request_id": "b45ac8b575144c6e9bc46168bd8413d4", "session_id": "7eefd505-85dc-4cf8-9170-9ee56de83eb1", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "d4a84f323df43ff8", "targets": ["/Users/shadow/machina/https:/api.example.com/v1/export?api_key=[REDACTED_SECRET]"], "argv": ["bash", "-lc", "curl -sS https://api.example.com/v1/export -o /tmp/export.json"], "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028606.404487, "event": "permission_denied", "request_id": "b45ac8b575144c6e9bc46168bd8413d4", "session_id": "7eefd505-85dc-4cf8-9170-9ee56de83eb1", "turn_id": "r4-105-turn", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "d4a84f323df43ff8", "targets": ["/Users/shadow/machina/https:/api.example.com/v1/export?api_key=[REDACTED_SECRET]"], "argv": ["bash", "-lc", "curl -sS https://api.example.com/v1/export -o /tmp/export.json"], "reason": "approval denied"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+=========================== short test summary info ============================
+PASSED tests/test_r4_105_caller_scope_real_run.py::test_scope_probe_sees_real_caller_scope_in_agent_run
+PASSED tests/test_r4_105_caller_scope_real_run.py::test_concurrent_runs_keep_speaker_scope_isolated_per_tool
+PASSED tests/test_r4_105_same_session_load_race.py::test_same_session_readers_see_monotonic_complete_prefix[single-chunk-writes]
+PASSED tests/test_r4_105_same_session_load_race.py::test_same_session_readers_see_monotonic_complete_prefix[batch-writes]
+PASSED tests/test_r4_105_store_fence_flock.py::test_cross_process_contention_bounded_then_release_recovers
+PASSED tests/test_r4_105_approval_view_secrets.py::test_argv_secret_is_redacted_across_card_record_and_listing
+PASSED tests/test_r4_105_approval_view_secrets.py::test_target_secret_is_redacted_in_live_card
+PASSED tests/test_r4_105_advisory_lock_pool.py::test_rejected_reserve_releases_locks_and_connection_for_retry
+XFAIL tests/test_r4_105_approval_view_secrets.py::test_target_secret_is_redacted_in_durable_record_and_listing - R4-105: permissions/store.py persists the top-level target column raw and public_view() does not redact it, so a secret embedded in targets still reaches list_pending/get_approval (owner: permissions/store.py lane). Flip this xfail with the store-side fix.
+========================= 8 passed, 1 xfailed in 3.16s =========================

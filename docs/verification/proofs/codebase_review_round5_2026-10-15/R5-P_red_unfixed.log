@@ -1,0 +1,94 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+________ test_escaping_file_symlink_is_rejected_and_original_untouched _________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2009/test_escaping_file_symlink_is_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c79dcd0>
+
+    def test_escaping_file_symlink_is_rejected_and_original_untouched(
+        tmp_path: Path, monkeypatch
+    ) -> None:
+        task_dir = tmp_path / "task"
+        test_path = _make_task(task_dir)
+        victim = tmp_path / "original" / "victim.txt"
+        victim.parent.mkdir(parents=True)
+        victim.write_text("ORIGINAL\n", encoding="utf-8")
+        (task_dir / "evil_link.py").symlink_to(victim)
+        # The agent playbook a real harness could run: edit through the link.
+        _fake_agent(
+            tmp_path,
+            monkeypatch,
+            '(root / "evil_link.py").write_text("HARNESS-PWNED\\n")\n',
+        )
+>       with pytest.raises(RuntimeError, match="escaping the fixture tree"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/test_head_to_head_symlink_containment.py:130: Failed
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2009/test_escaping_file_symlink_is_0/absent-opencode.db
+_________________ test_escaping_directory_symlink_is_rejected __________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2009/test_escaping_directory_symlin0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c79dba0>
+
+    def test_escaping_directory_symlink_is_rejected(tmp_path: Path, monkeypatch) -> None:
+        task_dir = tmp_path / "task"
+        test_path = _make_task(task_dir)
+        outside = tmp_path / "original" / "shared"
+        outside.mkdir(parents=True)
+        (outside / "data.txt").write_text("ORIGINAL\n", encoding="utf-8")
+        (task_dir / "shared").symlink_to(outside, target_is_directory=True)
+        _fake_agent(
+            tmp_path,
+            monkeypatch,
+            '(root / "shared" / "evil.txt").write_text("HARNESS-PWNED\\n")\n',
+        )
+>       with pytest.raises(RuntimeError, match="escaping the fixture tree"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/test_head_to_head_symlink_containment.py:150: Failed
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2009/test_escaping_directory_symlin0/absent-opencode.db
+_______ test_absolute_link_into_pristine_fixture_is_rejected_after_copy ________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2009/test_absolute_link_into_pristi0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d7b8cb0>
+
+    def test_absolute_link_into_pristine_fixture_is_rejected_after_copy(
+        tmp_path: Path, monkeypatch
+    ) -> None:
+        task_dir = tmp_path / "task"
+        test_path = _make_task(task_dir)
+        # Absolute yet fixture-internal: passes the fixture gate (resolves
+        # inside the task dir) but must fail the run-copy gate, where the same
+        # bytes alias the pristine original instead of the copy.
+        (task_dir / "abs_link.py").symlink_to(task_dir / "calc.py")
+>       assert head_to_head.escaping_symlinks(task_dir) == []
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'head_to_head' has no attribute 'escaping_symlinks'
+
+tests/test_head_to_head_symlink_containment.py:167: AttributeError
+_____________ test_internal_relative_symlink_fixture_still_scores ______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2009/test_internal_relative_symlink0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d1d18c0>
+
+    def test_internal_relative_symlink_fixture_still_scores(
+        tmp_path: Path, monkeypatch
+    ) -> None:
+        task_dir = tmp_path / "task"
+        test_path = _make_task(task_dir)
+        (task_dir / "alias.py").symlink_to("calc.py")
+>       assert head_to_head.escaping_symlinks(task_dir) == []
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'head_to_head' has no attribute 'escaping_symlinks'
+
+tests/test_head_to_head_symlink_containment.py:193: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_head_to_head_symlink_containment.py::test_escaping_file_symlink_is_rejected_and_original_untouched
+FAILED tests/test_head_to_head_symlink_containment.py::test_escaping_directory_symlink_is_rejected
+FAILED tests/test_head_to_head_symlink_containment.py::test_absolute_link_into_pristine_fixture_is_rejected_after_copy
+FAILED tests/test_head_to_head_symlink_containment.py::test_internal_relative_symlink_fixture_still_scores
+4 failed in 5.63s

@@ -1,0 +1,78 @@
+FF.FF                                                                    [100%]
+=================================== FAILURES ===================================
+________________ test_broker_denied_tool_streams_denied_outcome ________________
+tests/test_r4_022_denied_outcome.py:70: in test_broker_denied_tool_streams_denied_outcome
+    assert streamed.tool_outcome == "denied", streamed
+E   AssertionError: StreamEvent(type='tool_result', content='', tool_name='terminal', tool_args={}, tool_result="Permission denied: tool '... parent authority. The action was NOT executed.", tokens_used=0, response=None, tool_call_id='call-1', tool_outcome='')
+E   assert '' == 'denied'
+E     
+E     - denied
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:50:50,538 [AUDIT] {"timestamp": 1792018250.538775, "event": "tool_call_start", "session_id": "2230a902-cb02-41f2-8091-cceecf10c1be", "tool_name": "terminal"}
+2026-10-14 18:50:50,555 [AUDIT] {"timestamp": 1792018250.555218, "event": "permission_denied", "request_id": "86adcdcf0daa42f299421a23069f5583", "session_id": "2230a902-cb02-41f2-8091-cceecf10c1be", "turn_id": "", "agent_id": "r4-022-denied", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "b55093730f2fc711", "reason": "tool 'terminal' outside parent authority"}
+2026-10-14 18:50:50,555 [AUDIT] {"timestamp": 1792018250.555595, "event": "tool_call_complete", "session_id": "2230a902-cb02-41f2-8091-cceecf10c1be", "tool_name": "terminal", "duration_ms": 16}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.538775, "event": "tool_call_start", "session_id": "2230a902-cb02-41f2-8091-cceecf10c1be", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.555218, "event": "permission_denied", "request_id": "86adcdcf0daa42f299421a23069f5583", "session_id": "2230a902-cb02-41f2-8091-cceecf10c1be", "turn_id": "", "agent_id": "r4-022-denied", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "b55093730f2fc711", "reason": "tool 'terminal' outside parent authority"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.555595, "event": "tool_call_complete", "session_id": "2230a902-cb02-41f2-8091-cceecf10c1be", "tool_name": "terminal", "duration_ms": 16}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+________________ test_denied_outcome_survives_turn_engine_relay ________________
+tests/test_r4_022_denied_outcome.py:126: in test_denied_outcome_survives_turn_engine_relay
+    assert payload["outcome"] == "denied", payload
+           ^^^^^^^^^^^^^^^^^^
+E   KeyError: 'outcome'
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:50:50,580 [AUDIT] {"timestamp": 1792018250.580533, "event": "tool_call_start", "session_id": "9d2453c0-09ec-49de-9314-b081bbd91c67", "tool_name": "terminal"}
+2026-10-14 18:50:50,581 [AUDIT] {"timestamp": 1792018250.58108, "event": "permission_denied", "request_id": "586daebdb76d4be18e4b5a44125e0e61", "session_id": "9d2453c0-09ec-49de-9314-b081bbd91c67", "turn_id": "", "agent_id": "r4-022-relay", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "b55093730f2fc711", "reason": "tool 'terminal' outside parent authority"}
+2026-10-14 18:50:50,581 [AUDIT] {"timestamp": 1792018250.5814762, "event": "tool_call_complete", "session_id": "9d2453c0-09ec-49de-9314-b081bbd91c67", "tool_name": "terminal", "duration_ms": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.580533, "event": "tool_call_start", "session_id": "9d2453c0-09ec-49de-9314-b081bbd91c67", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.58108, "event": "permission_denied", "request_id": "586daebdb76d4be18e4b5a44125e0e61", "session_id": "9d2453c0-09ec-49de-9314-b081bbd91c67", "turn_id": "", "agent_id": "r4-022-relay", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "b55093730f2fc711", "reason": "tool 'terminal' outside parent authority"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.5814762, "event": "tool_call_complete", "session_id": "9d2453c0-09ec-49de-9314-b081bbd91c67", "tool_name": "terminal", "duration_ms": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+____________ test_paused_tool_streams_paused_not_denied_or_success _____________
+tests/test_r4_022_denied_outcome.py:187: in test_paused_tool_streams_paused_not_denied_or_success
+    assert results[0].tool_outcome == "paused", results[0]
+E   AssertionError: StreamEvent(type='tool_result', content='', tool_name='terminal', tool_args={}, tool_result='Needs approval (4cd7ef102...pprovals list/resolve), or choose another path.', tokens_used=0, response=None, tool_call_id='call-1', tool_outcome='')
+E   assert '' == 'paused'
+E     
+E     - paused
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:50:50,586 [AUDIT] {"timestamp": 1792018250.586381, "event": "tool_call_start", "session_id": "9b506977-9d5d-42ab-a525-d37b4e08d37e", "tool_name": "terminal"}
+2026-10-14 18:50:50,587 [AUDIT] {"timestamp": 1792018250.587313, "event": "permission_pending", "request_id": "4cd7ef102b794008b1ce175067cbbe5c", "session_id": "9b506977-9d5d-42ab-a525-d37b4e08d37e", "turn_id": "", "agent_id": "r4-022-paused", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "a123d91f26f454cd", "reason": "write/exec or out-of-scope access requires approval"}
+2026-10-14 18:50:50,588 [AUDIT] {"timestamp": 1792018250.58817, "event": "tool_call_complete", "session_id": "9b506977-9d5d-42ab-a525-d37b4e08d37e", "tool_name": "terminal", "duration_ms": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.586381, "event": "tool_call_start", "session_id": "9b506977-9d5d-42ab-a525-d37b4e08d37e", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.587313, "event": "permission_pending", "request_id": "4cd7ef102b794008b1ce175067cbbe5c", "session_id": "9b506977-9d5d-42ab-a525-d37b4e08d37e", "turn_id": "", "agent_id": "r4-022-paused", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "a123d91f26f454cd", "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.58817, "event": "tool_call_complete", "session_id": "9b506977-9d5d-42ab-a525-d37b4e08d37e", "tool_name": "terminal", "duration_ms": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_________________ test_executed_tool_streams_completed_outcome _________________
+tests/test_r4_022_denied_outcome.py:209: in test_executed_tool_streams_completed_outcome
+    assert results[0].tool_outcome == "completed", results[0]
+E   AssertionError: StreamEvent(type='tool_result', content='', tool_name='r4_022_probe_tool', tool_args={}, tool_result='ok', tokens_used=0, response=None, tool_call_id='call-1', tool_outcome='')
+E   assert '' == 'completed'
+E     
+E     - completed
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:50:50,591 [AUDIT] {"timestamp": 1792018250.5916128, "event": "tool_call_start", "session_id": "46fc5d0c-ed1a-40d9-bced-fa72da899ee2", "tool_name": "r4_022_probe_tool"}
+2026-10-14 18:50:50,592 [AUDIT] {"timestamp": 1792018250.592044, "event": "permission_allowed", "request_id": "33951b4e1c6c4119a2984238320e6665", "session_id": "46fc5d0c-ed1a-40d9-bced-fa72da899ee2", "turn_id": "", "agent_id": "r4-022-completed", "operation": "tool.r4_022_probe_tool", "tool": "r4_022_probe_tool", "mode": "ask", "digest_prefix": "cd47fe2b3991daa7", "reason": "in-process operation"}
+2026-10-14 18:50:50,592 [AUDIT] {"timestamp": 1792018250.5923588, "event": "tool_call_complete", "session_id": "46fc5d0c-ed1a-40d9-bced-fa72da899ee2", "tool_name": "r4_022_probe_tool", "duration_ms": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.5916128, "event": "tool_call_start", "session_id": "46fc5d0c-ed1a-40d9-bced-fa72da899ee2", "tool_name": "r4_022_probe_tool"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.592044, "event": "permission_allowed", "request_id": "33951b4e1c6c4119a2984238320e6665", "session_id": "46fc5d0c-ed1a-40d9-bced-fa72da899ee2", "turn_id": "", "agent_id": "r4-022-completed", "operation": "tool.r4_022_probe_tool", "tool": "r4_022_probe_tool", "mode": "ask", "digest_prefix": "cd47fe2b3991daa7", "reason": "in-process operation"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792018250.5923588, "event": "tool_call_complete", "session_id": "46fc5d0c-ed1a-40d9-bced-fa72da899ee2", "tool_name": "r4_022_probe_tool", "duration_ms": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+=========================== short test summary info ============================
+FAILED tests/test_r4_022_denied_outcome.py::test_broker_denied_tool_streams_denied_outcome
+FAILED tests/test_r4_022_denied_outcome.py::test_denied_outcome_survives_turn_engine_relay
+FAILED tests/test_r4_022_denied_outcome.py::test_paused_tool_streams_paused_not_denied_or_success
+FAILED tests/test_r4_022_denied_outcome.py::test_executed_tool_streams_completed_outcome
+4 failed, 1 passed in 0.51s

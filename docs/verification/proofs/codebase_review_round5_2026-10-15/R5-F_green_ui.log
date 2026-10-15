@@ -1,0 +1,12 @@
+✔ R5-010: clicking the second physical row of a two-line entry checks that entry (14.767666ms)
+✔ R5-010: the row budget counts physical rows, not items (0.295208ms)
+✔ R5-010: hit-testing accounts for multi-line titles (0.3705ms)
+✔ R5-010: a description newline belongs to its own entry (0.369875ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 233.225667

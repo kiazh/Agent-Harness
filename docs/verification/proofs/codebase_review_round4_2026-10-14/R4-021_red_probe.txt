@@ -1,0 +1,9 @@
+2026-10-14 18:20:28,902 [AUDIT] {"timestamp": 1792016428.902049, "event": "rag_embed_start", "model": "text-embedding-3-small", "count": 1, "provider": "openai"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 18:20:28,903 [AUDIT] {"timestamp": 1792016428.903014, "event": "rag_embed_complete", "model": "text-embedding-3-small", "count": 0}
+Audit event dropped before the writer started; event was not persisted
+embed() returned list(len=1536, all-zero=True)
+cache_size after embed(): 1
+embed_query() -> list(len=1536, all-zero=True) (a 'successful' zero-vector embedding)
+embed() second call returned all-zero=True
+cache_size final: 1

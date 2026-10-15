@@ -1,0 +1,56 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_stream_span_never_detaches_across_contexts ________________
+
+sse_env = namespace(client=<httpx.AsyncClient object at 0x10abe9be0>, app=<fastapi.applications.FastAPI object at 0x10abe9400>, created=['e3a63cb3-00dc-4371-9a84-a09cc3d2d80d'], monkeypatch=<_pytest.monkeypatch.MonkeyPatch object at 0x10ab083e0>)
+caplog = <_pytest.logging.LogCaptureFixture object at 0x10abea3c0>
+
+    async def test_stream_span_never_detaches_across_contexts(sse_env, caplog):
+        """R4-064 follow-up: the OTel stream span must be owned by the driving
+        transport, not by the agent async generator that per-step tasks resume and
+        finalize in different contexts (opentelemetry logs and swallows the
+        cross-context detach, so only the error records reveal it)."""
+        caplog.set_level(logging.WARNING, logger="opentelemetry")
+    
+        sid = await _create_session(sse_env)
+        _use_provider(sse_env, _ScriptedProvider())
+        await _prompt_frames(sse_env, sid)
+>       assert not _otel_detach_errors(caplog), _otel_detach_errors(caplog)
+E       AssertionError: ['Failed to detach context']
+E       assert not ['Failed to detach context']
+E        +  where ['Failed to detach context'] = _otel_detach_errors(<_pytest.logging.LogCaptureFixture object at 0x10abea3c0>)
+
+tests/test_sse_stream_adversarial.py:235: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:25:21,625 [AUDIT] {"timestamp": 1792020321.625149, "event": "agent_run_stream_start", "session_id": "e3a63cb3-00dc-4371-9a84-a09cc3d2d80d", "agent_id": "harness"}
+2026-10-14 19:25:21,669 [AUDIT] {"timestamp": 1792020321.669761, "event": "rag_search_start", "session_id": "e3a63cb3-00dc-4371-9a84-a09cc3d2d80d", "top_k": 5}
+2026-10-14 19:25:21,721 [AUDIT] {"timestamp": 1792020321.7216132, "event": "agent_run_complete", "session_id": "e3a63cb3-00dc-4371-9a84-a09cc3d2d80d", "iterations": 1, "total_tokens": 12, "tool_calls_count": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020321.625149, "event": "agent_run_stream_start", "session_id": "e3a63cb3-00dc-4371-9a84-a09cc3d2d80d", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020321.669761, "event": "rag_search_start", "session_id": "e3a63cb3-00dc-4371-9a84-a09cc3d2d80d", "top_k": 5}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.rag.pipeline:pipeline.py:467 no embedder configured, keyword-only search
+WARNING  machina.core.agent:agent.py:354 RAG retrieval failed: DatabaseError
+WARNING  machina.skills.registry:registry.py:659 Skipping skill /Users/shadow/machina/skills/cost-optimization/SKILL.md: ValueError
+WARNING  machina.skills.registry:registry.py:659 Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020321.7216132, "event": "agent_run_complete", "session_id": "e3a63cb3-00dc-4371-9a84-a09cc3d2d80d", "iterations": 1, "total_tokens": 12, "tool_calls_count": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    opentelemetry.context:__init__.py:129 Failed to detach context
+Traceback (most recent call last):
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/__init__.py", line 127, in detach
+    _RUNTIME_CONTEXT.detach(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/contextvars_context.py", line 40, in detach
+    self._current_context.reset(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+ValueError: <Token var=<ContextVar name='current_context' default={} at 0x1092b85e0> at 0x10aad6380> was created in a different Context
+ERROR    machina.memory.consolidator:consolidator.py:278 Memory extraction failed for session e3a63cb3-00dc-4371-9a84-a09cc3d2d80d
+NotImplementedError
+/Users/shadow/machina/machina/memory/consolidator.py:276 (_consolidate_session_impl)
+/Users/shadow/machina/machina/memory/consolidator.py:589 (_extract_memories)
+/Users/shadow/machina/machina/core/usage.py:110 (complete_call)
+/Users/shadow/machina/machina/core/provider/base.py:33 (complete)
+=========================== short test summary info ============================
+FAILED tests/test_sse_stream_adversarial.py::test_stream_span_never_detaches_across_contexts
+1 failed in 0.82s

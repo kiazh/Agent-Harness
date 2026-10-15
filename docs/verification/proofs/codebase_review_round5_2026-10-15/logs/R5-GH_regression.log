@@ -1,0 +1,29 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 380 items
+
+tests/test_providers_direct.py ........................                  [  6%]
+tests/test_fm2_provider.py ............................................. [ 18%]
+...                                                                      [ 18%]
+tests/test_provider_usage.py .......                                     [ 20%]
+tests/test_provider_custom.py ......................                     [ 26%]
+tests/test_chatgpt_provider.py ...............................           [ 34%]
+tests/test_copilot_provider.py ...........                               [ 37%]
+tests/test_anthropic_tool_results.py .....                               [ 38%]
+tests/test_kimi_provider.py .........                                    [ 41%]
+tests/test_deep_provider_fallback.py .........                           [ 43%]
+tests/test_provider_context_audit.py ............                        [ 46%]
+tests/test_e1_prompt_cache.py ....................................       [ 56%]
+tests/test_audit_regressions.py .............                            [ 59%]
+tests/test_chaos_extended.py ........................................... [ 71%]
+................                                                         [ 75%]
+tests/test_property_based.py ....................................        [ 84%]
+tests/test_chatgpt_auth_adversarial.py .....                             [ 86%]
+tests/test_integration_permissions.py .................................. [ 95%]
+.s.................                                                      [100%]
+
+======================= 379 passed, 1 skipped in 10.73s ========================

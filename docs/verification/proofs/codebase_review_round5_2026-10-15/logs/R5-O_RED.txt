@@ -1,0 +1,95 @@
+FFFF.                                                                    [100%]
+=================================== FAILURES ===================================
+_______ test_update_invalid_content_leaves_live_skill_and_disk_untouched _______
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1989/test_update_invalid_content_le0')
+
+    def test_update_invalid_content_leaves_live_skill_and_disk_untouched(tmp_path):
+        registry, skill_file = _make(tmp_path)
+        before = _snapshot(registry)
+        disk_before = skill_file.read_bytes()
+        with pytest.raises(ValueError):
+            registry.update_skill("deploy", description="New valid description", content=_INJECTION)
+>       assert _snapshot(registry) == before
+E       AssertionError: assert ('New valid d...ly', (), True) == ('Deploy step...ly', (), True)
+E         
+E         At index 0 diff: 'New valid description' != 'Deploy steps'
+E         Use -v to get more diff
+
+tests/test_r5_019_skill_atomicity.py:49: AssertionError
+______ test_update_invalid_triggers_leaves_live_skill_and_disk_untouched _______
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1989/test_update_invalid_triggers_l0')
+
+    def test_update_invalid_triggers_leaves_live_skill_and_disk_untouched(tmp_path):
+        registry, skill_file = _make(tmp_path)
+        before = _snapshot(registry)
+        disk_before = skill_file.read_bytes()
+        with pytest.raises(ValueError):
+            registry.update_skill(
+                "deploy",
+                description="New valid description",
+                content="New valid content",
+                triggers=["ok"] * 33,
+            )
+>       assert _snapshot(registry) == before
+E       AssertionError: assert ('New valid d...nt', (), True) == ('Deploy step...ly', (), True)
+E         
+E         At index 0 diff: 'New valid description' != 'Deploy steps'
+E         Use -v to get more diff
+
+tests/test_r5_019_skill_atomicity.py:64: AssertionError
+________ test_update_write_failure_leaves_live_skill_and_disk_untouched ________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1989/test_update_write_failure_leav0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10dedd130>
+
+    def test_update_write_failure_leaves_live_skill_and_disk_untouched(tmp_path, monkeypatch):
+        registry, skill_file = _make(tmp_path)
+        before = _snapshot(registry)
+        disk_before = skill_file.read_bytes()
+    
+        def _boom(self, *args, **kwargs):
+            raise OSError("injected write failure")
+    
+        monkeypatch.setattr(Path, "write_text", _boom)
+        with pytest.raises(OSError):
+            registry.update_skill("deploy", description="New valid description")
+>       assert _snapshot(registry) == before
+E       AssertionError: assert ('New valid d...ly', (), True) == ('Deploy step...ly', (), True)
+E         
+E         At index 0 diff: 'New valid description' != 'Deploy steps'
+E         Use -v to get more diff
+
+tests/test_r5_019_skill_atomicity.py:79: AssertionError
+_____ test_set_enabled_write_failure_leaves_live_skill_and_disk_untouched ______
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1989/test_set_enabled_write_failure0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10dea19d0>
+
+    def test_set_enabled_write_failure_leaves_live_skill_and_disk_untouched(
+        tmp_path, monkeypatch
+    ):
+        registry, skill_file = _make(tmp_path)
+        before = _snapshot(registry)
+        disk_before = skill_file.read_bytes()
+    
+        def _boom(self, *args, **kwargs):
+            raise OSError("injected write failure")
+    
+        monkeypatch.setattr(Path, "write_text", _boom)
+        with pytest.raises(OSError):
+            registry.set_enabled("deploy", False)
+>       assert _snapshot(registry) == before
+E       AssertionError: assert ('Deploy step...y', (), False) == ('Deploy step...ly', (), True)
+E         
+E         At index 3 diff: False != True
+E         Use -v to get more diff
+
+tests/test_r5_019_skill_atomicity.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r5_019_skill_atomicity.py::test_update_invalid_content_leaves_live_skill_and_disk_untouched
+FAILED tests/test_r5_019_skill_atomicity.py::test_update_invalid_triggers_leaves_live_skill_and_disk_untouched
+FAILED tests/test_r5_019_skill_atomicity.py::test_update_write_failure_leaves_live_skill_and_disk_untouched
+FAILED tests/test_r5_019_skill_atomicity.py::test_set_enabled_write_failure_leaves_live_skill_and_disk_untouched
+4 failed, 1 passed in 0.38s

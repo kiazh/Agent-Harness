@@ -1,0 +1,65 @@
+✖ R4-065 a pause frame with a terminal status never opens a card (6.486084ms)
+✖ R4-065 a terminal-status pause retires the open card and footer without a decision (0.473875ms)
+✔ R4-065 an approval.resolved expiry frame retires the card and footer (0.923417ms)
+✖ R4-065 a hidden terminal-status pause is not resurrected on return (0.430125ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 1
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 280.048834
+
+✖ failing tests:
+
+test at test/r4-approval-expiry.test.ts:203:1
+✖ R4-065 a pause frame with a terminal status never opens a card (6.486084ms)
+  AssertionError [ERR_ASSERTION]: no card opens for an expired request
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red/ui/test/r4-approval-expiry.test.ts:213:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/r4-approval-expiry.test.ts:220:1
+✖ R4-065 a terminal-status pause retires the open card and footer without a decision (0.473875ms)
+  AssertionError [ERR_ASSERTION]: card retires on the terminal status
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red/ui/test/r4-approval-expiry.test.ts:235:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/r4-approval-expiry.test.ts:270:1
+✖ R4-065 a hidden terminal-status pause is not resurrected on return (0.430125ms)
+  AssertionError [ERR_ASSERTION]: terminal evidence is never retained
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red/ui/test/r4-approval-expiry.test.ts:279:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

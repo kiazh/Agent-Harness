@@ -1,0 +1,7 @@
+$ MACHINA_TEST_DATABASE_URL=... pytest tests/test_mcp_server.py tests/test_sse_stream_adversarial.py tests/test_http_approval_resume.py tests/test_api.py tests/test_protocol_conformance.py tests/test_architecture_layers.py -q -p no:cacheprovider   # FIXED code
+........................................................................ [ 64%]
+........................................                                 [100%]
+112 passed in 58.20s
+$ ruff format --check + ruff check (5 lane files)
+5 files already formatted
+All checks passed!

@@ -1,0 +1,7 @@
+2026-10-14 18:23:31,956 [AUDIT] {"timestamp": 1792016611.956832, "event": "rag_embed_start", "model": "text-embedding-3-small", "count": 2, "provider": "openai"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 18:23:31,959 [AUDIT] {"timestamp": 1792016611.95904, "event": "rag_embed_complete", "model": "text-embedding-3-small", "count": 1}
+Audit event dropped before the writer started; event was not persisted
+embed_batch raised ValueError: zip() argument 2 is shorter than argument 1
+cache_size after failed batch: 1 (row 'alpha' cached before the raise)
+cached keys: ['6e331572548f24027e40e13491fff4c79122a3017649cef8d4003e7c86d72a79']

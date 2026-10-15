@@ -1,0 +1,18 @@
+2026-10-14 22:36:18,370 [AUDIT] {"timestamp": 1792031778.370508, "event": "rag_index_start", "session_id": "b3619acf-813d-47b2-b468-7aa19b41990e", "source": "https://alice:example-passphrase@example.invalid/document", "doc_type": "text"}
+2026-10-14 22:36:18,399 [AUDIT] {"timestamp": 1792031778.399532, "event": "rag_index_complete", "session_id": "b3619acf-813d-47b2-b468-7aa19b41990e", "source": "https://alice:example-passphrase@example.invalid/document", "chunks_stored": 1}
+2026-10-14 22:36:18,399 [AUDIT] {"timestamp": 1792031778.3997529, "event": "rag_index_start", "session_id": "b3619acf-813d-47b2-b468-7aa19b41990e", "source": "https://example.invalid/doc?api_key=short1&x=1", "doc_type": "text"}
+2026-10-14 22:36:18,402 [AUDIT] {"timestamp": 1792031778.402051, "event": "rag_index_complete", "session_id": "b3619acf-813d-47b2-b468-7aa19b41990e", "source": "https://example.invalid/doc?api_key=short1&x=1", "chunks_stored": 1}
+sanitizer outlet source='https://alice:example-passphrase@example.invalid/document'
+  -> 'https://alice:example-passphrase@example.invalid/document' leaked=True
+sanitizer outlet source='https://example.invalid/doc?api_key=short1&x=1'
+  -> 'https://example.invalid/doc?api_key=short1&x=1' leaked=True
+audit rows: 4
+  event=rag_index_start userinfo_leak=True query_leak=False
+    {"event": "rag_index_start", "source": "https://alice:example-passphrase@example.invalid/document", "doc_type": "text", "timestamp": 1792031778.370508, "session_id": "b3619acf-813d-47b2-b468-7aa19b41990e"}
+  event=rag_index_complete userinfo_leak=True query_leak=False
+    {"event": "rag_index_complete", "source": "https://alice:example-passphrase@example.invalid/document", "timestamp": 1792031778.399532, "session_id": "b3619acf-813d-47b2-b468-7aa19b41990e", "chunks_stored": 1}
+  event=rag_index_start userinfo_leak=False query_leak=True
+    {"event": "rag_index_start", "source": "https://example.invalid/doc?api_key=short1&x=1", "doc_type": "text", "timestamp": 1792031778.3997529, "session_id": "b3619acf-813d-47b2-b468-7aa19b41990e"}
+  event=rag_index_complete userinfo_leak=False query_leak=True
+    {"event": "rag_index_complete", "source": "https://example.invalid/doc?api_key=short1&x=1", "timestamp": 1792031778.402051, "session_id": "b3619acf-813d-47b2-b468-7aa19b41990e", "chunks_stored": 1}
+RED REPRODUCED: credential persists in audit_events

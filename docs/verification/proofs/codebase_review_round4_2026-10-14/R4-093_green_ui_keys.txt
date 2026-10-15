@@ -1,0 +1,20 @@
+✔ /keys list shows status without ever echoing values (1.272583ms)
+✔ /keys set saves by default and --no-save stays session-only (0.501958ms)
+✔ /keys clear resolves a prefix (0.139417ms)
+✔ /keys menu Set flow saves once with persist:true and never echoes the value (0.2695ms)
+✔ /keys menu Clear confirms before a single clear (0.137833ms)
+✔ /keys menu Back and Esc persist nothing (0.119833ms)
+✔ /keys menu merges user-added provider keys and keyless rows (0.172333ms)
+✔ /keys keyless-local provider rows are non-editable (0.107333ms)
+✔ /keys list shows merged provider rows with honest statuses (0.116833ms)
+✔ /keys clear resolves a provider key by prefix (0.138625ms)
+✔ /keys rows follow the provider store after a removal (0.191458ms)
+✔ /keys expert set failure redacts the value (0.086ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 203.191333

@@ -1,0 +1,196 @@
+✔ /persona saves and clears via explicit args without opening the menu (1.754917ms)
+✔ bare /persona Add collects text and saves once with persist:true (0.289ms)
+✔ bare /persona Add replaces the existing value instead of appending (0.102916ms)
+✔ bare /persona Add rejects blank and over-limit input without saving (0.155ms)
+✔ bare /persona cancel at the picker or editor never persists or submits (0.113416ms)
+✔ bare /persona Reset defaults to No and Yes clears only the persona (0.177166ms)
+✔ bare /persona Reset with no custom value explains instead of confirming (0.086542ms)
+✔ /growth teaches and rates the current session without an approval prompt (0.339542ms)
+✔ /growth does not rate interrupted turns and supports explicit correction (0.134125ms)
+✔ bare /growth immediately offers actions and cancelled menus do no work (0.100792ms)
+✔ /growth Teach collects a note interactively without submitting a chat turn (0.1305ms)
+✔ /growth rollback selects a revision and requires an explicit restore decision (0.1085ms)
+✔ /growth rollback cancellation never changes the saved revision (0.063875ms)
+✔ /growth can restore the original revision zero from its menu or arguments (0.109417ms)
+✔ /growth show distinguishes operational observations, human feedback, and a persona trial (0.071459ms)
+✔ /recall searches transcript evidence and opens an anchored window (0.982041ms)
+✔ /recall reports empty results without opening a window (0.040041ms)
+✔ /memory share sends an owned memory to a named agent (0.193042ms)
+✔ /skills proposals lists staged learning and reviews one by id (0.275042ms)
+✔ /jobs add schedules an interval job and reports it (0.199708ms)
+✔ /jobs add can pin a model and provider (0.094041ms)
+✔ /jobs script schedules a script-only job without a prompt (0.054208ms)
+✔ /jobs add rejects a non-numeric interval (0.0465ms)
+✔ /jobs add rejects trailing text in an interval (0.032833ms)
+✔ /jobs heartbeat defaults to 300s and omits a prompt (0.06825ms)
+✔ /jobs cron sends a UTC expression and prompt (0.044084ms)
+✔ /jobs off resolves an id prefix and disables the job (0.084ms)
+✔ every command has a description and unique name (0.0905ms)
+✔ unknown commands and subcommands are reported, not thrown (0.043792ms)
+✔ /memory add parses an optional category prefix (0.088459ms)
+✔ /memory forget resolves an id prefix (0.047875ms)
+✔ /memory approve all uses the bulk method (0.030458ms)
+✔ /delete asks for confirmation and starts a new session after deleting the current one (0.19525ms)
+✔ /delete lists every page, then deletes only checked sessions after confirmation (0.157125ms)
+✔ /delete checkbox and confirmation cancellation never delete (0.072542ms)
+✔ /delete reports partial failures and keeps a failed current session (0.209584ms)
+✔ /delete selected current session creates only one replacement (0.142625ms)
+✔ /delete runs at most three requests concurrently (10.991583ms)
+✔ /export writes Markdown to a default file name (0.130292ms)
+✔ /config sets a value and --save persists it (0.534667ms)
+✔ /default-model sets a custom id and saves it (0.172083ms)
+✔ /default-model with no args opens the menu and saves the pick (0.154958ms)
+✔ /default-model resolves a curated id directly (0.06825ms)
+✔ /model is an alias for /default-model (0.039ms)
+✔ /provider re-pins the current session (0.08375ms)
+✔ /provider completions and hint cover the sign-in and gateway providers (0.133916ms)
+✔ commands that need a session say so (0.073458ms)
+✔ argument completions offer subcommands (0.04275ms)
+✔ /agents list and show render agent definitions (0.231375ms)
+✔ /agents save uses the first token as name and the remainder as description (0.082208ms)
+✔ /delegate runs one step through agents.run (0.117ms)
+✔ /delegate selects a live agent before asking for the task (0.080208ms)
+✔ /delegate agent asks for a task without opening the picker (0.046375ms)
+✔ /delegate picker cancellation does not ask for a task or launch (0.037583ms)
+✔ /delegate cancelled or blank task never launches (0.042458ms)
+✔ /delegate with no available agents explains how to add one (0.062292ms)
+✔ /resume with no args delegates to the sessions command (named reference) (0.054583ms)
+✔ /resume with a prefix resolves via paginated session.list (0.100167ms)
+✔ listAllSessions walks every page to the end of the list (0.075334ms)
+✔ listAllSessions honors maxPages and throws one bounded error (0.194125ms)
+✔ /agents sessions shares the bounded scanner (0.121875ms)
+✔ format helpers (0.073ms)
+✔ /keys list shows status without ever echoing values (0.200542ms)
+✔ /keys set saves by default and --no-save stays session-only (0.145375ms)
+✔ /keys clear resolves a prefix (0.107167ms)
+✔ /keys menu Set flow saves once with persist:true and never echoes the value (0.155708ms)
+✔ /keys menu Clear confirms before a single clear (0.082375ms)
+✔ /keys menu Back and Esc persist nothing (0.063167ms)
+✔ /keys menu merges user-added provider keys and keyless rows (0.140708ms)
+✔ /keys keyless-local provider rows are non-editable (0.072875ms)
+✔ /keys list shows merged provider rows with honest statuses (0.086375ms)
+✔ /keys clear resolves a provider key by prefix (0.055583ms)
+✔ /keys rows follow the provider store after a removal (0.171625ms)
+✔ /keys expert set failure redacts the value (0.064125ms)
+✔ /models picker applies a cross-provider model after a one-line confirm (0.442584ms)
+✔ /models never switches providers without the confirm (0.178458ms)
+✔ /models prefers the same model id under the current provider (0.129584ms)
+✔ /models filters by query and warns when nothing matches (0.107792ms)
+✔ /models curated list includes the ChatGPT account and OpenCode Zen defaults (0.056291ms)
+✔ /models catalog prints the provider catalog with per-model efforts (0.111709ms)
+✔ /models catalog reports fetch errors honestly (0.048708ms)
+✔ /models groups catalogs per provider with the selected provider first (0.220375ms)
+✔ /models search matches provider names and model ids across groups (0.944458ms)
+✔ /provider list shows built-in and user-added providers (0.141667ms)
+✔ /provider add collects name/URL/key and reports the pulled models (0.167417ms)
+✔ /provider add reports fetch failures without losing the entry (0.078417ms)
+✖ /provider add keeps the error message intact for a keyless endpoint (0.752417ms)
+✔ /provider add redacts a submitted key from the error message (0.096083ms)
+✖ /provider remove confirms what will be deleted and reports the cleanup (5.733709ms)
+✖ /provider remove reports traces that were already gone without pretending (0.2705ms)
+✔ /provider remove cancels cleanly when declined (0.049958ms)
+✔ /provider remove works when providers.list is unavailable (0.070709ms)
+✔ /providers is an alias for /provider (0.053ms)
+✔ /effort routes through per-model validation with session identity (0.07075ms)
+✔ /compact is an alias for /compress (0.027125ms)
+✔ /help groups commands by domain (1.335166ms)
+✔ /init scaffolds AGENTS.md (0.069667ms)
+✔ /review submits a review turn (0.053917ms)
+✔ /clear clears and starts a new chat (0.071166ms)
+✔ /theme switches skin and persists it (0.195792ms)
+✔ read-only reports use the plain kind (0.060292ms)
+✔ unknown modes and keys fail as errors, not warnings (0.10375ms)
+✔ /approvals renders one table and rejects bad ids as errors (0.170292ms)
+✔ /approvals allow refuses empty and ambiguous ids, and binds the resolved session (0.110375ms)
+✔ /growth forget reports a miss as a warning (0.036959ms)
+✔ notices mark success, warning, and error with text cues (23.22725ms)
+✔ bare /profile view shows the current profile without switching (0.209375ms)
+✔ bare /profile new creates a slug id and switches to it (0.112791ms)
+✔ bare /profile new rejects non-slug ids without creating (0.067375ms)
+✔ bare /profile switch changes the active profile only (0.108792ms)
+✔ /profile set writes to the current profile (0.053583ms)
+✔ /profiles marks the current profile (0.100708ms)
+✔ new chats carry the profile agent scope only off-default (0.068458ms)
+✔ H02 /theme menu commit persists exactly once with success (0.157167ms)
+✔ H02 /theme menu cancel restores and persists nothing (0.067708ms)
+✔ H02 /theme save failure keeps the temporary theme with a warning (0.138208ms)
+✔ /mcp lists real harness inventory and reports an honest empty state (0.104208ms)
+✔ /mcp opens a connection picker then fetches fresh status without connecting (0.26825ms)
+✔ /mcp status and list inspect without launching; cancel and malformed commands are inert (0.129ms)
+✔ /mcp adds a stdio server through forms without launching (0.221917ms)
+✔ /mcp cancelling an add form never saves configuration (0.100125ms)
+✔ /mcp connects only after confirmation with the active session (0.860292ms)
+✔ /mcp denied connection never launches a server (0.163958ms)
+✔ /mcp removal requires confirmation and reports the outcome (0.165833ms)
+✔ /mcp connection failure reports an error without claiming success (0.182417ms)
+✔ /mcp shows cached tools without connecting and marks truncation (0.114792ms)
+✔ /mcp advanced configuration rejects secret values (0.089875ms)
+✔ /mcp configures HTTP with reference names and allowlist without connecting (0.140458ms)
+✔ /mcp disconnects a connected server without starting it (0.070167ms)
+✔ /mcp needs an active session before previewing or connecting (0.08975ms)
+✔ /mcp rejected argv and credential endpoints are never configured (0.124167ms)
+✔ /mcp supports trusted_read configuration without granting broader trust (0.069ms)
+✔ /mcp cached tools report the policy verdict alongside the tool (0.109833ms)
+✔ /mcp rejects invalid server IDs before saving or collecting further fields (0.16125ms)
+✔ /mcp connection confirmation shows the reviewed safe configuration (0.1295ms)
+ℹ tests 135
+ℹ suites 0
+ℹ pass 132
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 320.831
+
+✖ failing tests:
+
+test at test/features.test.ts:1480:1
+✖ /provider add keeps the error message intact for a keyless endpoint (0.752417ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Could not add acme: could not reach http:\/\/127\.0\.0\.1:9000\/v1 \(ConnectError\)/. Input:
+  
+  'Could not add acme: c[redacted]o[redacted]u[redacted]l[redacted]d[redacted] [redacted]n[redacted]o[redacted]t[redacted] [redacted]r[redacted]e[redacted]a[redacted]c[redacted]h[redacted] [redacted]h[redacted]t[redacted]t[redacted]p[redacted]:[redacted]/[redacted]/[redacted]1[redacted]2[redacted]7[redacted].[redacted]0[redacted].[redacted]0[redacted].[redacted]1[redacted]:[redacted]9[redacted]0[redacted]0[redacted]0[redacted]/[redacted]v[redacted]1[redacted] [redacted]([redacted]C[redacted]o[redacted]n[redacted]n[redacted]e[redacted]c[redacted]t[redacted]E[redacted]r[redacted]r[redacted]o[redacted]r[redacted])'
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/features.test.ts:1488:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'Could not add acme: c[redacted]o[redacted]u[redacted]l[redacted]d[redacted] [redacted]n[redacted]o[redacted]t[redacted] [redacted]r[redacted]e[redacted]a[redacted]c[redacted]h[redacted] [redacted]h[redacted]t[redacted]t[redacted]p[redacted]:[redacted]/[redacted]/[redacted]1[redacted]2[redacted]7[redacted].[redacted]0[redacted].[redacted]0[redacted].[redacted]1[redacted]:[redacted]9[redacted]0[redacted]0[redacted]0[redacted]/[redacted]v[redacted]1[redacted] [redacted]([redacted]C[redacted]o[redacted]n[redacted]n[redacted]e[redacted]c[redacted]t[redacted]E[redacted]r[redacted]r[redacted]o[redacted]r[redacted])',
+    expected: /Could not add acme: could not reach http:\/\/127\.0\.0\.1:9000\/v1 \(ConnectError\)/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test/features.test.ts:1507:1
+✖ /provider remove confirms what will be deleted and reports the cleanup (5.733709ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(host.printed.some((p) => /Provider "acme" removed — store entry, MACHINA_PROVIDER_ACME_API_KEY line in \.env, 3 cached model\(s\), registry entry\./.test(p.text)))
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/features.test.ts:1553:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/features.test.ts:1557:1
+✖ /provider remove reports traces that were already gone without pretending (0.2705ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(host.printed.some((p) => /MACHINA_PROVIDER_ACME_API_KEY \(no \.env line found\)/.test(p.text)))
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/features.test.ts:1574:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

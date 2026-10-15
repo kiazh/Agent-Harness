@@ -1,0 +1,20 @@
+✔ R5-021 optional SecretForm: blank Enter submits empty (explicit keyless path) (2.687375ms)
+✔ R5-021 optional SecretForm: blank Ctrl+S submits empty, Escape still cancels (0.357791ms)
+✔ R5-021 required SecretForm still rejects blank (no keyless path elsewhere) (10.591667ms)
+✔ R5-021 /provider add: blank key proceeds keyless, Escape cancels without a request (0.439375ms)
+✔ R5-022 /memory forget <full-uuid> bypasses the newest-500 window (0.412833ms)
+✔ R5-022 /memory share <full-uuid> bypasses the newest-500 window (0.238209ms)
+✔ R5-022 /memory approve <full-uuid> bypasses the pending window (0.129958ms)
+✔ R5-022 /memory reject <full-uuid> bypasses the pending window (0.075709ms)
+✔ R5-022 abbreviations stay bounded and misses disclose the full-ID path (0.297ms)
+✔ R5-022 /skills approve <full-uuid> bypasses the latest-100 window (0.368375ms)
+✔ R5-022 /skills revert <full-uuid> bypasses the latest-100 window (0.118583ms)
+✔ R5-022 /skills approve abbreviations stay bounded and disclose the full-ID path (0.227542ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 241.087583

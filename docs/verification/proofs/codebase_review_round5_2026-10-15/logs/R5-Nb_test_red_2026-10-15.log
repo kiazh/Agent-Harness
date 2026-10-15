@@ -1,0 +1,108 @@
+FFFFFF.                                                                  [100%]
+=================================== FAILURES ===================================
+_________ test_source_redactor_removes_both_vectors_and_keeps_context __________
+
+    def test_source_redactor_removes_both_vectors_and_keeps_context():
+        from machina.rag import pipeline as pipeline_mod
+    
+>       out = pipeline_mod._redact_source(COMBINED_SRC)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'machina.rag.pipeline' has no attribute '_redact_source'
+
+tests/test_r5_nb_source_redaction.py:50: AttributeError
+_____________ test_source_redactor_leaves_benign_source_untouched ______________
+
+    def test_source_redactor_leaves_benign_source_untouched():
+        from machina.rag import pipeline as pipeline_mod
+    
+>       assert pipeline_mod._redact_source(BENIGN_SRC) == BENIGN_SRC
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'machina.rag.pipeline' has no attribute '_redact_source'
+
+tests/test_r5_nb_source_redaction.py:64: AttributeError
+___________ test_source_redactor_preserves_bare_userinfo_identifier ____________
+
+    def test_source_redactor_preserves_bare_userinfo_identifier():
+        from machina.rag import pipeline as pipeline_mod
+    
+        src = "https://bob@example.invalid/plain"
+>       assert pipeline_mod._redact_source(src) == src
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'machina.rag.pipeline' has no attribute '_redact_source'
+
+tests/test_r5_nb_source_redaction.py:71: AttributeError
+__________ test_source_redactor_fails_closed_when_url_redactor_raises __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd42690>
+
+    def test_source_redactor_fails_closed_when_url_redactor_raises(monkeypatch):
+        from machina.rag import pipeline as pipeline_mod
+    
+        def _boom(_text):
+            raise RuntimeError("url redaction failed")
+    
+        monkeypatch.setattr(pipeline_mod, "redact_url_credentials", _boom)
+>       assert pipeline_mod._redact_source(COMBINED_SRC) == REDACTION_FAILED
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'machina.rag.pipeline' has no attribute '_redact_source'
+
+tests/test_r5_nb_source_redaction.py:81: AttributeError
+________ test_source_redactor_fails_closed_when_secret_detector_raises _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd42be0>
+
+    def test_source_redactor_fails_closed_when_secret_detector_raises(monkeypatch):
+        from machina.rag import pipeline as pipeline_mod
+    
+        def _boom(_text):
+            raise RuntimeError("secret detection failed")
+    
+        monkeypatch.setattr(pipeline_mod, "redact_secrets", _boom)
+>       out = pipeline_mod._redact_source(COMBINED_SRC)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'machina.rag.pipeline' has no attribute '_redact_source'
+
+tests/test_r5_nb_source_redaction.py:91: AttributeError
+__________________ test_index_persists_no_source_credentials ___________________
+
+isolated_rag_db = <machina.db.connection.Database object at 0x10bd336f0>
+
+    async def test_index_persists_no_source_credentials(isolated_rag_db):
+        """Every stored field of the row is credential-free; context survives."""
+        from machina.observability.audit import audit_persistence
+    
+        database = isolated_rag_db
+        audit_persistence.start()
+        try:
+            session_id = await _index_combined_source(database)
+        finally:
+            await audit_persistence.stop()
+    
+        rows = await database.fetch(
+            "SELECT * FROM context_chunks WHERE session_id = $1", session_id
+        )
+        assert rows
+        document_sources = set()
+        for row in rows:
+>           assert USERINFO_PASSWORD not in _blob(row["document_source"])
+E           AssertionError: assert 'example-passphrase' not in 'https://ali...y=short1&x=1'
+E             
+E             'example-passphrase' is contained here:
+E               https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1
+E             ?               ++++++++++++++++++
+
+tests/test_r5_nb_source_redaction.py:169: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 23:31:17,671 [AUDIT] {"timestamp": 1792035077.671754, "event": "rag_index_start", "session_id": "4f9e70a7-caf8-4a1e-8057-3fac6098718e", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "doc_type": "text"}
+2026-10-14 23:31:17,685 [AUDIT] {"timestamp": 1792035077.685107, "event": "rag_index_complete", "session_id": "4f9e70a7-caf8-4a1e-8057-3fac6098718e", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "chunks_stored": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:216 {"timestamp": 1792035077.671754, "event": "rag_index_start", "session_id": "4f9e70a7-caf8-4a1e-8057-3fac6098718e", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "doc_type": "text"}
+INFO     machina.audit:audit.py:216 {"timestamp": 1792035077.685107, "event": "rag_index_complete", "session_id": "4f9e70a7-caf8-4a1e-8057-3fac6098718e", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "chunks_stored": 1}
+=========================== short test summary info ============================
+FAILED tests/test_r5_nb_source_redaction.py::test_source_redactor_removes_both_vectors_and_keeps_context
+FAILED tests/test_r5_nb_source_redaction.py::test_source_redactor_leaves_benign_source_untouched
+FAILED tests/test_r5_nb_source_redaction.py::test_source_redactor_preserves_bare_userinfo_identifier
+FAILED tests/test_r5_nb_source_redaction.py::test_source_redactor_fails_closed_when_url_redactor_raises
+FAILED tests/test_r5_nb_source_redaction.py::test_source_redactor_fails_closed_when_secret_detector_raises
+FAILED tests/test_r5_nb_source_redaction.py::test_index_persists_no_source_credentials
+6 failed, 1 passed in 0.55s

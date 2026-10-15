@@ -1,0 +1,20 @@
+....................................F................................... [ 83%]
+..............                                                           [100%]
+=================================== FAILURES ===================================
+______________ test_agent_py_shrank_below_its_pre_extraction_size ______________
+
+    def test_agent_py_shrank_below_its_pre_extraction_size():
+        """A5-min must pay for itself: the helpers live OUTSIDE agent.py."""
+        agent_lines = len(
+            (ROOT / "machina" / "core" / "agent.py").read_text(encoding="utf-8").splitlines()
+        )
+>       assert agent_lines < 2056, (
+            f"agent.py must shrink below its pre-extraction 2056 lines, got {agent_lines}"
+        )
+E       AssertionError: agent.py must shrink below its pre-extraction 2056 lines, got 2110
+E       assert 2110 < 2056
+
+tests/test_a5_turn_flow.py:322: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_a5_turn_flow.py::test_agent_py_shrank_below_its_pre_extraction_size
+1 failed, 85 passed in 6.04s

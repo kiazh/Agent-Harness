@@ -1,0 +1,2 @@
+argv: ['/Users/shadow/machina/.venv/bin/python', '-m', 'machina', 'chat', '-q', '--mode', 'full', '--', 'hello']
+RED A1-hop1 REPRODUCED: tool mode='full' forwarded as CLI --mode full, no ceiling

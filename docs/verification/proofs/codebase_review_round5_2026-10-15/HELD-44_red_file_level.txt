@@ -1,0 +1,2 @@
+turn-1 cancelled=True after_new='NEW' final='OLD'
+VERDICT: LATE OVERWRITE (old cancelled write clobbered newer edit)

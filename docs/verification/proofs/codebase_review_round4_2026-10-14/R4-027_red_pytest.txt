@@ -1,0 +1,85 @@
+...FF.FF...........F                                                     [100%]
+=================================== FAILURES ===================================
+________________ test_shim_points_at_rejects_sibling_checkouts _________________
+
+    def test_shim_points_at_rejects_sibling_checkouts() -> None:
+        """R4-027: a sibling checkout sharing the prefix is a different install."""
+        from machina.cli import _shim_points_at
+    
+        root = "/Users/x/machina"
+        for sibling in ("machina-old", "machina2", "machinaX", "machina_old", "machina.bak"):
+            shim = f'exec "/Users/x/{sibling}/.venv/bin/machina" "$@"\n'
+>           assert not _shim_points_at(shim, root), sibling
+E           AssertionError: machina-old
+E           assert not True
+E            +  where True = <function _shim_points_at at 0x10ccbcf60>('exec "/Users/x/machina-old/.venv/bin/machina" "$@"\n', '/Users/x/machina')
+
+tests/test_uninstall.py:41: AssertionError
+__________ test_shim_points_at_rejects_segment_extension_before_match __________
+
+    def test_shim_points_at_rejects_segment_extension_before_match() -> None:
+        """R4-027: ``old/x/machina`` is not the absolute ``/x/machina`` checkout."""
+        from machina.cli import _shim_points_at
+    
+>       assert not _shim_points_at('exec "old/x/machina/.venv/bin/machina" "$@"', "/x/machina")
+E       assert not True
+E        +  where True = <function _shim_points_at at 0x10ccbcf60>('exec "old/x/machina/.venv/bin/machina" "$@"', '/x/machina')
+
+tests/test_uninstall.py:48: AssertionError
+_____________ test_shim_points_at_case_insensitive_whole_segments ______________
+
+    def test_shim_points_at_case_insensitive_whole_segments() -> None:
+        """R4-027: case folding applies, but never fuses with a longer sibling name."""
+        from machina.cli import _shim_points_at
+    
+        assert _shim_points_at('exec "/USERS/X/MACHINA/.venv/bin/machina" "$@"', "/users/x/machina")
+>       assert not _shim_points_at(
+            'exec "/USERS/X/MACHINA2/.venv/bin/machina" "$@"', "/users/x/machina"
+        )
+E       assert not True
+E        +  where True = <function _shim_points_at at 0x10ccbcf60>('exec "/USERS/X/MACHINA2/.venv/bin/machina" "$@"', '/users/x/machina')
+
+tests/test_uninstall.py:67: AssertionError
+___________ test_shim_points_at_strips_trailing_separator_from_root ____________
+
+    def test_shim_points_at_strips_trailing_separator_from_root() -> None:
+        """R4-027: a trailing separator on app_root neither breaks nor broadens the match."""
+        from machina.cli import _shim_points_at
+    
+        root = "/Users/x/machina/"
+        assert _shim_points_at(f'exec "{root}.venv/bin/machina" "$@"', root)
+>       assert not _shim_points_at('exec "/Users/x/machina-old/.venv/bin/machina" "$@"', root)
+E       assert not True
+E        +  where True = <function _shim_points_at at 0x10ccbcf60>('exec "/Users/x/machina-old/.venv/bin/machina" "$@"', '/Users/x/machina/')
+
+tests/test_uninstall.py:78: AssertionError
+________________ test_uninstall_keeps_shim_of_sibling_checkout _________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1497/test_uninstall_keeps_shim_of_s0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e8b7750>
+
+    def test_uninstall_keeps_shim_of_sibling_checkout(tmp_path: Path, monkeypatch) -> None:
+        """R4-027: a shim exec'ing a sibling checkout is not this install's shim."""
+        import machina.cli as cli
+    
+        fake_root, _fake_env, _removed = _isolate_uninstall(tmp_path, monkeypatch)
+        home = tmp_path / "home"
+        shim = home / ".local" / "bin" / "machina"
+        shim.parent.mkdir(parents=True)
+        shim.write_text(f'exec "{fake_root}-old/.venv/bin/machina" "$@"\n', encoding="utf-8")
+    
+        runner = CliRunner()
+        result = runner.invoke(cli.app, ["uninstall"], input="y\nn\nn\nn\nn\n")
+        assert result.exit_code == 0, result.output
+>       assert "points elsewhere" in result.output
+E       AssertionError: assert 'points elsewhere' in 'What should go? (yes/no)\nRemove PATH registration (user Path + shim)? [Y/n]: y\nDelete the virtualenv (/private/var/..._shim_of_s0/home/.local/bin/machina\n\n✓ Uninstall complete. Open a new terminal for the PATH change to take effect.\n'
+E        +  where 'What should go? (yes/no)\nRemove PATH registration (user Path + shim)? [Y/n]: y\nDelete the virtualenv (/private/var/..._shim_of_s0/home/.local/bin/machina\n\n✓ Uninstall complete. Open a new terminal for the PATH change to take effect.\n' = <Result okay>.output
+
+tests/test_uninstall.py:336: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_uninstall.py::test_shim_points_at_rejects_sibling_checkouts
+FAILED tests/test_uninstall.py::test_shim_points_at_rejects_segment_extension_before_match
+FAILED tests/test_uninstall.py::test_shim_points_at_case_insensitive_whole_segments
+FAILED tests/test_uninstall.py::test_shim_points_at_strips_trailing_separator_from_root
+FAILED tests/test_uninstall.py::test_uninstall_keeps_shim_of_sibling_checkout
+5 failed, 15 passed in 0.40s

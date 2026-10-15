@@ -1,0 +1,3 @@
+verdict: allowed | reason: full-mode session grant
+no-grant verdict: pending | reason: full mode requires explicit session activation (/mode full)
+RED A1-hop3/A3 REPRODUCED: full grant allows credential read without approval

@@ -1,0 +1,32 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 21 items
+
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[plaintext-flag-on-allowed] PASSED [  4%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[plaintext-flag-unset-rejected] PASSED [  9%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[plaintext-flag-0-rejected] PASSED [ 14%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[plaintext-flag-true-rejected] PASSED [ 19%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[unknown-flag-on-rejected] PASSED [ 23%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[unknown-flag-unset-rejected] PASSED [ 28%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[native-flag-on-allowed] PASSED [ 33%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[native-flag-unset-allowed] PASSED [ 38%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[fail-flag-on-rejected] PASSED [ 42%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[fail-flag-unset-rejected] PASSED [ 47%]
+tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[null-flag-on-rejected] PASSED [ 52%]
+tests/test_r4_045_047_049_providers.py::test_non_loopback_plaintext_http_refused_by_default PASSED [ 57%]
+tests/test_r4_045_047_049_providers.py::test_loopback_plaintext_http_remains_allowed[http://127.0.0.1:9000/v1] PASSED [ 61%]
+tests/test_r4_045_047_049_providers.py::test_loopback_plaintext_http_remains_allowed[http://localhost:9001/v1] PASSED [ 66%]
+tests/test_r4_045_047_049_providers.py::test_loopback_plaintext_http_remains_allowed[http://[::1]:9002/v1] PASSED [ 71%]
+tests/test_r4_045_047_049_providers.py::test_opt_in_allows_non_loopback_http_with_visible_warning PASSED [ 76%]
+tests/test_r4_045_047_049_providers.py::test_opt_in_flag_must_be_exactly_one PASSED [ 80%]
+tests/test_r4_045_047_049_providers.py::test_https_to_non_loopback_host_is_unchanged PASSED [ 85%]
+tests/test_r4_045_047_049_providers.py::test_fetch_models_refuses_plaintext_bearer_to_non_loopback_by_default PASSED [ 90%]
+tests/test_r4_045_047_049_providers.py::test_opted_in_cleartext_bearer_reaches_the_network_boundary PASSED [ 95%]
+tests/test_r4_045_047_049_providers.py::test_contended_store_lock_fails_bounded_with_typed_error PASSED [100%]
+
+============================== 21 passed in 8.09s ==============================

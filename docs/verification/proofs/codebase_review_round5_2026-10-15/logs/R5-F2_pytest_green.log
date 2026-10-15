@@ -1,0 +1,17 @@
+
+### R5-F2 pytest GREEN: new suite + existing chunker/rag suites
+
+tests/test_rag.py::TestFileLoader::test_load_markdown_file PASSED        [ 85%]
+tests/test_rag.py::TestFileLoader::test_load_json_file PASSED            [ 87%]
+tests/test_rag.py::TestFileLoader::test_load_python_file PASSED          [ 88%]
+tests/test_rag.py::TestFileLoader::test_load_nonexistent_file PASSED     [ 89%]
+tests/test_rag.py::TestFileLoader::test_load_directory PASSED            [ 91%]
+tests/test_rag.py::TestFileLoader::test_load_empty_file PASSED           [ 92%]
+tests/test_rag.py::TestFileLoader::test_load_large_file PASSED           [ 93%]
+tests/test_rag.py::TestFileLoader::test_load_with_metadata PASSED        [ 94%]
+tests/test_rag.py::TestFileLoader::test_load_directory_of_files PASSED   [ 96%]
+tests/test_rag.py::TestFileLoader::test_supported_extensions PASSED      [ 97%]
+tests/test_rag.py::TestRAGIntegration::test_full_rag_pipeline PASSED     [ 98%]
+tests/test_rag.py::TestRAGIntegration::test_hybrid_search_integration PASSED [100%]
+
+============================== 78 passed in 1.09s ==============================

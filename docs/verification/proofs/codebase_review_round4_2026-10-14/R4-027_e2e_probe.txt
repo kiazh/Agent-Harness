@@ -1,0 +1,4 @@
+mode=old scenario=sibling exit=0 shim_survives=False expected=False PASS
+mode=old scenario=own exit=0 shim_survives=False expected=False PASS
+mode=live scenario=sibling exit=0 shim_survives=True expected=True PASS
+mode=live scenario=own exit=0 shim_survives=False expected=False PASS

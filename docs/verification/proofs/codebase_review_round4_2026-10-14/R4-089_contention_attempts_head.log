@@ -1,0 +1,8 @@
+attempt 1: 2 failed, 188 passed in 6.54s (db-lock errors: 4)
+--- attempt 1 ---
+ERROR    machina.memory.consolidator:consolidator.py:429 Failed to write memory: DeadlockDetectedError
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+FAILED tests/test_memory_bug_fixes.py::TestConsolidatorDedupEmbedding::test_intra_batch_paraphrases_write_once
+FAILED tests/test_memory_bug_fixes.py::TestUpdateAccessQuarantined::test_update_access_skips_quarantined
+attempt 2: 190 passed in 2.11s (db-lock errors: 0)
+CLEAN PASS attempt 2

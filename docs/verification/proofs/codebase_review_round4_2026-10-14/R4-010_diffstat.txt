@@ -1,0 +1,6 @@
+ machina/api/routes/streaming.py | 14 +++++++++++++-
+ machina/cli/__init__.py         |  7 +++++++
+ machina/core/agent.py           | 28 +++++++++++++---------------
+ machina/core/session_mode.py    | 13 +++++++++++--
+ machina/gateway/server.py       |  7 +++++++
+ 5 files changed, 51 insertions(+), 18 deletions(-)

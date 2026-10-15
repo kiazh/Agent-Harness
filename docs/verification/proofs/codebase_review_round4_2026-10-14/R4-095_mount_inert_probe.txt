@@ -1,0 +1,13 @@
+== 1. console-script style (machina init / machina serve) ==
+console script: sys.path[0] = /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/r4095-mount.XKxXUk/bin
+console script: machina.__file__ = /Users/shadow/machina/machina/__init__.py
+   shadow at /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-mount.XKxXUk/app/machina: NOT USED
+
+== 2. python -c / python -m style from cwd (the caveat) ==
+python -c: sys.path[0] = ''
+python -c: machina.__file__ = /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/r4095-mount.XKxXUk/app/machina/__init__.py
+
+== 3. resolution recap ==
+PASS: console script ignores the cwd shadow (installed copy wins)
+PASS: python -c from cwd does see the shadow (caveat is real)
+probe exit: 0

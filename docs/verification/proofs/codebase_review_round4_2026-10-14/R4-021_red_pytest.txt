@@ -1,0 +1,522 @@
+FFFFFFFFF.                                                               [100%]
+=================================== FAILURES ===================================
+_____ test_malformed_200_raises_typed_error_and_never_caches[no-data-key] ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e298770>
+payload = {'model': 'test-embed', 'usage': {'total_tokens': 3}}
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"model": "test-embed", "usage": {"total_tokens": 3}},  # no "data"
+            {"data": []},  # explicit empty list
+            {"data": None},
+            {"data": {"index": 0, "embedding": [0.1]}},  # wrong container type
+            {"data": "oops"},
+            [],  # non-object JSON body
+        ],
+        ids=["no-data-key", "empty-data-list", "null-data", "dict-data", "string-data", "list-body"],
+    )
+    async def test_malformed_200_raises_typed_error_and_never_caches(monkeypatch, payload):
+        embedder, requests = await _shared_openai_embedder(
+            monkeypatch, lambda request: httpx.Response(200, json=payload)
+        )
+    
+>       with pytest.raises(ProviderError, match="usable vector"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderError
+
+tests/test_embedding_failopen_adversarial.py:143: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:20:22,131 [AUDIT] {"timestamp": 1792016422.1318028, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:20:22,133 [AUDIT] {"timestamp": 1792016422.133545, "event": "rag_embed_complete", "model": "test-embed", "count": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.1318028, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.133545, "event": "rag_embed_complete", "model": "test-embed", "count": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+___ test_malformed_200_raises_typed_error_and_never_caches[empty-data-list] ____
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10eca69c0>
+payload = {'data': []}
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"model": "test-embed", "usage": {"total_tokens": 3}},  # no "data"
+            {"data": []},  # explicit empty list
+            {"data": None},
+            {"data": {"index": 0, "embedding": [0.1]}},  # wrong container type
+            {"data": "oops"},
+            [],  # non-object JSON body
+        ],
+        ids=["no-data-key", "empty-data-list", "null-data", "dict-data", "string-data", "list-body"],
+    )
+    async def test_malformed_200_raises_typed_error_and_never_caches(monkeypatch, payload):
+        embedder, requests = await _shared_openai_embedder(
+            monkeypatch, lambda request: httpx.Response(200, json=payload)
+        )
+    
+>       with pytest.raises(ProviderError, match="usable vector"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderError
+
+tests/test_embedding_failopen_adversarial.py:143: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:20:22,168 [AUDIT] {"timestamp": 1792016422.1689112, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:20:22,172 [AUDIT] {"timestamp": 1792016422.172663, "event": "rag_embed_complete", "model": "test-embed", "count": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.1689112, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.172663, "event": "rag_embed_complete", "model": "test-embed", "count": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+______ test_malformed_200_raises_typed_error_and_never_caches[null-data] _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ecc2750>
+payload = {'data': None}
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"model": "test-embed", "usage": {"total_tokens": 3}},  # no "data"
+            {"data": []},  # explicit empty list
+            {"data": None},
+            {"data": {"index": 0, "embedding": [0.1]}},  # wrong container type
+            {"data": "oops"},
+            [],  # non-object JSON body
+        ],
+        ids=["no-data-key", "empty-data-list", "null-data", "dict-data", "string-data", "list-body"],
+    )
+    async def test_malformed_200_raises_typed_error_and_never_caches(monkeypatch, payload):
+        embedder, requests = await _shared_openai_embedder(
+            monkeypatch, lambda request: httpx.Response(200, json=payload)
+        )
+    
+        with pytest.raises(ProviderError, match="usable vector"):
+>           await embedder.embed("poison attempt")
+
+tests/test_embedding_failopen_adversarial.py:144: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/rag/embedder.py:168: in embed
+    result = await self._embed_uncached([text])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.rag.embedder.OpenAIEmbedder object at 0x10ec77c50>
+texts = ['poison attempt']
+
+    async def _embed_uncached(self, texts: list[str]) -> list[list[float]]:
+        """Call the embedding API for a list of texts."""
+        if not texts:
+            return []
+    
+        _core_symbol("machina.core.provider", "audit_log")(
+            "rag_embed_start",
+            model=self._model,
+            count=len(texts),
+            provider="openai",
+        )
+    
+        try:
+            resp = await self._client.post(
+                "/embeddings",
+                json={"model": self._model, "input": texts},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_error", model=self._model, error=str(e)
+            )
+            logger.error("Embedding API call failed: %s", e)
+            raise
+    
+        # Sort by index to maintain order — validate index field
+        items = data.get("data", [])
+>       for item in items:
+                    ^^^^^
+E       TypeError: 'NoneType' object is not iterable
+
+machina/rag/embedder.py:266: TypeError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:20:22,186 [AUDIT] {"timestamp": 1792016422.186651, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.186651, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+______ test_malformed_200_raises_typed_error_and_never_caches[dict-data] _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e28ec10>
+payload = {'data': {'index': 0, 'embedding': [0.1]}}
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"model": "test-embed", "usage": {"total_tokens": 3}},  # no "data"
+            {"data": []},  # explicit empty list
+            {"data": None},
+            {"data": {"index": 0, "embedding": [0.1]}},  # wrong container type
+            {"data": "oops"},
+            [],  # non-object JSON body
+        ],
+        ids=["no-data-key", "empty-data-list", "null-data", "dict-data", "string-data", "list-body"],
+    )
+    async def test_malformed_200_raises_typed_error_and_never_caches(monkeypatch, payload):
+        embedder, requests = await _shared_openai_embedder(
+            monkeypatch, lambda request: httpx.Response(200, json=payload)
+        )
+    
+        with pytest.raises(ProviderError, match="usable vector"):
+>           await embedder.embed("poison attempt")
+
+tests/test_embedding_failopen_adversarial.py:144: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/rag/embedder.py:168: in embed
+    result = await self._embed_uncached([text])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.rag.embedder.OpenAIEmbedder object at 0x10ece6b10>
+texts = ['poison attempt']
+
+    async def _embed_uncached(self, texts: list[str]) -> list[list[float]]:
+        """Call the embedding API for a list of texts."""
+        if not texts:
+            return []
+    
+        _core_symbol("machina.core.provider", "audit_log")(
+            "rag_embed_start",
+            model=self._model,
+            count=len(texts),
+            provider="openai",
+        )
+    
+        try:
+            resp = await self._client.post(
+                "/embeddings",
+                json={"model": self._model, "input": texts},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_error", model=self._model, error=str(e)
+            )
+            logger.error("Embedding API call failed: %s", e)
+            raise
+    
+        # Sort by index to maintain order — validate index field
+        items = data.get("data", [])
+        for item in items:
+            if "index" not in item:
+>               raise ValueError("Embedding API response missing 'index' field")
+E               ValueError: Embedding API response missing 'index' field
+
+machina/rag/embedder.py:268: ValueError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:20:22,206 [AUDIT] {"timestamp": 1792016422.206191, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.206191, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_____ test_malformed_200_raises_typed_error_and_never_caches[string-data] ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ed14290>
+payload = {'data': 'oops'}
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"model": "test-embed", "usage": {"total_tokens": 3}},  # no "data"
+            {"data": []},  # explicit empty list
+            {"data": None},
+            {"data": {"index": 0, "embedding": [0.1]}},  # wrong container type
+            {"data": "oops"},
+            [],  # non-object JSON body
+        ],
+        ids=["no-data-key", "empty-data-list", "null-data", "dict-data", "string-data", "list-body"],
+    )
+    async def test_malformed_200_raises_typed_error_and_never_caches(monkeypatch, payload):
+        embedder, requests = await _shared_openai_embedder(
+            monkeypatch, lambda request: httpx.Response(200, json=payload)
+        )
+    
+        with pytest.raises(ProviderError, match="usable vector"):
+>           await embedder.embed("poison attempt")
+
+tests/test_embedding_failopen_adversarial.py:144: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/rag/embedder.py:168: in embed
+    result = await self._embed_uncached([text])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.rag.embedder.OpenAIEmbedder object at 0x10ece7ce0>
+texts = ['poison attempt']
+
+    async def _embed_uncached(self, texts: list[str]) -> list[list[float]]:
+        """Call the embedding API for a list of texts."""
+        if not texts:
+            return []
+    
+        _core_symbol("machina.core.provider", "audit_log")(
+            "rag_embed_start",
+            model=self._model,
+            count=len(texts),
+            provider="openai",
+        )
+    
+        try:
+            resp = await self._client.post(
+                "/embeddings",
+                json={"model": self._model, "input": texts},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_error", model=self._model, error=str(e)
+            )
+            logger.error("Embedding API call failed: %s", e)
+            raise
+    
+        # Sort by index to maintain order — validate index field
+        items = data.get("data", [])
+        for item in items:
+            if "index" not in item:
+>               raise ValueError("Embedding API response missing 'index' field")
+E               ValueError: Embedding API response missing 'index' field
+
+machina/rag/embedder.py:268: ValueError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:20:22,227 [AUDIT] {"timestamp": 1792016422.227375, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.227375, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+______ test_malformed_200_raises_typed_error_and_never_caches[list-body] _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ed12d00>
+payload = []
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"model": "test-embed", "usage": {"total_tokens": 3}},  # no "data"
+            {"data": []},  # explicit empty list
+            {"data": None},
+            {"data": {"index": 0, "embedding": [0.1]}},  # wrong container type
+            {"data": "oops"},
+            [],  # non-object JSON body
+        ],
+        ids=["no-data-key", "empty-data-list", "null-data", "dict-data", "string-data", "list-body"],
+    )
+    async def test_malformed_200_raises_typed_error_and_never_caches(monkeypatch, payload):
+        embedder, requests = await _shared_openai_embedder(
+            monkeypatch, lambda request: httpx.Response(200, json=payload)
+        )
+    
+        with pytest.raises(ProviderError, match="usable vector"):
+>           await embedder.embed("poison attempt")
+
+tests/test_embedding_failopen_adversarial.py:144: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/rag/embedder.py:168: in embed
+    result = await self._embed_uncached([text])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.rag.embedder.OpenAIEmbedder object at 0x10ed485f0>
+texts = ['poison attempt']
+
+    async def _embed_uncached(self, texts: list[str]) -> list[list[float]]:
+        """Call the embedding API for a list of texts."""
+        if not texts:
+            return []
+    
+        _core_symbol("machina.core.provider", "audit_log")(
+            "rag_embed_start",
+            model=self._model,
+            count=len(texts),
+            provider="openai",
+        )
+    
+        try:
+            resp = await self._client.post(
+                "/embeddings",
+                json={"model": self._model, "input": texts},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_error", model=self._model, error=str(e)
+            )
+            logger.error("Embedding API call failed: %s", e)
+            raise
+    
+        # Sort by index to maintain order — validate index field
+>       items = data.get("data", [])
+                ^^^^^^^^
+E       AttributeError: 'list' object has no attribute 'get'
+
+machina/rag/embedder.py:265: AttributeError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:20:22,245 [AUDIT] {"timestamp": 1792016422.245866, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.245866, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+________ test_empty_data_list_keeps_zero_vector_out_of_dense_retrieval _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e0ba3c0>
+
+    async def test_empty_data_list_keeps_zero_vector_out_of_dense_retrieval(monkeypatch):
+        embedder, _requests = await _shared_openai_embedder(
+            monkeypatch, lambda request: httpx.Response(200, json={"data": []})
+        )
+    
+>       with pytest.raises(ProviderError, match="usable vector"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderError
+
+tests/test_embedding_failopen_adversarial.py:166: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:20:22,266 [AUDIT] {"timestamp": 1792016422.26631, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:20:22,266 [AUDIT] {"timestamp": 1792016422.266796, "event": "rag_embed_complete", "model": "test-embed", "count": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.26631, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.266796, "event": "rag_embed_complete", "model": "test-embed", "count": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+___________ test_valid_response_caches_and_recovers_after_malformed ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ecf6f90>
+
+    async def test_valid_response_caches_and_recovers_after_malformed(monkeypatch):
+        responses = [
+            httpx.Response(200, json={"model": "test-embed"}),  # malformed first
+            httpx.Response(200, json={"data": [{"index": 0, "embedding": VALID_VECTOR}]}),
+        ]
+        calls = {"n": 0}
+    
+        def responder(request: httpx.Request) -> httpx.Response:
+            response = responses[min(calls["n"], len(responses) - 1)]
+            calls["n"] += 1
+            return response
+    
+        embedder, requests = await _shared_openai_embedder(monkeypatch, responder)
+    
+>       with pytest.raises(ProviderError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderError
+
+tests/test_embedding_failopen_adversarial.py:206: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:20:22,276 [AUDIT] {"timestamp": 1792016422.2762518, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:20:22,276 [AUDIT] {"timestamp": 1792016422.2767098, "event": "rag_embed_complete", "model": "test-embed", "count": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.2762518, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.2767098, "event": "rag_embed_complete", "model": "test-embed", "count": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_________ test_batch_short_result_raises_without_partial_cache_writes __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ecf6f20>
+
+    async def test_batch_short_result_raises_without_partial_cache_writes(monkeypatch):
+        responses = [
+            httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.25] * 4}]}),
+            httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"index": 0, "embedding": [0.25] * 4},
+                        {"index": 1, "embedding": [0.75] * 4},
+                    ]
+                },
+            ),
+        ]
+        calls = {"n": 0}
+    
+        def responder(request: httpx.Request) -> httpx.Response:
+            response = responses[min(calls["n"], len(responses) - 1)]
+            calls["n"] += 1
+            return response
+    
+        embedder, requests = await _shared_openai_embedder(monkeypatch, responder)
+    
+        with pytest.raises(ProviderError, match="usable vector"):
+>           await embedder.embed_batch(["alpha", "beta"])
+
+tests/test_embedding_failopen_adversarial.py:248: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.rag.embedder.OpenAIEmbedder object at 0x10ecc1950>
+texts = ['alpha', 'beta']
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed a batch of texts, using cache where possible."""
+        if not texts:
+            return []
+        if not hasattr(self, "_cache_lock"):
+            import threading as _th2
+            from collections import OrderedDict as _OD2
+    
+            self._cache_lock = _th2.Lock()  # type: ignore[attr-defined]
+            if not hasattr(self, "_cache"):
+                self._cache = _OD2()  # type: ignore[attr-defined]
+            if not hasattr(self, "_cache_size"):
+                self._cache_size = 1024  # type: ignore[attr-defined]
+            if not hasattr(self, "_batch_size"):
+                self._batch_size = 100  # type: ignore[attr-defined]
+    
+        results: list[list[float] | None] = [None] * len(texts)
+        uncached_indices: list[int] = []
+        uncached_texts: list[str] = []
+    
+        # Check cache first
+        for i, text in enumerate(texts):
+            if not text:
+                results[i] = [0.0] * self.dimensions
+                continue
+            cache_key = self._cache_key(text)
+            with self._cache_lock:
+                if cache_key in self._cache:
+                    self._cache.move_to_end(cache_key)
+                    results[i] = list(self._cache[cache_key])
+                else:
+                    uncached_indices.append(i)
+                    uncached_texts.append(text)
+    
+        # Embed uncached texts in batches
+        if uncached_texts:
+            for batch_start in range(0, len(uncached_texts), self._batch_size):
+                batch_end = min(batch_start + self._batch_size, len(uncached_texts))
+                batch_texts = uncached_texts[batch_start:batch_end]
+                batch_indices = uncached_indices[batch_start:batch_end]
+    
+                batch_embeddings = await self._embed_uncached(batch_texts)
+    
+>               for idx, embedding in zip(batch_indices, batch_embeddings, strict=True):
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               ValueError: zip() argument 2 is shorter than argument 1
+
+machina/rag/embedder.py:222: ValueError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:20:22,288 [AUDIT] {"timestamp": 1792016422.288374, "event": "rag_embed_start", "model": "test-embed", "count": 2, "provider": "openai"}
+2026-10-14 18:20:22,288 [AUDIT] {"timestamp": 1792016422.288805, "event": "rag_embed_complete", "model": "test-embed", "count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.288374, "event": "rag_embed_start", "model": "test-embed", "count": 2, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016422.288805, "event": "rag_embed_complete", "model": "test-embed", "count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED tests/test_embedding_failopen_adversarial.py::test_genuine_empty_input_keeps_zero_vector_contract_and_no_network
+FAILED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[no-data-key]
+FAILED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[empty-data-list]
+FAILED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[null-data]
+FAILED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[dict-data]
+FAILED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[string-data]
+FAILED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[list-body]
+FAILED tests/test_embedding_failopen_adversarial.py::test_empty_data_list_keeps_zero_vector_out_of_dense_retrieval
+FAILED tests/test_embedding_failopen_adversarial.py::test_valid_response_caches_and_recovers_after_malformed
+FAILED tests/test_embedding_failopen_adversarial.py::test_batch_short_result_raises_without_partial_cache_writes
+9 failed, 1 passed in 0.59s

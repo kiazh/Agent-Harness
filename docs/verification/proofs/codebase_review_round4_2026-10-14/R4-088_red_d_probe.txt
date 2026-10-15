@@ -1,0 +1,11 @@
+2026-10-14 20:16:54,957 [AUDIT] {"timestamp": 1792023414.957671, "event": "rag_search_start", "session_id": "54b6376b-b9f4-4e58-be3f-72cf7496d0d7", "top_k": 10}
+Audit event dropped before the writer started; event was not persisted
+Dense search failed: RuntimeError
+PostgreSQL FTS search failed: RuntimeError
+Hybrid search degraded: one retrieval branch failed
+2026-10-14 20:16:54,959 [AUDIT] {"timestamp": 1792023414.959129, "event": "rag_search_complete", "session_id": "54b6376b-b9f4-4e58-be3f-72cf7496d0d7", "dense_results": 0, "sparse_results": 0, "fused_results": 0, "top_k": 20, "degraded": true}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 20:16:54,959 [AUDIT] {"timestamp": 1792023414.959311, "event": "rag_search_complete", "session_id": "54b6376b-b9f4-4e58-be3f-72cf7496d0d7", "results_returned": 0}
+Audit event dropped before the writer started; event was not persisted
+pre-fix dual-failure search returned: []
+RED: [] returned for a dual retrieval outage (indistinguishable from no matches)

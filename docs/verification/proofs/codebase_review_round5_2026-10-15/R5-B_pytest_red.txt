@@ -1,0 +1,112 @@
+FF..                                                                     [100%]
+=================================== FAILURES ===================================
+_____________________ test_concurrent_renamer_zero_escapes _____________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2065/test_concurrent_renamer_zero_e0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b969480>
+
+    def test_concurrent_renamer_zero_escapes(tmp_path, monkeypatch):
+        """H-FS style: real renamer active during N writes, 0 escapes."""
+        _require_symlinks(tmp_path)
+        base = tmp_path / "ws"
+        sub = base / "sub"
+        parking = base / ".sub_parking"
+        outside = tmp_path / "outside"
+        (base / "sub").mkdir(parents=True)
+        outside.mkdir()
+        (outside / "victim.txt").write_text("ORIGINAL")
+        (sub / "victim.txt").write_text("inside-original")
+        monkeypatch.setattr(fmod, "_BASE_DIR", base.resolve())
+    
+        stop = threading.Event()
+    
+        def flipper():
+            to_link = True
+            while not stop.is_set():
+                try:
+                    if to_link:
+                        if os.path.islink(sub) or not os.path.exists(sub):
+                            to_link = False
+                            continue
+                        if parking.exists():
+                            to_link = False
+                            continue
+                        _swap_sub_to_outside(base, sub, parking, outside)
+                    else:
+                        _restore_sub(base, sub, parking)
+                    to_link = not to_link
+                except OSError:
+                    pass
+    
+        thread = threading.Thread(target=flipper, daemon=True)
+        thread.start()
+        ok = 0
+        try:
+            N = 120
+            for i in range(N):
+                try:
+                    asyncio.run(fmod.write_file("sub/victim.txt", f"ATTACKER-{i}"))
+                    ok += 1
+                except Exception:
+                    pass  # rejections under an active swap are fail-closed, not escapes
+        finally:
+            stop.set()
+            thread.join(timeout=10)
+        _restore_sub(base, sub, parking)
+    
+>       assert ok >= 1, "renamer must not block every write (vacuous test?)"
+E       AssertionError: renamer must not block every write (vacuous test?)
+E       assert 0 >= 1
+
+tests/test_r5_003_atomic_escape.py:113: AssertionError
+_____________ test_deterministic_swap_at_tmp_creation_stays_inside _____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2065/test_deterministic_swap_at_tmp0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b969220>
+
+    def test_deterministic_swap_at_tmp_creation_stays_inside(tmp_path, monkeypatch):
+        """Pin the exact claimed interleaving: swap lands between validation and
+        temp creation (fired at the temp-open seam with real rename+symlink
+        syscalls). The write must still succeed AND stay inside the workspace."""
+        _require_symlinks(tmp_path)
+        base = tmp_path / "ws"
+        sub = base / "sub"
+        parking = base / ".sub_parking"
+        outside = tmp_path / "outside"
+        (base / "sub").mkdir(parents=True)
+        outside.mkdir()
+        (outside / "victim.txt").write_text("ORIGINAL")
+        (sub / "victim.txt").write_text("inside-original")
+        monkeypatch.setattr(fmod, "_BASE_DIR", base.resolve())
+    
+        real_open = fmod._os_open
+        state = {"swapped": False}
+    
+        def hook(path, flags, *args, **kwargs):
+            name = path if isinstance(path, str) else getattr(path, "name", "")
+            if (
+                not state["swapped"]
+                and kwargs.get("dir_fd") is not None
+                and isinstance(name, str)
+                and name.startswith(".victim.txt.")
+                and name.endswith(".tmp")
+            ):
+                state["swapped"] = True
+                _swap_sub_to_outside(base, sub, parking, outside)
+            return real_open(path, flags, *args, **kwargs)
+    
+        monkeypatch.setattr(fmod, "_os_open", hook)
+        try:
+            result = asyncio.run(fmod.write_file("sub/victim.txt", "ATTACKER"))
+        finally:
+            _restore_sub(base, sub, parking)
+    
+>       assert state["swapped"], "swap seam (temp creation) was never reached"
+E       AssertionError: swap seam (temp creation) was never reached
+E       assert False
+
+tests/test_r5_003_atomic_escape.py:159: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r5_003_atomic_escape.py::test_concurrent_renamer_zero_escapes
+FAILED tests/test_r5_003_atomic_escape.py::test_deterministic_swap_at_tmp_creation_stays_inside
+2 failed, 2 passed in 0.57s

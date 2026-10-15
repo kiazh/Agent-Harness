@@ -1,0 +1,60 @@
+git grep --cached REVIEW_TOKEN  expected=pending  actual=allowed  MISMATCH
+git grep -w REVIEW_TOKEN  expected=pending  actual=allowed  MISMATCH
+git grep -i REVIEW_TOKEN src  expected=pending  actual=allowed  MISMATCH
+git grep --recurse-submodules REVIEW_TOKEN  expected=pending  actual=allowed  MISMATCH
+git grep -e REVIEW_TOKEN  expected=pending  actual=allowed  MISMATCH
+git grep -Osh REVIEW_TOKEN README.md  expected=pending  actual=allowed  MISMATCH
+git grep --open-files-in-pager=sh REVIEW_TOKEN README.md  expected=pending  actual=allowed  MISMATCH
+uv run git grep REVIEW_TOKEN  expected=pending  actual=allowed  MISMATCH
+git --no-pager grep REVIEW_TOKEN  expected=pending  actual=pending  ok
+git grep -e REVIEW_TOKEN README.md  expected=allowed  actual=allowed  ok
+git grep --max-count=5 REVIEW_TOKEN README.md  expected=allowed  actual=allowed  ok
+git grep -m 5 REVIEW_TOKEN README.md  expected=allowed  actual=allowed  ok
+git grep -A 2 REVIEW_TOKEN README.md  expected=allowed  actual=allowed  ok
+git show :credentials  expected=pending  actual=allowed  MISMATCH
+git show HEAD:deploy/../credentials  expected=pending  actual=pending  ok
+git show HEAD:README.md  expected=allowed  actual=allowed  ok
+.env.save  expected=pending  actual=pending  ok
+.env.swp  expected=pending  actual=pending  ok
+credentials.old  expected=pending  actual=allowed  MISMATCH
+.aws/credentials.bak  expected=pending  actual=pending  ok
+id_ed25519~  expected=pending  actual=allowed  MISMATCH
+.env.example  expected=allowed  actual=allowed  ok
+docs/.env.example  expected=allowed  actual=allowed  ok
+wc -c README.md  expected=allowed  actual=pending  MISMATCH
+ls -C    expected=allowed  actual=pending  MISMATCH
+ls -o    expected=allowed  actual=pending  MISMATCH
+grep -C 2 REVIEW_TOKEN README.md  expected=allowed  actual=pending  MISMATCH
+head -c 100 README.md  expected=allowed  actual=pending  MISMATCH
+diff -c a.txt b.txt  expected=allowed  actual=pending  MISMATCH
+git -c alias.status=whoami status  expected=pending  actual=pending  ok
+git -c core.pager=sh log  expected=pending  actual=pending  ok
+python -c print(1)  expected=pending  actual=pending  ok
+python3 -c0  expected=pending  actual=pending  ok
+find README.md -o -name a  expected=pending  actual=pending  ok
+find . -name a -o -name b  expected=pending  actual=pending  ok
+grep -C2 REVIEW_TOKEN README.md  expected=pending  actual=pending  ok
+head -c100 README.md  expected=pending  actual=pending  ok
+rg -C 2 REVIEW_TOKEN README.md  expected=pending  actual=pending  ok
+wc -C README.md  expected=pending  actual=pending  ok
+ls -c    expected=pending  actual=pending  ok
+git grep -c REVIEW_TOKEN README.md  expected=pending  actual=pending  ok
+
+41 cases, 17 mismatches; broker-guarded allowed cases: 18
+MISMATCH: git grep --cached REVIEW_TOKEN: expected pending, got allowed
+MISMATCH: git grep -w REVIEW_TOKEN: expected pending, got allowed
+MISMATCH: git grep -i REVIEW_TOKEN src: expected pending, got allowed
+MISMATCH: git grep --recurse-submodules REVIEW_TOKEN: expected pending, got allowed
+MISMATCH: git grep -e REVIEW_TOKEN: expected pending, got allowed
+MISMATCH: git grep -Osh REVIEW_TOKEN README.md: expected pending, got allowed
+MISMATCH: git grep --open-files-in-pager=sh REVIEW_TOKEN README.md: expected pending, got allowed
+MISMATCH: uv run git grep REVIEW_TOKEN: expected pending, got allowed
+MISMATCH: git show :credentials: expected pending, got allowed
+MISMATCH: credentials.old: expected pending, got allowed
+MISMATCH: id_ed25519~: expected pending, got allowed
+MISMATCH: wc -c README.md: expected allowed, got pending
+MISMATCH: ls -C: expected allowed, got pending
+MISMATCH: ls -o: expected allowed, got pending
+MISMATCH: grep -C 2 REVIEW_TOKEN README.md: expected allowed, got pending
+MISMATCH: head -c 100 README.md: expected allowed, got pending
+MISMATCH: diff -c a.txt b.txt: expected allowed, got pending

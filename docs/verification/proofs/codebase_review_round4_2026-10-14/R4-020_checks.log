@@ -1,0 +1,14 @@
+# R4-020 focused suites + final replay (fixed tree)
+# date: 2026-10-14T22:28:14Z
+# command: .venv/bin/python -m pytest tests/test_fm6_locomo.py tests/test_benchmark_tool.py tests/test_research_integration.py -q -p no:cacheprovider
+...........................                                              [100%]
+27 passed in 1.65s
+
+# command: .venv/bin/python -m pytest tests/test_architecture_layers.py -q -p no:cacheprovider
+...........................                                              [100%]
+27 passed in 1.41s
+
+# command: .venv/bin/python -m ruff format --check machina/research/head_to_head.py tests/test_head_to_head_grader_adversarial.py
+2 files already formatted
+# command: .venv/bin/python -m ruff check machina/research/head_to_head.py tests/test_head_to_head_grader_adversarial.py
+All checks passed!

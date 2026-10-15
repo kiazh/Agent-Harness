@@ -1,0 +1,100 @@
+..................................F..................................... [ 11%]
+........................................................................ [ 23%]
+........................................................................ [ 35%]
+........................................................................ [ 47%]
+..............................................................s......... [ 59%]
+......................................................................F. [ 71%]
+........................................................................ [ 83%]
+........................................................................ [ 95%]
+.............................                                            [100%]
+=================================== FAILURES ===================================
+_________ test_job_claim_has_recovery_lease_and_named_agent_definition _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10920a200>
+
+    @pytest.mark.asyncio
+    async def test_job_claim_has_recovery_lease_and_named_agent_definition(monkeypatch):
+        from machina.core.agent_def import AgentDef, agent_registry
+        from machina.core.scheduler import JobRunner, JobStore
+        from machina.db.connection import db
+    
+        fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr(db, "fetchrow", fetchrow)
+>       await JobStore().claim_due(datetime.now(UTC))
+
+tests/test_audit_regressions.py:239: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/core/scheduler.py:320: in claim_due
+    row = await db.fetchrow(
+machina/db/connection.py:146: in fetchrow
+    async with self.acquire() as conn:
+               ^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py:214: in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+machina/db/connection.py:85: in acquire
+    acquire_cm = self.pool.acquire(timeout=timeout)
+                 ^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10bb53c50>
+
+    @property
+    def pool(self) -> asyncpg.Pool:
+        if self._pool is None:
+>           raise DatabaseError("Database not connected. Call connect() first.")
+E           machina.core.exceptions.DatabaseError: Database not connected. Call connect() first.
+
+machina/db/connection.py:69: DatabaseError
+____________________ test_cron_job_persists_and_reschedules ____________________
+
+    @pytest.mark.skipif(
+        not os.environ.get("MACHINA_TEST_DATABASE_URL"), reason="test database not configured"
+    )
+    @pytest.mark.asyncio
+    async def test_cron_job_persists_and_reschedules():
+        from machina.core.scheduler import job_store
+        from machina.core.session import session_manager
+        from machina.db.connection import db
+    
+        await db.connect()
+        try:
+            session = await session_manager.create(title="cron phase 6")
+>           job = await job_store.create(
+                name="cron phase 6",
+                kind="cron",
+                session_id=session.id,
+                prompt="continue",
+                interval_seconds=300,
+                cron_expression="*/5 * * * *",
+            )
+
+tests/test_phase6.py:443: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/core/scheduler.py:223: in create
+    database_now = await db.fetchval("SELECT now()")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/db/connection.py:161: in fetchval
+    async with self.acquire() as conn:
+               ^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py:214: in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+machina/db/connection.py:85: in acquire
+    acquire_cm = self.pool.acquire(timeout=timeout)
+                 ^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10bb53c50>
+
+    @property
+    def pool(self) -> asyncpg.Pool:
+        if self._pool is None:
+>           raise DatabaseError("Database not connected. Call connect() first.")
+E           machina.core.exceptions.DatabaseError: Database not connected. Call connect() first.
+
+machina/db/connection.py:69: DatabaseError
+=========================== short test summary info ============================
+FAILED tests/test_audit_regressions.py::test_job_claim_has_recovery_lease_and_named_agent_definition
+FAILED tests/test_phase6.py::test_cron_job_persists_and_reschedules - machina...
+2 failed, 602 passed, 1 skipped in 12.38s

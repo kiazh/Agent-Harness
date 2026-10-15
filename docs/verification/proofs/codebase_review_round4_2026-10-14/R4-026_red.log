@@ -1,0 +1,341 @@
+FFFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+________________ test_absolute_workspace_path_indexes_that_file ________________
+
+path = '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/project/docs/x.md'
+session_id = 'd7755621-0285-4561-9788-b2a861eb5704', metadata = None
+
+    @registry.register(
+        name="index_document",
+        description="Index a document into the RAG pipeline for semantic search. Supports .txt, .md, .py, .js, .ts, .json, .yaml, .csv, .html, and more.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the file to index"},
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID to associate the document with",
+                },
+                "metadata": {"type": "object", "description": "Optional metadata to attach to chunks"},
+            },
+            "required": ["path", "session_id"],
+        },
+    )
+    async def index_document(
+        path: str,
+        session_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Index a document into the RAG pipeline.
+    
+        The document is loaded, chunked, embedded, and stored for semantic search.
+        """
+        try:
+            sid = uuid.UUID(session_id)
+        except ValueError:
+            raise ValidationError(f"Invalid session_id '{session_id}'") from None
+    
+        agent_id, owned_session = await active_agent_scope()
+        if sid != owned_session:
+            raise ToolError("document session does not belong to the active agent session")
+    
+        # AH-019: resolve the owning agent and pass it explicitly so documents
+        # are not mislabeled with the pipeline default ("harness").
+        pipeline = await get_rag_pipeline()
+    
+        try:
+>           chunks = await pipeline.index_document(
+                source=path,
+                session_id=sid,
+                agent_id=agent_id,
+                metadata=metadata,
+            )
+
+machina/tools/rag.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/rag/pipeline.py:226: in index_document
+    doc = self._loader.load(source)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/rag/loaders.py:123: in load
+    file_path = self._resolve_path(path)
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.rag.loaders.FileLoader object at 0x10a498440>
+path = '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/project/docs/x.md'
+
+    def _resolve_path(self, path: str | Path) -> Path:
+        """Resolve path relative to base directory, ensuring it stays inside."""
+        candidate = (self._base_dir / str(path)).resolve()
+        if not candidate.is_relative_to(self._base_dir):
+>           raise _core_symbol("machina.core.exceptions", "ValidationError")(
+                f"Path '{path}' escapes the allowed base directory '{self._base_dir}'"
+            )
+E           machina.core.exceptions.ValidationError: Path '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/project/docs/x.md' escapes the allowed base directory '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/machina_home'
+
+machina/rag/loaders.py:242: ValidationError
+
+The above exception was the direct cause of the following exception:
+
+isolated_roots = (PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_worksp...olders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/machina_home'))
+rag_db = (<machina.db.connection.Database object at 0x10a47a710>, UUID('d7755621-0285-4561-9788-b2a861eb5704'))
+
+    async def test_absolute_workspace_path_indexes_that_file(isolated_roots, rag_db):
+        """An approved absolute workspace path is indexed, not rejected."""
+        project, _ = isolated_roots
+        db_pool, session_id = rag_db
+        target = (project / "docs" / "x.md").resolve()
+        async with _agent_scope(session_id):
+>           result = await rag_tools.index_document(str(target), str(session_id))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_026_rag_workspace_resolver.py:98: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+path = '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/project/docs/x.md'
+session_id = 'd7755621-0285-4561-9788-b2a861eb5704', metadata = None
+
+    @registry.register(
+        name="index_document",
+        description="Index a document into the RAG pipeline for semantic search. Supports .txt, .md, .py, .js, .ts, .json, .yaml, .csv, .html, and more.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the file to index"},
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID to associate the document with",
+                },
+                "metadata": {"type": "object", "description": "Optional metadata to attach to chunks"},
+            },
+            "required": ["path", "session_id"],
+        },
+    )
+    async def index_document(
+        path: str,
+        session_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Index a document into the RAG pipeline.
+    
+        The document is loaded, chunked, embedded, and stored for semantic search.
+        """
+        try:
+            sid = uuid.UUID(session_id)
+        except ValueError:
+            raise ValidationError(f"Invalid session_id '{session_id}'") from None
+    
+        agent_id, owned_session = await active_agent_scope()
+        if sid != owned_session:
+            raise ToolError("document session does not belong to the active agent session")
+    
+        # AH-019: resolve the owning agent and pass it explicitly so documents
+        # are not mislabeled with the pipeline default ("harness").
+        pipeline = await get_rag_pipeline()
+    
+        try:
+            chunks = await pipeline.index_document(
+                source=path,
+                session_id=sid,
+                agent_id=agent_id,
+                metadata=metadata,
+            )
+            audit_log(
+                "rag_tool_index_document",
+                session_id=session_id,
+                path=path,
+                chunks_indexed=len(chunks),
+            )
+            return f"Successfully indexed '{path}' — {len(chunks)} chunks created."
+        except Exception as e:
+            logger.exception("Failed to index document: %s", path)
+            audit_log(
+                "rag_tool_index_document_error",
+                session_id=session_id,
+                path=path,
+                error=str(e),
+            )
+>           raise ToolError(f"Error indexing document: {e}") from e
+E           machina.core.exceptions.ToolError: Error indexing document: Path '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/project/docs/x.md' escapes the allowed base directory '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/machina_home'
+
+machina/tools/rag.py:213: ToolError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:22:02,811 [AUDIT] {"timestamp": 1792016522.811465, "event": "rag_tool_index_document_error", "session_id": "d7755621-0285-4561-9788-b2a861eb5704", "path": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/project/docs/x.md"}
+------------------------------ Captured log call -------------------------------
+ERROR    machina.tools.rag:rag.py:206 Failed to index document: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/project/docs/x.md
+ValidationError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-026-red/machina/tools/rag.py:192 (index_document)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-026-red/machina/rag/pipeline.py:226 (index_document)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-026-red/machina/rag/loaders.py:123 (load)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-026-red/machina/rag/loaders.py:242 (_resolve_path)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016522.811465, "event": "rag_tool_index_document_error", "session_id": "d7755621-0285-4561-9788-b2a861eb5704", "path": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_workspace_path_i0/project/docs/x.md"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+__________ test_relative_path_resolves_to_workspace_not_machina_home ___________
+
+isolated_roots = (PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_relative_path_r...olders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_relative_path_resolves_to0/machina_home'))
+rag_db = (<machina.db.connection.Database object at 0x10a471ba0>, UUID('d64ad251-8fd1-4cdd-91cd-744d022fb7c9'))
+
+    async def test_relative_path_resolves_to_workspace_not_machina_home(isolated_roots, rag_db):
+        """`docs/x.md` is the workspace file, never the machina_home lookalike."""
+        project, planted_home = isolated_roots
+        db_pool, session_id = rag_db
+        async with _agent_scope(session_id):
+            await rag_tools.index_document("docs/x.md", str(session_id))
+            output = await rag_tools.search_documents(SHARED_NEEDLE, str(session_id))
+>       assert WORKSPACE_CANARY in output
+E       assert 'unique-workspace-marker' in "Search results for 'sharedneedle' (1 results):\n\n1. [0.0608; retrieval] /private/var/folders/sk/y8w9dwmd4lnc2yvygqqx...china_home/docs/x.md (chunk f571f8c9-38cd-47e9-a516-514cebb242d4)\n# Planted doc\n\nunique-planted-marker sharedneedle"
+
+tests/test_r4_026_rag_workspace_resolver.py:113: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:22:02,908 [AUDIT] {"timestamp": 1792016522.90861, "event": "rag_index_start", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_relative_path_resolves_to0/machina_home/docs/x.md", "doc_type": "markdown"}
+2026-10-14 18:22:02,927 [AUDIT] {"timestamp": 1792016522.927868, "event": "rag_index_complete", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_relative_path_resolves_to0/machina_home/docs/x.md", "chunks_stored": 1}
+2026-10-14 18:22:02,928 [AUDIT] {"timestamp": 1792016522.9284081, "event": "rag_tool_index_document", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "path": "docs/x.md", "chunks_indexed": 1}
+2026-10-14 18:22:02,929 [AUDIT] {"timestamp": 1792016522.929088, "event": "rag_search_start", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "top_k": 5}
+2026-10-14 18:22:02,930 [AUDIT] {"timestamp": 1792016522.930235, "event": "rag_search_complete", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "results_returned": 1}
+2026-10-14 18:22:02,930 [AUDIT] {"timestamp": 1792016522.9304361, "event": "rag_tool_search_documents", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "results_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016522.90861, "event": "rag_index_start", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_relative_path_resolves_to0/machina_home/docs/x.md", "doc_type": "markdown"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016522.927868, "event": "rag_index_complete", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_relative_path_resolves_to0/machina_home/docs/x.md", "chunks_stored": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016522.9284081, "event": "rag_tool_index_document", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "path": "docs/x.md", "chunks_indexed": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016522.929088, "event": "rag_search_start", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "top_k": 5}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.rag.pipeline:pipeline.py:467 no embedder configured, keyword-only search
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016522.930235, "event": "rag_search_complete", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "results_returned": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016522.9304361, "event": "rag_tool_search_documents", "session_id": "d64ad251-8fd1-4cdd-91cd-744d022fb7c9", "results_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_______________ test_planted_old_base_lookalike_is_never_indexed _______________
+
+isolated_roots = (PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_planted_old_bas...olders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_planted_old_base_lookalik0/machina_home'))
+rag_db = (<machina.db.connection.Database object at 0x10a472520>, UUID('ed45c0d2-8165-4c1f-95d6-29555de7bddb'))
+
+    async def test_planted_old_base_lookalike_is_never_indexed(isolated_roots, rag_db):
+        """Adversarial: the old base's same-relative-path file must stay untouched."""
+        _, planted_home = isolated_roots
+        db_pool, session_id = rag_db
+        async with _agent_scope(session_id):
+            await rag_tools.index_document("docs/x.md", str(session_id))
+            planted_output = await rag_tools.search_documents(PLANTED_CANARY, str(session_id))
+        # The echoed query itself is not evidence; the stored sources are.
+>       assert str(planted_home) not in planted_output
+E       AssertionError: assert '/private/va...machina_home' not in 'Search resu...sharedneedle'
+E         
+E         '/private/var/folde...kalik0/machina_home' is contained here:
+E           trieval] /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_planted_old_base_lookalik0/machina_home/docs/x.md (chunk da2c63c9-99de-4cf6-9349-b124b89aad18)
+E           # Planted doc
+E           
+E           unique-planted-marker sharedneedle
+
+tests/test_r4_026_rag_workspace_resolver.py:128: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:22:02,991 [AUDIT] {"timestamp": 1792016522.991657, "event": "rag_index_start", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_planted_old_base_lookalik0/machina_home/docs/x.md", "doc_type": "markdown"}
+2026-10-14 18:22:02,999 [AUDIT] {"timestamp": 1792016522.999893, "event": "rag_index_complete", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_planted_old_base_lookalik0/machina_home/docs/x.md", "chunks_stored": 1}
+2026-10-14 18:22:03,000 [AUDIT] {"timestamp": 1792016523.000215, "event": "rag_tool_index_document", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "path": "docs/x.md", "chunks_indexed": 1}
+2026-10-14 18:22:03,000 [AUDIT] {"timestamp": 1792016523.000833, "event": "rag_search_start", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "top_k": 5}
+2026-10-14 18:22:03,001 [AUDIT] {"timestamp": 1792016523.001975, "event": "rag_search_complete", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "results_returned": 1}
+2026-10-14 18:22:03,002 [AUDIT] {"timestamp": 1792016523.002233, "event": "rag_tool_search_documents", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "results_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016522.991657, "event": "rag_index_start", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_planted_old_base_lookalik0/machina_home/docs/x.md", "doc_type": "markdown"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016522.999893, "event": "rag_index_complete", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_planted_old_base_lookalik0/machina_home/docs/x.md", "chunks_stored": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.000215, "event": "rag_tool_index_document", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "path": "docs/x.md", "chunks_indexed": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.000833, "event": "rag_search_start", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "top_k": 5}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.rag.pipeline:pipeline.py:467 no embedder configured, keyword-only search
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.001975, "event": "rag_search_complete", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "results_returned": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.002233, "event": "rag_tool_search_documents", "session_id": "ed45c0d2-8165-4c1f-95d6-29555de7bddb", "results_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_______________ test_absolute_path_outside_workspace_is_rejected _______________
+
+isolated_roots = (PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_path_o...olders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_path_outside_wor0/machina_home'))
+rag_db = (<machina.db.connection.Database object at 0x10a4a60f0>, UUID('d7d76fe0-c9ec-4dc9-831e-47f380c7c2e8'))
+
+    async def test_absolute_path_outside_workspace_is_rejected(isolated_roots, rag_db):
+        """Adversarial: a real file outside the workspace is never indexed."""
+        _, planted_home = isolated_roots
+        db_pool, session_id = rag_db
+        outside = (planted_home / "docs" / "x.md").resolve()
+        async with _agent_scope(session_id):
+>           with pytest.raises(ToolError, match="escapes the allowed base directory"):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE ToolError
+
+tests/test_r4_026_rag_workspace_resolver.py:143: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:22:03,050 [AUDIT] {"timestamp": 1792016523.050669, "event": "rag_index_start", "session_id": "d7d76fe0-c9ec-4dc9-831e-47f380c7c2e8", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_path_outside_wor0/machina_home/docs/x.md", "doc_type": "markdown"}
+2026-10-14 18:22:03,068 [AUDIT] {"timestamp": 1792016523.0686169, "event": "rag_index_complete", "session_id": "d7d76fe0-c9ec-4dc9-831e-47f380c7c2e8", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_path_outside_wor0/machina_home/docs/x.md", "chunks_stored": 1}
+2026-10-14 18:22:03,069 [AUDIT] {"timestamp": 1792016523.0692852, "event": "rag_tool_index_document", "session_id": "d7d76fe0-c9ec-4dc9-831e-47f380c7c2e8", "path": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_path_outside_wor0/machina_home/docs/x.md", "chunks_indexed": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.050669, "event": "rag_index_start", "session_id": "d7d76fe0-c9ec-4dc9-831e-47f380c7c2e8", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_path_outside_wor0/machina_home/docs/x.md", "doc_type": "markdown"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.0686169, "event": "rag_index_complete", "session_id": "d7d76fe0-c9ec-4dc9-831e-47f380c7c2e8", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_path_outside_wor0/machina_home/docs/x.md", "chunks_stored": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.0692852, "event": "rag_tool_index_document", "session_id": "d7d76fe0-c9ec-4dc9-831e-47f380c7c2e8", "path": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_absolute_path_outside_wor0/machina_home/docs/x.md", "chunks_indexed": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_______________________ test_symlink_escape_is_rejected ________________________
+
+isolated_roots = (PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_symlink_escape_...olders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_symlink_escape_is_rejecte0/machina_home'))
+rag_db = (<machina.db.connection.Database object at 0x10a492030>, UUID('830cd505-5add-46f2-bb91-8c0de4c9dad5'))
+
+    async def test_symlink_escape_is_rejected(isolated_roots, rag_db):
+        """Adversarial (H-FS): a workspace symlink to an outside file is rejected."""
+        project, planted_home = isolated_roots
+        db_pool, session_id = rag_db
+        (project / "escape-link.md").symlink_to(planted_home / "docs" / "x.md")
+        async with _agent_scope(session_id):
+>           with pytest.raises(ToolError, match="escapes the allowed base directory"):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError: Regex pattern did not match.
+E             Expected regex: 'escapes the allowed base directory'
+E             Actual message: 'Error indexing document: File not found: escape-link.md'
+
+tests/test_r4_026_rag_workspace_resolver.py:154: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:22:03,137 [AUDIT] {"timestamp": 1792016523.1370208, "event": "rag_tool_index_document_error", "session_id": "830cd505-5add-46f2-bb91-8c0de4c9dad5", "path": "escape-link.md"}
+------------------------------ Captured log call -------------------------------
+ERROR    machina.tools.rag:rag.py:206 Failed to index document: escape-link.md
+ValidationError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-026-red/machina/tools/rag.py:192 (index_document)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-026-red/machina/rag/pipeline.py:226 (index_document)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-026-red/machina/rag/loaders.py:126 (load)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.1370208, "event": "rag_tool_index_document_error", "session_id": "830cd505-5add-46f2-bb91-8c0de4c9dad5", "path": "escape-link.md"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+______________________ test_dotdot_traversal_is_rejected _______________________
+
+isolated_roots = (PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_dotdot_traversa...olders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_dotdot_traversal_is_rejec0/machina_home'))
+rag_db = (<machina.db.connection.Database object at 0x10a492cf0>, UUID('f952e36d-f160-4537-8dc4-3ec75c4040fc'))
+
+    async def test_dotdot_traversal_is_rejected(isolated_roots, rag_db):
+        """Adversarial (H-FS): `..` cannot reach the planted tree outside the workspace."""
+        db_pool, session_id = rag_db
+        async with _agent_scope(session_id):
+>           with pytest.raises(ToolError, match="escapes the allowed base directory"):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE ToolError
+
+tests/test_r4_026_rag_workspace_resolver.py:163: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:22:03,187 [AUDIT] {"timestamp": 1792016523.187051, "event": "rag_index_start", "session_id": "f952e36d-f160-4537-8dc4-3ec75c4040fc", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_dotdot_traversal_is_rejec0/machina_home/docs/x.md", "doc_type": "markdown"}
+2026-10-14 18:22:03,198 [AUDIT] {"timestamp": 1792016523.198355, "event": "rag_index_complete", "session_id": "f952e36d-f160-4537-8dc4-3ec75c4040fc", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_dotdot_traversal_is_rejec0/machina_home/docs/x.md", "chunks_stored": 1}
+2026-10-14 18:22:03,198 [AUDIT] {"timestamp": 1792016523.198781, "event": "rag_tool_index_document", "session_id": "f952e36d-f160-4537-8dc4-3ec75c4040fc", "path": "docs/../../machina_home/docs/x.md", "chunks_indexed": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.187051, "event": "rag_index_start", "session_id": "f952e36d-f160-4537-8dc4-3ec75c4040fc", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_dotdot_traversal_is_rejec0/machina_home/docs/x.md", "doc_type": "markdown"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.198355, "event": "rag_index_complete", "session_id": "f952e36d-f160-4537-8dc4-3ec75c4040fc", "source": "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1416/test_dotdot_traversal_is_rejec0/machina_home/docs/x.md", "chunks_stored": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016523.198781, "event": "rag_tool_index_document", "session_id": "f952e36d-f160-4537-8dc4-3ec75c4040fc", "path": "docs/../../machina_home/docs/x.md", "chunks_indexed": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+=========================== short test summary info ============================
+FAILED tests/test_r4_026_rag_workspace_resolver.py::test_absolute_workspace_path_indexes_that_file
+FAILED tests/test_r4_026_rag_workspace_resolver.py::test_relative_path_resolves_to_workspace_not_machina_home
+FAILED tests/test_r4_026_rag_workspace_resolver.py::test_planted_old_base_lookalike_is_never_indexed
+FAILED tests/test_r4_026_rag_workspace_resolver.py::test_absolute_path_outside_workspace_is_rejected
+FAILED tests/test_r4_026_rag_workspace_resolver.py::test_symlink_escape_is_rejected
+FAILED tests/test_r4_026_rag_workspace_resolver.py::test_dotdot_traversal_is_rejected
+6 failed in 1.01s

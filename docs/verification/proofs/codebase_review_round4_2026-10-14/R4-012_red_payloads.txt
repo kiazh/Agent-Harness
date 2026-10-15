@@ -1,0 +1,209 @@
+--- (a) one tool: roles=['user', 'assistant', 'user']
+[
+  {
+    "role": "user",
+    "content": "probe one tool"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_a",
+        "name": "run_toolu_a",
+        "input": {}
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_a",
+        "content": "ok-1"
+      }
+    ]
+  }
+]
+
+--- (b) two tools: roles=['user', 'assistant', 'user', 'user']
+[
+  {
+    "role": "user",
+    "content": "probe two tools"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_a",
+        "name": "run_toolu_a",
+        "input": {}
+      },
+      {
+        "type": "tool_use",
+        "id": "toolu_b",
+        "name": "run_toolu_b",
+        "input": {}
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_a",
+        "content": "ok-a"
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_b",
+        "content": "ok-b"
+      }
+    ]
+  }
+]
+
+--- (c) three mixed: roles=['user', 'assistant', 'user', 'user', 'user']
+[
+  {
+    "role": "user",
+    "content": "probe three tools"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_a",
+        "name": "run_toolu_a",
+        "input": {}
+      },
+      {
+        "type": "tool_use",
+        "id": "toolu_b",
+        "name": "run_toolu_b",
+        "input": {}
+      },
+      {
+        "type": "tool_use",
+        "id": "toolu_c",
+        "name": "run_toolu_c",
+        "input": {}
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_a",
+        "content": "ok-a"
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_b",
+        "content": "Error: boom-b"
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_c",
+        "content": "ok-c"
+      }
+    ]
+  }
+]
+
+--- (d) interleaved batches: roles=['user', 'assistant', 'user', 'user', 'assistant', 'user']
+[
+  {
+    "role": "user",
+    "content": "probe two batches"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "first batch"
+      },
+      {
+        "type": "tool_use",
+        "id": "toolu_a",
+        "name": "run_toolu_a",
+        "input": {}
+      },
+      {
+        "type": "tool_use",
+        "id": "toolu_b",
+        "name": "run_toolu_b",
+        "input": {}
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_a",
+        "content": "ok-a"
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_b",
+        "content": "ok-b"
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "second batch"
+      },
+      {
+        "type": "tool_use",
+        "id": "toolu_c",
+        "name": "run_toolu_c",
+        "input": {}
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_c",
+        "content": "Error: boom-c"
+      }
+    ]
+  }
+]
+

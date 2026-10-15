@@ -1,0 +1,5 @@
+$ ruff check <R4-106 files>
+All checks passed!
+
+$ ruff format --check <R4-106 files>
+20 files already formatted

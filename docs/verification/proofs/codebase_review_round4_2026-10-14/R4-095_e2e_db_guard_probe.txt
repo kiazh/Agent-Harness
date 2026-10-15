@@ -1,0 +1,34 @@
+== helper semantics ==
+PASS explicit flag wins                                   = ('postgresql://u:p@h:5432/db', 'flag')
+PASS MACHINA_DATABASE_URL wins over DATABASE_URL          = ('postgresql://u:p@h:5432/from_explicit_env', 'env:MACHINA_DATABASE_URL')
+PASS falls back to DATABASE_URL                           = ('postgresql://u:p@h:5432/from_legacy_env', 'env:DATABASE_URL')
+PASS unset env resolves to None                           = (None, 'unset')
+PASS db name parsed                                       = 'machina_test'
+PASS db name with params                                  = 'machina'
+PASS non-postgres scheme rejected                         = None
+PASS missing db name rejected                             = None
+PASS test-like predicate                                  = True
+PASS dev db not test-like                                 = False
+PASS empty name not test-like                             = False
+PASS command line redacts --db-url value                  = False
+PASS redacted keeps the flag                              = True
+PASS command line redacts --db-url= form                  = False
+
+== refusal CLI paths (exit before any journey) ==
+PASS no env and no flag -> exit 2                         = 2
+PASS no env message                                       = True
+PASS non-test env DB -> exit 2                            = 2
+PASS non-test message names the db                        = True
+PASS non-test message offers --db-url                     = True
+PASS flag without db name -> exit 2                       = 2
+PASS unusable URL message                                 = True
+PASS non-postgres ambient URL -> exit 2                   = 2
+
+--- refusal output sample ---
+[e2e-gate] env:DATABASE_URL is not a usable postgres URL (mysql://h/machina): expected postgresql://user:pass@host:port/database
+
+== acceptance path is explicit and recorded (no journeys run) ==
+PASS ambient machina_test is accepted without flag        = True
+
+== result: ALL PROBES PASS
+probe exit: 0

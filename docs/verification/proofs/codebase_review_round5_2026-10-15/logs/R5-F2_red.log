@@ -1,0 +1,10 @@
+### R5-F2 RED: original chunker (HEAD f53476e)
+
+chunker module: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/tmp.YI0pEBvfK1/chunker_orig.py
+source: 'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW end'
+  chunk 0: 'WWWWWWWWWWWWWWWW'  -> substring
+  chunk 1: 'WWWWWWWWWWWWWWWW'  -> substring
+  chunk 2: 'WWWWWWWWWWWWWWWW'  -> substring
+  chunk 3: 'WWWWWWWWend'  -> FABRICATED (absent from source)
+RESULT: FAIL — fabricated spans ['WWWWWWWWend']
+exit=1

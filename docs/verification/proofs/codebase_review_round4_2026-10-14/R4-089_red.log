@@ -1,0 +1,11 @@
+batch: ref [REDACTED_CC] [REDACTED_CC] 4111 done
+chunk=  1 DIVERGE: 'ref 4111 [REDACTED_CC] [REDACTED_CC] done'
+chunk=  2 DIVERGE: 'ref 4111 [REDACTED_CC] [REDACTED_CC] done'
+chunk=  3 DIVERGE: 'ref 4111 [REDACTED_CC] [REDACTED_CC] done'
+chunk=  5 AGREE: 'ref [REDACTED_CC] [REDACTED_CC] 4111 done'
+chunk=  8 DIVERGE: 'ref 4111 [REDACTED_CC] [REDACTED_CC] done'
+chunk= 13 AGREE: 'ref [REDACTED_CC] [REDACTED_CC] 4111 done'
+chunk=999 AGREE: 'ref [REDACTED_CC] [REDACTED_CC] 4111 done'
+first-feed output: 'ref 4111 '
+LEAK: over-40 run head streamed before the run terminated
+RED (5 failures)

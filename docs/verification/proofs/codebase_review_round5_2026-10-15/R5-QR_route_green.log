@@ -1,0 +1,7 @@
+forget owned full-UUID: deleted=True, no window lookup exists on this route
+forget foreign-agent full-UUID: NOT_FOUND (memory not found for this agent)
+forget non-UUID: INVALID_PARAMS (id must be a UUID)
+share full-UUID: forwarded to identity-gated bus, no window lookup
+share foreign full-UUID: NOT_FOUND (memory not found for this agent)
+approve full-UUID: forwarded to approval gate, no pending-window lookup
+R5-QR route proof: ALL OK

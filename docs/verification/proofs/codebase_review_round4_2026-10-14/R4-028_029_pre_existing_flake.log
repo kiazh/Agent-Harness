@@ -1,0 +1,38 @@
+HEAD=6f0df5b7f29cccf14b184e65481c542824d2c196 (unmodified worktree, R4-028/029 fixes absent)
+
+== 20x test_failed_child_spend_is_accounted_without_implicit_turn_cutoff (file) ==
+   1 1 failed, 5 passed in 0.79s
+   1 1 failed, 5 passed in 1.37s
+   1 1 failed, 5 passed in 2.07s
+   1 1 failed, 5 passed in 2.99s
+   1 1 failed, 5 passed in 3.75s
+   1 1 failed, 5 passed in 3.76s
+   1 1 failed, 5 passed in 4.86s
+   1 1 failed, 5 passed in 5.24s
+   1 1 failed, 5 passed in 5.64s
+   3 6 passed in 0.42s
+   1 6 passed in 0.43s
+   3 6 passed in 0.46s
+   2 6 passed in 0.47s
+   1 6 passed in 0.48s
+   1 6 passed in 0.51s
+
+== failing run traceback (captured) ==
+_ test_failed_child_spend_is_accounted_without_implicit_turn_cutoff[raise-False] _
+
+delegation = namespace(child=Session(id=UUID('6a8e569b-9263-4270-bf28-ba1409d0d9c4'), title=None, agent_id='coder', status='active'...ponse': 'TimeoutError: delegation timed out', 'tokens': 0}], build=<function delegation.<locals>.build at 0x10a357740>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1098baea0>
+streaming = False, outcome = 'raise'
+
+    @pytest.mark.parametrize("streaming", [False, True])
+--
+        assert len(calls) == 2
+>       assert response.tokens_used == 15
+E       AssertionError: assert 2 == 15
+E        +  where 2 = AgentResponse(content='continued', tool_calls=[{'tool': 'delegate', 'args': {'agent': 'coder', 'task': 'work'}, 'resul...ror: delegation timed out', 'outcome': 'failed'}], tokens_used=2, iterations=2, needs_approval=[], outcome='completed').tokens_used
+
+tests/test_failed_delegation_usage.py:287: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 20:32:39,713 [AUDIT] {"timestamp": 1792024359.713922, "event": "agent_run_start", "session_id": "e42e47d8-4707-4df4-acf3-4019f5c37563", "agent_id": "harness"}
+2026-10-14 20:32:39,730 [AUDIT] {"timestamp": 1792024359.730796, "event": "tool_call_start", "session_id": "e42e47d8-4707-4df4-acf3-4019f5c37563", "tool_name": "delegate"}
+2026-10-14 20:32:39,737 [AUDIT] {"timestamp": 1792024359.737406, "event": "tool_call_complete", "session_id": "e42e47d8-4707-4df4-acf3-4019f5c37563", "tool_name": "delegate", "duration_ms": 6}

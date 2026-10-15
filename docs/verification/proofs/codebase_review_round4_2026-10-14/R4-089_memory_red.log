@@ -1,0 +1,14 @@
+# R4-089 RED run — new tests against UNFIXED code
+# detached worktree at HEAD 948f61e (pre-my-changes; my lane files last committed at ca6fc05)
+# with my new test classes copied in; real machina_test DB, provider/embedder boundaries faked
+# cmd: pytest tests/test_memory_bug_fixes.py::TestConsolidatorDedupEmbedding tests/test_memory_bug_fixes.py::TestUpdateAccessQuarantined tests/test_memory_approval.py::TestApprovalGateWiring tests/test_shared_memory_bus.py::test_missing_provenance_rejection_is_retryable -q -p no:cacheprovider --tb=line
+# result: 6 failed (each for the named reason), 1 passed (disabled-path guard, passes on both)
+
+   2 E   assert 1 == 0
+   1 E   AssertionError: the write must land in pending_memories
+   1 E   AssertionError: intra-batch paraphrases must collapse to one memory
+   1 E   AssertionError: a transient provenance miss must not become a durable rejection
+   1 E   AssertionError: a paraphrase above the 0.85 cosine threshold must not be stored
+   1 /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-089-red2/tests/test_memory_bug_fixes.py:883: AssertionError: intra-batch paraphrases must collapse to one memory
+   1 /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-089-red2/tests/test_memory_bug_fixes.py:851: AssertionError: a paraphrase above the 0.85 cosine threshold must not be stored
+   1 /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-089-red2/tests/test_memory_approval.py:566: AssertionError: the write must land in pending_memories

@@ -1,0 +1,35 @@
+--- case dollar ---
+wanted path: /tmp/evil$a/.venv/bin/machina
+shim body:
+#!/usr/bin/env sh
+exec "/tmp/evil$a/.venv/bin/machina" "$@"
+shim run rc=126 out=[/tmp/r5e-red/shim-dollar.sh: line 2: /tmp/evil/.venv/bin/machina: No such file or directory
+/tmp/r5e-red/shim-dollar.sh: line 2: exec: /tmp/evil/.venv/bin/machina: cannot execute: No such file or directory]
+BROKEN (wrong code / wrong path)
+--- case backtick ---
+wanted path: /tmp/evil`touch /tmp/r5e-red/PWNED`/x/.venv/bin/machina
+shim body:
+#!/usr/bin/env sh
+exec "/tmp/evil`touch /tmp/r5e-red/PWNED`/x/.venv/bin/machina" "$@"
+shim run rc=126 out=[/tmp/r5e-red/shim-backtick.sh: line 2: /tmp/evil/x/.venv/bin/machina: No such file or directory
+/tmp/r5e-red/shim-backtick.sh: line 2: exec: /tmp/evil/x/.venv/bin/machina: cannot execute: No such file or directory]
+BROKEN (wrong code / wrong path)
+--- case dquote ---
+wanted path: /tmp/evil"q/.venv/bin/machina
+shim body:
+#!/usr/bin/env sh
+exec "/tmp/evil"q/.venv/bin/machina" "$@"
+shim run rc=2 out=[/tmp/r5e-red/shim-dquote.sh: line 2: unexpected EOF while looking for matching `"'
+/tmp/r5e-red/shim-dquote.sh: line 3: syntax error: unexpected end of file]
+BROKEN (wrong code / wrong path)
+--- case backslash ---
+wanted path: /tmp/evil\q/.venv/bin/machina
+shim body:
+#!/usr/bin/env sh
+exec "/tmp/evil\q/.venv/bin/machina" "$@"
+shim run rc=126 out=[/tmp/r5e-red/shim-backslash.sh: line 2: /tmp/evil\q/.venv/bin/machina: No such file or directory
+/tmp/r5e-red/shim-backslash.sh: line 2: exec: /tmp/evil\q/.venv/bin/machina: cannot execute: No such file or directory]
+BROKEN (wrong code / wrong path)
+PASS=0 FAIL=4
+/tmp/r5e-red/PWNED
+COMMAND EXECUTION DEMONSTRATED

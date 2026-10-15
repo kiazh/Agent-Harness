@@ -1,0 +1,316 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 5 items
+
+tests/test_chatgpt_auth_adversarial.py::test_pre_logout_tokens_never_recreate_the_store FAILED [ 20%]
+tests/test_chatgpt_auth_adversarial.py::test_login_exchange_publishes_through_a_peer_rotation FAILED [ 40%]
+tests/test_chatgpt_auth_adversarial.py::test_concurrent_refresh_still_adopts_a_single_rotation PASSED [ 60%]
+tests/test_chatgpt_auth_adversarial.py::test_store_lock_default_wait_is_bounded FAILED [ 80%]
+tests/test_chatgpt_auth_adversarial.py::test_chatgpt_refresh_under_lock_contention_fails_typed FAILED [100%]
+
+=================================== FAILURES ===================================
+_______________ test_pre_logout_tokens_never_recreate_the_store ________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1536/test_pre_logout_tokens_never_r0')
+
+    def test_pre_logout_tokens_never_recreate_the_store(tmp_path):
+        """A refresh from tokens loaded before a logout fails auth-required."""
+        target = tmp_path / "auth" / "chatgpt.json"
+        attempts = 5
+    
+        for attempt in range(attempts):
+            chatgpt_auth.save_tokens(
+                _tokens(access=f"at-stale-{attempt}", refresh=f"rt-stale-{attempt}"), target
+            )
+            stale = chatgpt_auth.load_tokens(target)
+            assert stale is not None
+            assert chatgpt_auth.logout(path=target) is True
+            assert not target.exists(), "logout itself must remove the store"
+    
+            requests: list[str] = []
+    
+            def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - fenced
+                requests.append(str(request.url))
+                return httpx.Response(
+                    200, json={"access_token": "at-ghost", "refresh_token": "rt-ghost"}
+                )
+    
+>           with pytest.raises(ChatGPTAuthError) as excinfo:
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE ChatGPTAuthError
+
+tests/test_chatgpt_auth_adversarial.py:150: Failed
+____________ test_login_exchange_publishes_through_a_peer_rotation _____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1536/test_login_exchange_publishes_0')
+
+    def test_login_exchange_publishes_through_a_peer_rotation(tmp_path):
+        """A benign peer rotation (same generation, new content) must not cancel."""
+        target = tmp_path / "auth" / "chatgpt.json"
+        chatgpt_auth.save_tokens(_tokens(access="at-peer-old", refresh="rt-peer-old"), target)
+        generation = chatgpt_auth.credential_generation(target)
+        peer_posts: list[str] = []
+    
+        def peer_handler(request: httpx.Request) -> httpx.Response:
+            supplied = parse_qs(request.content.decode())["refresh_token"][0]
+            peer_posts.append(supplied)
+            return httpx.Response(
+                200, json={"access_token": "at-rotated", "refresh_token": "rt-rotated"}
+            )
+    
+        def exchange_handler(request: httpx.Request) -> httpx.Response:
+            body = parse_qs(request.content.decode())
+            assert body["grant_type"] == ["authorization_code"]
+            # A peer process rotates the store while this exchange is in flight:
+            # same generation, different content.
+            stored = chatgpt_auth.load_tokens(target)
+            assert stored is not None
+            rotated = chatgpt_auth.refresh(stored, path=target, client=_mock_client(peer_handler))
+            assert rotated["refresh_token"] == "rt-rotated"
+            return httpx.Response(200, json={"access_token": "at-login", "refresh_token": "rt-login"})
+    
+>       issued = chatgpt_auth.exchange_code(
+            "the-code",
+            code_verifier="verifier",
+            path=target,
+            client=_mock_client(exchange_handler),
+            generation=generation,
+        )
+
+tests/test_chatgpt_auth_adversarial.py:191: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 'the-code', code_verifier = 'verifier'
+redirect_uri = 'http://localhost:1455/auth/callback'
+path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1536/test_login_exchange_publishes_0/auth/chatgpt.json')
+client = <httpx.Client object at 0x10edc91d0>, timeout = 20.0, generation = 0
+
+    def exchange_code(
+        code: str,
+        *,
+        code_verifier: str,
+        redirect_uri: str = REDIRECT_URI,
+        path: str | Path | None = None,
+        client: httpx.Client | None = None,
+        timeout: float = _DEFAULT_TIMEOUT,
+        generation: int | None = None,
+    ) -> dict[str, Any]:
+        """Swap an authorization code (+PKCE verifier) for tokens and persist them.
+    
+        Publication is fenced: when a caller passes the *generation* it captured
+        when the login flow started (and the store snapshot taken here), a logout
+        that landed while the exchange was in flight raises
+        ``chatgpt_auth_cancelled`` instead of recreating revoked credentials.
+        """
+        if not str(code).strip():
+            raise ChatGPTAuthError("authorization code is empty", code="chatgpt_code_missing")
+        target = Path(path) if path is not None else auth_path()
+        if generation is not None and credential_generation(target) != generation:
+            # Logout already invalidated this flow: do not even consume the code.
+            raise ChatGPTAuthError(
+                "ChatGPT sign-in was cancelled before the token exchange completed; "
+                f"start it again. {LOGIN_HINT}",
+                code="chatgpt_auth_cancelled",
+            )
+        snapshot = _store_fingerprint(target)
+        http, owns_client = _client_or_new(client, timeout)
+        try:
+            response = http.post(
+                TOKEN_URL,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                },
+                data={
+                    "grant_type": "authorization_code",
+                    "code": str(code).strip(),
+                    "redirect_uri": redirect_uri,
+                    "client_id": CODEX_CLIENT_ID,
+                    "code_verifier": code_verifier,
+                },
+            )
+        except httpx.HTTPError as exc:
+            raise ChatGPTAuthError(
+                f"ChatGPT token exchange could not reach {TOKEN_URL} "
+                f"({type(exc).__name__}); {LOGIN_HINT}",
+                code="chatgpt_exchange_unreachable",
+            ) from exc
+        finally:
+            if owns_client:
+                http.close()
+    
+        if response.status_code == 429:
+            raise ChatGPTAuthError(
+                "ChatGPT token exchange was rate limited (HTTP 429); retry later.",
+                code="chatgpt_exchange_rate_limited",
+            )
+        if response.status_code != 200:
+            code_value, detail = _error_detail(response)
+            raise ChatGPTAuthError(
+                f"ChatGPT token exchange failed (HTTP {response.status_code}"
+                + (f", {code_value}" if code_value else "")
+                + (f": {detail}" if detail else "")
+                + ").",
+                code=code_value or "chatgpt_exchange_failed",
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ChatGPTAuthError(
+                "ChatGPT token exchange returned invalid JSON (HTTP 200).",
+                code="chatgpt_exchange_invalid_json",
+            ) from exc
+        if not isinstance(payload, dict) or not payload.get("access_token"):
+            raise ChatGPTAuthError(
+                "ChatGPT token exchange response was missing access_token.",
+                code="chatgpt_exchange_missing_access_token",
+            )
+        normalized = _normalize_store(payload)
+        assert normalized is not None  # access_token is non-empty by the check above
+        normalized["last_refresh"] = _utc_now_z()
+        with _store_lock(target):
+            cancelled = generation is not None and credential_generation(target) != generation
+            if not cancelled and _store_fingerprint(target) != snapshot:
+                # The store appeared/disappeared/changed while the exchange ran
+                # (logout removed it, or another login wrote it): do not clobber.
+                cancelled = True
+            if cancelled:
+>               raise ChatGPTAuthError(
+                    "ChatGPT sign-in was cancelled before the token exchange completed; "
+                    f"start it again. {LOGIN_HINT}",
+                    code="chatgpt_auth_cancelled",
+                )
+E               machina.security.chatgpt_auth.ChatGPTAuthError: ChatGPT sign-in was cancelled before the token exchange completed; start it again. run `codex login` (Machina imports its tokens automatically) or `machina auth login`
+
+machina/security/chatgpt_auth.py:811: ChatGPTAuthError
+___________________ test_store_lock_default_wait_is_bounded ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ed72030>
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1536/test_store_lock_default_wait_i0')
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX flock semantics are required")
+    def test_store_lock_default_wait_is_bounded(monkeypatch, tmp_path):
+        """The shared store lock cannot block indefinitely under contention."""
+        target = tmp_path / "auth" / "chatgpt.json"
+        monkeypatch.setattr(
+            store_fence, "STORE_LOCK_TIMEOUT_SECONDS", _REDUCED_LOCK_TIMEOUT_SECONDS, raising=False
+        )
+    
+        def acquire() -> None:
+            with store_fence.store_lock(target):
+                pass
+    
+        with _lock_held_in_a_child_process(
+            target=target, module="store_fence", lock_expr="store_fence.store_lock(target)"
+        ):
+            started = time.monotonic()
+>           error = _bounded_call(acquire)
+                    ^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_chatgpt_auth_adversarial.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+operation = <function test_store_lock_default_wait_is_bounded.<locals>.acquire at 0x10edf7c10>
+window = 5.0
+
+    def _bounded_call(operation, *, window: float = _LOCK_WINDOW_SECONDS) -> BaseException | None:
+        """Run *operation* in a daemon thread; fail the test if it is still blocked.
+    
+        Returns the exception the operation raised (``None`` when it returned).
+        """
+        outcome: dict[str, BaseException | None] = {}
+        finished = threading.Event()
+    
+        def call() -> None:
+            try:
+                operation()
+            except BaseException as exc:  # reported to the test for classification
+                outcome["error"] = exc
+            finally:
+                finished.set()
+    
+        thread = threading.Thread(target=call, daemon=True, name="bounded-lock-probe")
+        thread.start()
+>       assert finished.wait(timeout=window), (
+            f"operation was still blocked after {window:g}s: the contended store lock "
+            "never failed with a typed error"
+        )
+E       AssertionError: operation was still blocked after 5s: the contended store lock never failed with a typed error
+E       assert False
+E        +  where False = wait(timeout=5.0)
+E        +    where wait = <threading.Event at 0x10e426d70: unset>.wait
+
+tests/test_chatgpt_auth_adversarial.py:118: AssertionError
+____________ test_chatgpt_refresh_under_lock_contention_fails_typed ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ed72580>
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1536/test_chatgpt_refresh_under_loc0')
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX flock semantics are required")
+    def test_chatgpt_refresh_under_lock_contention_fails_typed(monkeypatch, tmp_path):
+        """The chatgpt store lock surfaces a typed error instead of blocking forever."""
+        target = tmp_path / "auth" / "chatgpt.json"
+        chatgpt_auth.save_tokens(_tokens(access="at-live", refresh="rt-live"), target)
+        tokens = chatgpt_auth.load_tokens(target)
+        assert tokens is not None
+        monkeypatch.setattr(
+            store_fence, "STORE_LOCK_TIMEOUT_SECONDS", _REDUCED_LOCK_TIMEOUT_SECONDS, raising=False
+        )
+        network_hits: list[str] = []
+    
+        def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
+            network_hits.append(str(request.url))
+            return httpx.Response(500)
+    
+        with _lock_held_in_a_child_process(
+            target=target, module="chatgpt_auth", lock_expr="chatgpt_auth._store_lock(target)"
+        ):
+>           error = _bounded_call(
+                lambda: chatgpt_auth.refresh(tokens, path=target, client=_mock_client(handler))
+            )
+
+tests/test_chatgpt_auth_adversarial.py:291: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+operation = <function test_chatgpt_refresh_under_lock_contention_fails_typed.<locals>.<lambda> at 0x10edf71c0>
+window = 5.0
+
+    def _bounded_call(operation, *, window: float = _LOCK_WINDOW_SECONDS) -> BaseException | None:
+        """Run *operation* in a daemon thread; fail the test if it is still blocked.
+    
+        Returns the exception the operation raised (``None`` when it returned).
+        """
+        outcome: dict[str, BaseException | None] = {}
+        finished = threading.Event()
+    
+        def call() -> None:
+            try:
+                operation()
+            except BaseException as exc:  # reported to the test for classification
+                outcome["error"] = exc
+            finally:
+                finished.set()
+    
+        thread = threading.Thread(target=call, daemon=True, name="bounded-lock-probe")
+        thread.start()
+>       assert finished.wait(timeout=window), (
+            f"operation was still blocked after {window:g}s: the contended store lock "
+            "never failed with a typed error"
+        )
+E       AssertionError: operation was still blocked after 5s: the contended store lock never failed with a typed error
+E       assert False
+E        +  where False = wait(timeout=5.0)
+E        +    where wait = <threading.Event at 0x10ed727a0: unset>.wait
+
+tests/test_chatgpt_auth_adversarial.py:118: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_chatgpt_auth_adversarial.py::test_pre_logout_tokens_never_recreate_the_store
+FAILED tests/test_chatgpt_auth_adversarial.py::test_login_exchange_publishes_through_a_peer_rotation
+FAILED tests/test_chatgpt_auth_adversarial.py::test_store_lock_default_wait_is_bounded
+FAILED tests/test_chatgpt_auth_adversarial.py::test_chatgpt_refresh_under_lock_contention_fails_typed
+========================= 4 failed, 1 passed in 10.88s =========================

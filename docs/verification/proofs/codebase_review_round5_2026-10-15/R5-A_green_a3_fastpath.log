@@ -1,0 +1,4 @@
+credential read: allowed (full-mode session grant)
+privilege escalation: allowed (full-mode session grant)
+destructive op: allowed (full-mode session grant)
+GREEN A3: fast-path semantics pinned; exact disclosure text -> R5-D (see evidence doc)

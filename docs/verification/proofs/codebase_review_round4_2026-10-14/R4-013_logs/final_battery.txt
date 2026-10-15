@@ -1,0 +1,14 @@
+== FINAL acceptance gate x3 ==
+7 passed in 6.07s
+7 passed in 7.08s
+7 passed in 8.10s
+
+== FINAL affected suites ==
+110 passed in 2.69s
+
+== FINAL architecture + cycles + leaves ==
+78 passed in 2.11s
+
+== FINAL ruff (format --check then check) ==
+7 files already formatted
+All checks passed!

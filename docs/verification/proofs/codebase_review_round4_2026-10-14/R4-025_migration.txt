@@ -1,0 +1,20 @@
+=== FRESH: full new schema ===
+psql:/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-025-wt/machina/db/schema.sql:268: NOTICE:  column "max_iterations" of relation "agents" does not exist, skipping
+psql:/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-025-wt/machina/db/soulspec_schema.sql:7: NOTICE:  column "max_iterations" of relation "agents" does not exist, skipping
+fresh agents-column check:
+     0
+
+=== LEGACY: table with column + row ===
+legacy agents-column check:
+     0
+
+     name     | description 
+--------------+-------------
+ legacy-agent | kept
+(1 row)
+
+=== IDEMPOTENCY rerun ===
+psql:/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-025-wt/machina/db/soulspec_schema.sql:2: NOTICE:  column "soul_spec" of relation "agents" already exists, skipping
+psql:/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-025-wt/machina/db/soulspec_schema.sql:7: NOTICE:  column "max_iterations" of relation "agents" does not exist, skipping
+RERUN-OK
+scratch DBs dropped

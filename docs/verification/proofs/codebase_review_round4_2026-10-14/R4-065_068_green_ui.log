@@ -1,0 +1,12 @@
+✔ R4-065 a pause frame with a terminal status never opens a card (9.064167ms)
+✔ R4-065 a terminal-status pause retires the open card and footer without a decision (1.079833ms)
+✔ R4-065 an approval.resolved expiry frame retires the card and footer (0.937958ms)
+✔ R4-065 a hidden terminal-status pause is not resurrected on return (0.508791ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 246.044625

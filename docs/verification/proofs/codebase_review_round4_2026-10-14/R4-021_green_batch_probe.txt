@@ -1,0 +1,7 @@
+2026-10-14 18:23:39,092 [AUDIT] {"timestamp": 1792016619.092771, "event": "rag_embed_start", "model": "text-embedding-3-small", "count": 2, "provider": "openai"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 18:23:39,094 [AUDIT] {"timestamp": 1792016619.094879, "event": "rag_embed_error", "model": "text-embedding-3-small"}
+Audit event dropped before the writer started; event was not persisted
+Embedding API response unusable: ProviderError
+embed_batch raised ProviderError: Embedding API response has 1 usable vector(s) for 2 input(s)
+cache_size after failed batch: 0

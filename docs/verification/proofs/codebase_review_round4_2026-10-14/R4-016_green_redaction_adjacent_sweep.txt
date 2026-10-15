@@ -1,0 +1,22 @@
+R4-016 redaction-adjacent sweep (every test file referencing redaction)
+
+# Clean run, pre-merge working tree (before parallel R4 tasks started landing
+# commits/edits), captured during R4-016 development:
+#   .venv/bin/python -m pytest <29 redaction-adjacent files> -q -p no:cacheprovider
+#   609 passed in 33.95s
+
+# The repo is shared with parallel R4 tasks. Later re-runs in this directory
+# picked up *their* in-flight edits only:
+#   - tests/test_memory_approval.py: 2 failures from R4-089's live edit of
+#     machina/memory/approval.py ("Config has no attribute
+#     'memory_approval_enabled'"); reproduced with
+#     `git stash push -- machina/memory/redaction.py` -> same failures.
+#   - tests/test_personality_growth.py: UI typecheck failure from R4-094's
+#     test/r4-094-tui.test.ts (TS2339) -> unrelated to redaction.
+#   - transient collection ImportErrors while rag/search.py and
+#     skills/repo_install.py were saved mid-run by other tasks.
+
+# Scoped evidence for this task (all green, stable):
+#   R4-016_green_corpus.txt            119 passed / 0 xfailed (+ --runxfail 119 passed)
+#   R4-016_green_required_suites.txt   129 passed (fm5, review_secrets, memory, handoff)
+#   R4-016_green_architecture.txt       25 passed (god-file ratchet)

@@ -1,0 +1,16 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+tests/test_r5_007_scheduler_identity.py::test_job_specialist_identity_honored_on_owned_session PASSED [ 25%]
+tests/test_r5_007_scheduler_identity.py::test_job_identity_keeps_session_authority_caps PASSED [ 50%]
+tests/test_r5_007_scheduler_identity.py::test_matching_identity_unchanged PASSED [ 75%]
+tests/test_r5_007_scheduler_identity.py::test_e2e_scheduler_tick_runs_job_agent_identity PASSED [100%]
+
+============================== 4 passed in 1.58s ===============================

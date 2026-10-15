@@ -1,0 +1,243 @@
+diff --git a/machina/security/env_file.py b/machina/security/env_file.py
+index 3492cd8..8220135 100644
+--- a/machina/security/env_file.py
++++ b/machina/security/env_file.py
+@@ -10,6 +10,7 @@ from __future__ import annotations
+ 
+ import os
+ import re
++import tempfile
+ from pathlib import Path
+ 
+ from machina.observability.diagnostics import record_failure
+@@ -39,17 +40,35 @@ PROVIDER_KEYS: tuple[tuple[str, str], ...] = (
+ )
+ 
+ _KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
++# Case-insensitive matcher for reading/updating pre-existing lines, whose
++# spellings may predate the canonical uppercase form (R4-046). Writes always
++# normalize through _validate_key/_KEY_RE, so new lines stay uppercase.
++_KEY_RE_CI = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,63}$")
+ 
+ _ENV_MAX_BYTES = 256 * 1024
+ _LINE_MAX_BYTES = 4096
+ 
+ 
+-def _allowed_roots() -> tuple[Path, ...]:
+-    import tempfile
++def _checkout_root() -> Path | None:
++    """The source-checkout root two levels above this file, or None.
++
++    In a source checkout ``parents[2]`` is the repo root; inside an installed
++    wheel it is the interpreter's ``site-packages``. The repo-marker check
++    keeps both the ``find_env_file`` fallback and the allowed-roots list from
++    ever targeting the package directory (R4-048).
++    """
++    root = Path(__file__).resolve().parents[2]
++    if (root / "pyproject.toml").is_file() or (root / ".git").exists():
++        return root
++    return None
+ 
++
++def _allowed_roots() -> tuple[Path, ...]:
+     cwd = Path.cwd().resolve()
+-    repo = Path(__file__).resolve().parents[2]
+-    roots: list[Path] = [cwd, repo]
++    roots: list[Path] = [cwd]
++    repo = _checkout_root()
++    if repo is not None:
++        roots.append(repo)
+     # Home and temp so tests (pytest tmp_path) and user ~/.env keep working.
+     try:
+         roots.append(Path.home().resolve())
+@@ -104,11 +123,19 @@ def _validate_key(key: str) -> str:
+     return normalized
+ 
+ 
++def _normalize_key_token(raw: str) -> str:
++    """Upper-case a dotenv key token; '' when it is not a well-formed KEY."""
++    token = raw.strip()
++    return token.upper() if _KEY_RE_CI.match(token) else ""
++
++
+ def find_env_file(start: Path | None = None) -> Path:
+     """Locate the ``.env`` file: ``$MACHINA_ENV_FILE``, else nearest ``.env`` upward.
+ 
+-    Falls back to ``<repo>/.env`` (two levels above this file) when nothing
+-    is found, so callers always have a writable default.
++    Falls back to ``<checkout-root>/.env`` when nothing is found, so callers
++    always have a writable default. An installed wheel (no repo markers) has
++    no checkout root and falls back to the walk-up origin (``<cwd>/.env``)
++    instead — never ``site-packages`` (R4-048).
+     """
+     override = os.environ.get("MACHINA_ENV_FILE", "").strip()
+     if override:
+@@ -127,7 +154,10 @@ def find_env_file(start: Path | None = None) -> Path:
+         env = candidate / ".env"
+         if env.is_file():
+             return env
+-    return Path(__file__).resolve().parents[2] / ".env"
++    repo = _checkout_root()
++    if repo is not None:
++        return repo / ".env"
++    return here / ".env"
+ 
+ 
+ def read_env_values(path: Path | None = None) -> dict[str, str]:
+@@ -151,16 +181,39 @@ def read_env_values(path: Path | None = None) -> dict[str, str]:
+         if not stripped or stripped.startswith("#") or "=" not in stripped:
+             continue
+         raw_key, _, raw_value = stripped.partition("=")
+-        key = raw_key.strip()
+-        if not _KEY_RE.match(key):
++        key = _normalize_key_token(raw_key)
++        if not key:
+             continue
+         value = raw_value.strip()
+         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
++            quote_char = value[0]
+             value = value[1:-1]
++            if quote_char == '"':
++                # Undo _quote's backslash/quote escapes so ``\`` and ``"``
++                # round-trip (R4-043); single-quoted values stay literal,
++                # mirroring python-dotenv.
++                value = _unescape(value)
+         values[key] = value
+     return values
+ 
+ 
++def _unescape(value: str) -> str:
++    """Decode the ``\\\\`` and ``\\"`` escapes emitted by :func:`_quote`."""
++    if "\\" not in value:
++        return value
++    out: list[str] = []
++    index = 0
++    while index < len(value):
++        char = value[index]
++        if char == "\\" and index + 1 < len(value) and value[index + 1] in ("\\", '"'):
++            out.append(value[index + 1])
++            index += 2
++        else:
++            out.append(char)
++            index += 1
++    return "".join(out)
++
++
+ def _quote(value: str) -> str:
+     """Quote a value only when it needs it (spaces, #, quotes)."""
+     if "\n" in value or "\r" in value:
+@@ -175,12 +228,16 @@ def _quote(value: str) -> str:
+ 
+ 
+ def _env_line_key(line: str) -> str:
+-    """The KEY of a dotenv line, or '' for comments/blank/non-assignments."""
++    """The upper-cased KEY of a dotenv line, or '' for comments/blank/non-assignments.
++
++    Case-insensitive (R4-046) so a pre-existing ``openrouter_api_key=...``
++    line is updated/removed in place; writers emit the canonical uppercase
++    spelling.
++    """
+     stripped = line.strip()
+     if not stripped or stripped.startswith("#") or "=" not in stripped:
+         return ""
+-    key = stripped.partition("=")[0].strip()
+-    return key if _KEY_RE.match(key) else ""
++    return _normalize_key_token(stripped.partition("=")[0])
+ 
+ 
+ def set_env_values(
+@@ -233,45 +290,68 @@ def set_env_values(
+     return _write_env_lines(target, lines)
+ 
+ 
++def _fsync_directory(directory: Path) -> None:
++    """Best-effort directory fsync so the replace survives a crash.
++
++    Some platforms do not support fsync on a directory fd (macOS raises
++    EINVAL) or refuse to open one (Windows); the rename itself already
++    happened, so only the durability hint is lost — never the data.
++    """
++    try:
++        dir_fd = os.open(str(directory), os.O_RDONLY)
++    except OSError:
++        return
++    try:
++        os.fsync(dir_fd)
++    except OSError:
++        pass
++    finally:
++        try:
++            os.close(dir_fd)
++        except OSError:
++            pass
++
++
+ def _write_env_lines(target: Path, lines: list[str]) -> Path:
+     """Atomically replace *target* with ``lines`` at 0600 (shared writer).
+ 
+-    Same-write discipline for set_env_values and remove_env_values: a
+-    pid-unique temp path, os.replace on the same filesystem, and 0600
+-    enforced after the replace (repairing a legacy world-readable file).
+-    No flock: any lock would be released before the replace, so it would
+-    protect nothing (review 2026-10-14); concurrent writers are
+-    last-writer-wins by design.
++    Same-write discipline for set_env_values and remove_env_values:
++    ``tempfile.mkstemp`` in the target directory (unpredictable name created
++    O_EXCL, so a pre-planted symlink or file is never followed or reused;
++    R4-044 review), 0600, write, fsync the file, os.replace on the same
++    filesystem, then fsync the directory so the rename is durable. 0600 comes
++    from mkstemp + fchmod, so the replace can never leave a world-readable
++    ``.env`` behind (and repairs a legacy 0644 file). No flock: any lock
++    would be released before the replace, so it would protect nothing
++    (review 2026-10-14); concurrent writers are last-writer-wins by design.
+     """
+     target.parent.mkdir(parents=True, exist_ok=True)
+     data = "\n".join(lines) + "\n"
+-    tmp = target.parent / (target.name + f".tmp.{os.getpid()}")
+-    # Secret file hygiene (wave-3 hotfix): create the temp file 0600 so the
+-    # os.replace below can never leave a world-readable .env behind (and
+-    # repairs an existing 0644 file, e.g. after a legacy write). install.sh
+-    # chmods 600 at install time; every subsequent write must preserve that.
+-    fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
++    fd, tmp_name = tempfile.mkstemp(
++        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
++    )
++    tmp = Path(tmp_name)
+     try:
+-        with os.fdopen(fd, "w", encoding="utf-8") as _tmp_file:
+-            _tmp_file.write(data)
++        if hasattr(os, "fchmod"):  # not available on Windows
++            os.fchmod(fd, 0o600)
++        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
++            fd = -1  # fdopen owns the descriptor from here on
++            tmp_file.write(data)
++            tmp_file.flush()
++            os.fsync(tmp_file.fileno())
++        os.replace(tmp, target)
++        _fsync_directory(target.parent)
+     except BaseException:
++        if fd >= 0:
++            try:
++                os.close(fd)
++            except OSError:
++                pass
+         try:
+             tmp.unlink(missing_ok=True)
+         except OSError:
+             pass
+         raise
+-    try:
+-        os.replace(tmp, target)
+-        try:
+-            os.chmod(target, 0o600)
+-        except OSError:
+-            pass
+-    finally:
+-        try:
+-            if tmp.exists():
+-                tmp.unlink()
+-        except OSError:
+-            pass
+     return target
+ 
+ 

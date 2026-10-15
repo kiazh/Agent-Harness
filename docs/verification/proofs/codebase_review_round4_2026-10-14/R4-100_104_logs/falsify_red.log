@@ -1,0 +1,177 @@
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+______________ test_stage_activate_roundtrip_and_registry_pickup _______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1778/test_stage_activate_roundtrip_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e7d3490>
+
+    def test_stage_activate_roundtrip_and_registry_pickup(tmp_path, monkeypatch):
+        from machina.skills.registry import SkillRegistry
+    
+        root = tmp_path / "repo"
+        root.mkdir()
+        revision = make_repo(
+            root,
+            {
+                "skills/alpha/SKILL.md": ALPHA_SKILL,
+                "skills/alpha/ref.txt": "reference\n",
+            },
+        )
+        staging = tmp_path / "staging"
+        monkeypatch.setattr(repo_install, "staging_root", lambda: staging)
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        plan = scan_repo(root, parse_repo_url("https://github.com/o/r"), revision)
+        staged = write_staged_plan(plan, root)
+        assert (staged / "plan.json").is_file()
+        detail, found = load_staged_plan(plan.digest)
+        assert found == staged
+        installed = activate_plan(detail, found, skills_dir)
+        assert installed == ["alpha"]
+        manifest = json.loads((skills_dir / "alpha" / ".install-manifest.json").read_text())
+        assert manifest["revision"] == revision
+        registry = SkillRegistry(skills_dir=skills_dir)
+        registry.load_all()
+        assert registry.get("alpha") is not None
+>       assert registry.get_skill_content("alpha") == "Help with alpha tasks."
+E       AssertionError: assert None == 'Help with alpha tasks.'
+E        +  where None = <lambda>('alpha')
+E        +    where <lambda> = <machina.skills.registry.SkillRegistry object at 0x10cced810>.get_skill_content
+
+tests/test_repo_install.py:236: AssertionError
+______________________ test_reranker_passthrough_labeled _______________________
+
+    def test_reranker_passthrough_labeled():
+        from machina.rag.reranker import IdentityReranker
+    
+>       assert IdentityReranker.backend == "passthrough"
+E       AssertionError: assert 'unknown' == 'passthrough'
+E         
+E         - passthrough
+E         + unknown
+
+tests/test_integration_permissions.py:91: AssertionError
+________________ test_models_list_chatgpt_returns_live_catalog _________________
+
+sandbox = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1778/test_models_list_chatgpt_retur0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e7fb770>
+
+    async def test_models_list_chatgpt_returns_live_catalog(sandbox, monkeypatch):
+        from machina.core.provider import catalog
+    
+        payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        models = catalog.parse_catalog(payload, source="live")
+        monkeypatch.setattr(catalog, "fetch_catalog_for_account", lambda **kwargs: models)
+    
+        out = await feature.models_list(_gw(), {})
+        assert out["provider"] == "chatgpt"
+        assert out["source"] == "live"
+        assert out["fetchError"] is None
+        assert [row["id"] for row in out["models"]] == ["gpt-6.1-sol", "gpt-6-luna"]
+        sol = out["models"][0]
+        assert sol["efforts"] == ["low", "medium", "high", "xhigh", "max"]
+        assert sol["contextWindow"] == 500_000
+        assert sol["maxContextWindow"] == 872_000
+        luna = out["models"][1]
+>       assert "ultra" not in luna["advertisedEfforts"]  # luna never advertises ultra
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert 'ultra' not in ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+
+tests/test_gateway_providers.py:77: AssertionError
+_ TestContextEvictionInterrupted.test_eviction_with_archive_failure_falls_back_to_individual _
+
+self = <tests.test_chaos_extended.TestContextEvictionInterrupted object at 0x10e7ea350>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d523df0>
+
+    async def test_eviction_with_archive_failure_falls_back_to_individual(self, monkeypatch):
+        """When batch archive fails, should retry individually."""
+        from machina.core import context as ctx_mod
+    
+        session_id = uuid.uuid4()
+        now = datetime.now(UTC)
+        rows = [
+            {
+                "id": uuid.uuid4(),
+                "agent_id": "owner",
+                "chunk_type": "document",
+                "token_count": 1,
+                "created_at": now + timedelta(seconds=i),
+                "payload_msgpack": b"\x80",
+                "embedding": None,
+            }
+            for i in range(12)
+        ]
+    
+        database = MagicMock()
+        database.fetchrow = AsyncMock(return_value={"total_chunks": 12, "total_tokens": 12})
+        database.fetch = AsyncMock(return_value=rows)
+    
+        # First call (batch) fails, second call (individual) succeeds
+        connection = AsyncMock()
+        connection.transaction = MagicMock()
+        call_count = 0
+    
+        async def mock_fetch(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 12:  # Batch calls fail
+                raise Exception("batch archive failed")
+            return [{"id": uuid.uuid4()}]  # Individual calls succeed
+    
+        connection.fetch = mock_fetch
+        connection.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
+        connection.execute = AsyncMock(return_value="DELETE 1")
+        database.acquire.return_value.__aenter__.return_value = connection
+    
+        monkeypatch.setattr(ctx_mod, "db", database)
+        manager = ContextManager()
+    
+        # 12 chunks with the newest 10 preserved leave exactly 2 evictable;
+        # the batch archive call fails once and both survive via the
+        # individual-retry fallback.
+        evicted = await manager.evict_old_chunks(session_id, max_chunks=10)
+>       assert evicted == 2
+E       assert 0 == 2
+
+tests/test_chaos_extended.py:792: AssertionError
+__________________ TestMemoryRetriever.test_retrieve_by_query __________________
+
+self = <tests.test_memory.TestMemoryRetriever object at 0x10e7eac10>
+retriever = <machina.memory.retriever.MemoryRetriever object at 0x10e82bcb0>
+mock_store = <AsyncMock id='4539842640'>
+
+    async def test_retrieve_by_query(self, retriever, mock_store):
+        """Test retrieving memories by text query."""
+        entry = MemoryEntry(
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Python is great",
+            category="fact",
+        )
+        mock_store._row_to_entry = lambda row: entry
+        retriever.store = mock_store
+    
+        # Patch db for keyword search; the returned row flows through the
+        # real _keyword_search seam.
+        mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+    
+        attach_connection(mock_db)
+        mock_db.fetch = AsyncMock(return_value=[{"id": entry.id, "content": entry.content}])
+        with patch("machina.memory.retriever.db", mock_db):
+            results = await retriever.retrieve("Python")
+>       assert [(rm.memory.content, rm.source) for rm in results] == [("Python is great", "sparse")]
+E       AssertionError: assert [] == [('Python is ...t', 'sparse')]
+E         
+E         Right contains one more item: ('Python is great', 'sparse')
+E         Use -v to get more diff
+
+tests/test_memory.py:716: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_repo_install.py::test_stage_activate_roundtrip_and_registry_pickup
+FAILED tests/test_integration_permissions.py::test_reranker_passthrough_labeled
+FAILED tests/test_gateway_providers.py::test_models_list_chatgpt_returns_live_catalog
+FAILED tests/test_chaos_extended.py::TestContextEvictionInterrupted::test_eviction_with_archive_failure_falls_back_to_individual
+FAILED tests/test_memory.py::TestMemoryRetriever::test_retrieve_by_query - As...
+5 failed in 2.29s

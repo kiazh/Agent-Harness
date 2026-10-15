@@ -1,0 +1,3 @@
+[A wait_for]    outcome=timeout final='NEW'
+[B turn-cancel] cancelled=True final='NEW'
+VERDICT: CONTAINED (newer edit is the last writer in both scenarios)

@@ -1,0 +1,6 @@
+$ MACHINA_TEST_DATABASE_URL=... pytest tests/test_sse_stream_adversarial.py -q -p no:cacheprovider   # UNFIXED code, R4-084 new tests
+FAILED tests/test_sse_stream_adversarial.py::test_stream_frames_use_canonical_turn_id_protocol_1
+FAILED tests/test_sse_stream_adversarial.py::test_stream_frames_use_canonical_turn_id_protocol_2
+FAILED tests/test_sse_stream_adversarial.py::test_claim_token_never_on_the_wire_while_claim_is_live
+FAILED tests/test_sse_stream_adversarial.py::test_ownership_lost_and_cleanup_frames_carry_canonical_turn_id
+4 failed, 4 passed in 2.36s

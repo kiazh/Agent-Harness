@@ -1,0 +1,262 @@
+FFFFFFFFF                                                                [100%]
+=================================== FAILURES ===================================
+______ test_empty_reindex_deletes_previous_generation_only_for_its_source ______
+
+db_pool = <machina.db.connection.Database object at 0x10b240190>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c1a8fc0>
+
+    async def test_empty_reindex_deletes_previous_generation_only_for_its_source(db_pool, monkeypatch):
+        """R4-088(a): truncating a document to empty still replaces its generation.
+    
+        An empty re-index previously returned before the delete, leaving the old
+        chunks searchable. The delete must run for the same (session, source)
+        while other sources and other sessions stay untouched (adversarial
+        boundary), and the warmed pipeline cache must not resurrect the deleted
+        generation.
+        """
+        monkeypatch.setattr("machina.rag.pipeline.db", db_pool)
+        session_id = await db_pool.fetchval(
+            "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
+        )
+        other_session = await db_pool.fetchval(
+            "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
+        )
+        source = f"truncated-{uuid.uuid4()}.txt"
+        kept_source = f"kept-{uuid.uuid4()}.txt"
+        pipeline = RAGPipeline(config=RAGConfig(enable_embeddings=False, enable_reranking=False))
+        try:
+            await pipeline.index_document(
+                Document(content=("alpha beta gamma delta. " * 40), source=source, doc_type="text"),
+                session_id,
+            )
+            await pipeline.index_document(
+                Document(content=("keep this generation " * 10), source=kept_source, doc_type="text"),
+                session_id,
+            )
+            # Same source string under another session: must never be collateral.
+            await pipeline.index_document(
+                Document(content=("other session content " * 10), source=source, doc_type="text"),
+                other_session,
+            )
+            found = await pipeline.search("alpha", session_id, rerank=False)
+            assert found, "precondition: the generation is searchable"
+            assert all(r.chunk.payload["metadata"]["source"] == source for r in found)
+    
+            emptied = await pipeline.index_document(
+                Document(content="", source=source, doc_type="text"), session_id
+            )
+            assert emptied == []
+            count = await db_pool.fetchval(
+                "SELECT count(*) FROM context_chunks WHERE session_id = $1 AND document_source = $2",
+                session_id,
+                source,
+            )
+>           assert count == 0, "empty re-index left the previous generation"
+E           AssertionError: empty re-index left the previous generation
+E           assert 1 == 0
+
+tests/test_fm5_consistency.py:370: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 20:16:40,986 [AUDIT] {"timestamp": 1792023400.985975, "event": "rag_index_start", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "doc_type": "text"}
+2026-10-14 20:16:40,996 [AUDIT] {"timestamp": 1792023400.996916, "event": "rag_index_complete", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "chunks_stored": 1}
+2026-10-14 20:16:40,997 [AUDIT] {"timestamp": 1792023400.997452, "event": "rag_index_start", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "kept-0e57a4ac-d2b2-4132-ac7d-0d2f9907a0c1.txt", "doc_type": "text"}
+2026-10-14 20:16:40,999 [AUDIT] {"timestamp": 1792023400.9995651, "event": "rag_index_complete", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "kept-0e57a4ac-d2b2-4132-ac7d-0d2f9907a0c1.txt", "chunks_stored": 1}
+2026-10-14 20:16:41,000 [AUDIT] {"timestamp": 1792023401.00019, "event": "rag_index_start", "session_id": "f199f06c-259f-4e42-83a3-3f8dbb912d04", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "doc_type": "text"}
+2026-10-14 20:16:41,003 [AUDIT] {"timestamp": 1792023401.0034509, "event": "rag_index_complete", "session_id": "f199f06c-259f-4e42-83a3-3f8dbb912d04", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "chunks_stored": 1}
+2026-10-14 20:16:41,003 [AUDIT] {"timestamp": 1792023401.0037272, "event": "rag_search_start", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "top_k": 10}
+2026-10-14 20:16:41,005 [AUDIT] {"timestamp": 1792023401.005601, "event": "rag_search_complete", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "results_returned": 1}
+2026-10-14 20:16:41,006 [AUDIT] {"timestamp": 1792023401.006081, "event": "rag_index_start", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "doc_type": "text"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023400.985975, "event": "rag_index_start", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "doc_type": "text"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023400.996916, "event": "rag_index_complete", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "chunks_stored": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023400.997452, "event": "rag_index_start", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "kept-0e57a4ac-d2b2-4132-ac7d-0d2f9907a0c1.txt", "doc_type": "text"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023400.9995651, "event": "rag_index_complete", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "kept-0e57a4ac-d2b2-4132-ac7d-0d2f9907a0c1.txt", "chunks_stored": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023401.00019, "event": "rag_index_start", "session_id": "f199f06c-259f-4e42-83a3-3f8dbb912d04", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "doc_type": "text"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023401.0034509, "event": "rag_index_complete", "session_id": "f199f06c-259f-4e42-83a3-3f8dbb912d04", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "chunks_stored": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023401.0037272, "event": "rag_search_start", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "top_k": 10}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.rag.pipeline:pipeline.py:467 no embedder configured, keyword-only search
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023401.005601, "event": "rag_search_complete", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "results_returned": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023401.006081, "event": "rag_index_start", "session_id": "43c4a93b-670d-4ab0-8fff-e5e66653fcd9", "source": "truncated-22056837-ed8b-4f44-9c25-9cb50bb7927e.txt", "doc_type": "text"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_____ TestChunker.test_split_code_attaches_decorators_to_their_definition ______
+
+self = <tests.test_rag.TestChunker object at 0x10c1c0c80>
+
+    def test_split_code_attaches_decorators_to_their_definition(self):
+        """R4-088(b): decorators are part of the following definition chunk."""
+        code = (
+            "import os\n\n"
+            "@functools.cache\n"
+            "def alpha():\n"
+            "    return os.name\n\n"
+            "@app.route('/beta')\n"
+            "@requires_auth\n"
+            "def beta():\n"
+            "    return 2\n"
+        )
+        chunks = RecursiveCharacterTextSplitter().split_code(code, language="python")
+        alpha = [c for c in chunks if c.metadata.get("symbol") == "def alpha"]
+        beta = [c for c in chunks if c.metadata.get("symbol") == "def beta"]
+>       assert len(alpha) == 1 and alpha[0].text.startswith("@functools.cache\ndef alpha")
+E       AssertionError: assert (1 == 1 and False)
+E        +  where 1 = len([Chunk(text='def alpha():\n    return os.name', index=2, metadata={'language': 'python', 'symbol': 'def alpha'}, token_count=7)])
+E        +  and   False = <built-in method startswith of str object at 0x10cb17370>('@functools.cache\ndef alpha')
+E        +    where <built-in method startswith of str object at 0x10cb17370> = 'def alpha():\n    return os.name'.startswith
+E        +      where 'def alpha():\n    return os.name' = Chunk(text='def alpha():\n    return os.name', index=2, metadata={'language': 'python', 'symbol': 'def alpha'}, token_count=7).text
+
+tests/test_rag.py:297: AssertionError
+_____ TestChunker.test_split_code_single_decorated_definition_stays_whole ______
+
+self = <tests.test_rag.TestChunker object at 0x10c1dc4b0>
+
+    def test_split_code_single_decorated_definition_stays_whole(self):
+        """R4-088(b): one decorated definition is one chunk with metadata."""
+        code = "@deco\ndef only():\n    return 1\n"
+        chunks = RecursiveCharacterTextSplitter().split_code(code, language="python")
+>       assert [c.metadata.get("symbol") for c in chunks] == ["def only"]
+E       AssertionError: assert ['@deco', 'def only'] == ['def only']
+E         
+E         At index 0 diff: '@deco' != 'def only'
+E         Left contains one more item: 'def only'
+E         Use -v to get more diff
+
+tests/test_rag.py:307: AssertionError
+__ TestChunker.test_split_code_single_plain_definition_keeps_symbol_metadata ___
+
+self = <tests.test_rag.TestChunker object at 0x10c1dc830>
+
+    def test_split_code_single_plain_definition_keeps_symbol_metadata(self):
+        """R4-088(b): symbol splitting applies even to single-definition files."""
+        code = "def only():\n    return 1\n"
+        chunks = RecursiveCharacterTextSplitter().split_code(code, language="python")
+>       assert [c.metadata.get("symbol") for c in chunks] == ["def only"]
+E       AssertionError: assert [None] == ['def only']
+E         
+E         At index 0 diff: None != 'def only'
+E         Use -v to get more diff
+
+tests/test_rag.py:314: AssertionError
+________ TestChunker.test_split_markdown_ignores_headings_inside_fences ________
+
+self = <tests.test_rag.TestChunker object at 0x10c1776c0>
+
+    def test_split_markdown_ignores_headings_inside_fences(self):
+        """R4-088(c): '#' lines inside a fence are content, never headings."""
+        text = (
+            "# Title\n\n"
+            "Intro line.\n\n"
+            "```python\n"
+            "# this is a comment inside a fence\n"
+            "## also not a heading\n"
+            "print('hi')\n"
+            "```\n\n"
+            "## Real heading\n\n"
+            "Body after the fence.\n"
+        )
+        chunks = RecursiveCharacterTextSplitter().split_markdown(text)
+        headings = {c.metadata.get("heading") for c in chunks}
+>       assert "Title > Real heading" in headings
+E       AssertionError: assert 'Title > Real heading' in {'Title', 'this is a comment inside a fence', 'this is a comment inside a fence > Real heading', 'this is a comment inside a fence > also not a heading'}
+
+tests/test_rag.py:332: AssertionError
+_______ TestChunker.test_split_markdown_tilde_fences_also_mask_headings ________
+
+self = <tests.test_rag.TestChunker object at 0x10caaa8d0>
+
+    def test_split_markdown_tilde_fences_also_mask_headings(self):
+        """R4-088(c): '~~~' fences behave like backtick fences."""
+        text = "# Doc\n\n~~~\n# not a heading\n~~~\n\n## Section\n\nText.\n"
+        chunks = RecursiveCharacterTextSplitter().split_markdown(text)
+>       assert {c.metadata.get("heading") for c in chunks} == {"Doc > Section"}
+E       AssertionError: assert {'Doc', 'not ...ng > Section'} == {'Doc > Section'}
+E         
+E         Extra items in the left set:
+E         'not a heading'
+E         'not a heading > Section'
+E         'Doc'
+E         Extra items in the right set:
+E         'Doc > Section'
+E         Use -v to get more diff
+
+tests/test_rag.py:343: AssertionError
+_________ TestChunker.test_split_markdown_unclosed_fence_masks_to_eof __________
+
+self = <tests.test_rag.TestChunker object at 0x10caaa690>
+
+    def test_split_markdown_unclosed_fence_masks_to_eof(self):
+        """R4-088(c): an unclosed fence keeps later '#' lines as content."""
+        text = "# Start\n\n```\n# still code\n"
+        chunks = RecursiveCharacterTextSplitter().split_markdown(text)
+>       assert [c.metadata.get("heading") for c in chunks] == ["Start"]
+E       AssertionError: assert ['Start', 'still code'] == ['Start']
+E         
+E         Left contains one more item: 'still code'
+E         Use -v to get more diff
+
+tests/test_rag.py:349: AssertionError
+___________ test_lookup_rejects_stale_digest_even_when_stat_matches ____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1634/test_lookup_rejects_stale_dige0')
+
+    def test_lookup_rejects_stale_digest_even_when_stat_matches(tmp_path):
+        """R4-088(e): the stored sha256 is verified, not write-only."""
+        path = tmp_path / "m.py"
+        path.write_text("import os\n", encoding="utf-8")
+        cache = ContentHashCache()
+        cache.store(str(path), (1, ["os"], False))
+        assert cache.lookup(str(path)) == (1, ["os"], False)
+    
+        st = os.stat(path)
+        path.write_text("import re\n", encoding="utf-8")
+        os.utime(path, (st.st_atime, st.st_mtime))
+        # Same mtime and size — only the digest can tell.
+>       assert cache.lookup(str(path)) is None
+E       AssertionError: assert (1, ['os'], False) is None
+E        +  where (1, ['os'], False) = lookup('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1634/test_lookup_rejects_stale_dige0/m.py')
+E        +    where lookup = <machina.repomap.cache.ContentHashCache object at 0x10c08e270>.lookup
+E        +    and   '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1634/test_lookup_rejects_stale_dige0/m.py' = str(PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1634/test_lookup_rejects_stale_dige0/m.py'))
+
+tests/test_repomap.py:74: AssertionError
+________________ test_rebuild_detects_mtime_preserving_rewrite _________________
+
+tiny_tree = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1634/test_rebuild_detects_mtime_pre0')
+
+    def test_rebuild_detects_mtime_preserving_rewrite(tiny_tree):
+        """R4-088(e): a same-stat rewrite cannot keep stale inventory data."""
+        target = tiny_tree / "pkg" / "a.py"
+        cache = ContentHashCache()
+        first = build_repomap(str(tiny_tree), cache=cache)
+        assert "os" in first.import_edges["pkg.a"]
+    
+        original = target.read_text(encoding="utf-8")
+        rewritten = original.replace("import os", "import re")
+        assert len(rewritten) == len(original)
+        st = os.stat(target)
+        target.write_text(rewritten, encoding="utf-8")
+        os.utime(target, (st.st_atime, st.st_mtime))
+    
+        second = build_repomap(str(tiny_tree), cache=cache)
+>       assert second.files_scanned == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = RepoMap(root='/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1634/test_rebuild_detec...['pkg/a.py'], test_files=['tests/test_a.py'], import_edges={'pkg.a': ['os', 'pkg']}, skipped_large=[], files_scanned=0).files_scanned
+
+tests/test_repomap.py:95: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_fm5_consistency.py::test_empty_reindex_deletes_previous_generation_only_for_its_source
+FAILED tests/test_rag.py::TestChunker::test_split_code_attaches_decorators_to_their_definition
+FAILED tests/test_rag.py::TestChunker::test_split_code_single_decorated_definition_stays_whole
+FAILED tests/test_rag.py::TestChunker::test_split_code_single_plain_definition_keeps_symbol_metadata
+FAILED tests/test_rag.py::TestChunker::test_split_markdown_ignores_headings_inside_fences
+FAILED tests/test_rag.py::TestChunker::test_split_markdown_tilde_fences_also_mask_headings
+FAILED tests/test_rag.py::TestChunker::test_split_markdown_unclosed_fence_masks_to_eof
+FAILED tests/test_repomap.py::test_lookup_rejects_stale_digest_even_when_stat_matches
+FAILED tests/test_repomap.py::test_rebuild_detects_mtime_preserving_rewrite
+9 failed in 0.63s

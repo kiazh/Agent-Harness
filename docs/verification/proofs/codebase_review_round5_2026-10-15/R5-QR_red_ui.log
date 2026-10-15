@@ -1,0 +1,166 @@
+✖ R5-021 optional SecretForm: blank Enter submits empty (explicit keyless path) (3.43225ms)
+✖ R5-021 optional SecretForm: blank Ctrl+S submits empty, Escape still cancels (0.262125ms)
+✔ R5-021 required SecretForm still rejects blank (no keyless path elsewhere) (10.038791ms)
+✖ R5-021 /provider add: blank key proceeds keyless, Escape cancels without a request (0.598542ms)
+✖ R5-022 /memory forget <full-uuid> bypasses the newest-500 window (0.495083ms)
+✖ R5-022 /memory share <full-uuid> bypasses the newest-500 window (0.32525ms)
+✖ R5-022 /memory approve <full-uuid> bypasses the pending window (0.147791ms)
+✖ R5-022 /memory reject <full-uuid> bypasses the pending window (0.109667ms)
+✖ R5-022 abbreviations stay bounded and misses disclose the full-ID path (0.22225ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 1
+ℹ fail 8
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 268.844333
+
+✖ failing tests:
+
+test at test/r5-021_022-ui-affordances.test.ts:116:1
+✖ R5-021 optional SecretForm: blank Enter submits empty (explicit keyless path) (3.43225ms)
+  AssertionError [ERR_ASSERTION]: blank submits as the keyless path
+  + actual - expected
+  
+  + []
+  - [
+  -   ''
+  - ]
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-021_022-ui-affordances.test.ts:124:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ '' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test/r5-021_022-ui-affordances.test.ts:130:1
+✖ R5-021 optional SecretForm: blank Ctrl+S submits empty, Escape still cancels (0.262125ms)
+  AssertionError [ERR_ASSERTION]: blank Ctrl+S submits as the keyless path
+  + actual - expected
+  
+  + []
+  - [
+  -   ''
+  - ]
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-021_022-ui-affordances.test.ts:140:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ '' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test/r5-021_022-ui-affordances.test.ts:170:1
+✖ R5-021 /provider add: blank key proceeds keyless, Escape cancels without a request (0.598542ms)
+  AssertionError [ERR_ASSERTION]: Escape cancels the whole add flow
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-021_022-ui-affordances.test.ts:191:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/r5-021_022-ui-affordances.test.ts:196:1
+✖ R5-022 /memory forget <full-uuid> bypasses the newest-500 window (0.495083ms)
+  AssertionError [ERR_ASSERTION]: full UUID goes straight to the ownership-checked backend
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-021_022-ui-affordances.test.ts:204:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/r5-021_022-ui-affordances.test.ts:209:1
+✖ R5-022 /memory share <full-uuid> bypasses the newest-500 window (0.32525ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-021_022-ui-affordances.test.ts:217:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/r5-021_022-ui-affordances.test.ts:223:1
+✖ R5-022 /memory approve <full-uuid> bypasses the pending window (0.147791ms)
+  AssertionError [ERR_ASSERTION]: full UUID goes straight to the backend
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-021_022-ui-affordances.test.ts:231:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/r5-021_022-ui-affordances.test.ts:236:1
+✖ R5-022 /memory reject <full-uuid> bypasses the pending window (0.109667ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-021_022-ui-affordances.test.ts:243:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/r5-021_022-ui-affordances.test.ts:247:1
+✖ R5-022 abbreviations stay bounded and misses disclose the full-ID path (0.22225ms)
+  AssertionError [ERR_ASSERTION]: miss discloses the bounded scope
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-021_022-ui-affordances.test.ts:256:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'No memory starts with "deadbeef".',
+    expected: /newest 500/,
+    operator: 'match',
+    diff: 'simple'
+  }

@@ -1,0 +1,39 @@
+# Architecture god-file ceiling failures: HEAD vs working tree vs ceiling
+# (all failures are in files edited by in-flight lanes; NONE are R4-106 files)
+core/agent.py                      ceiling=2057  HEAD=2064  work=2110  dirty=True
+core/provider/audit.py             ceiling=147   HEAD=219   work=219   dirty=False
+core/provider/rate_limit.py        ceiling=79    HEAD=79    work=120   dirty=True
+core/provider/openrouter.py        ceiling=607   HEAD=607   work=608   dirty=True
+core/provider/ollama.py            ceiling=378   HEAD=378   work=388   dirty=True
+core/provider/direct.py            ceiling=347   HEAD=347   work=348   dirty=True
+core/provider/anthropic.py         ceiling=577   HEAD=577   work=580   dirty=True
+core/provider/chatgpt.py           ceiling=678   HEAD=678   work=680   dirty=True
+core/provider/copilot.py           ceiling=425   HEAD=425   work=427   dirty=True
+
+$ git diff --stat of the ONLY files R4-106 changed (no provider/agent/ui):
+ machina/connectors/mcp_client.py   |  2 +-
+ machina/core/metrics.py            |  4 ++--
+ machina/core/session.py            |  2 +-
+ machina/db/connection.py           |  2 +-
+ machina/gateway/server.py          |  2 +-
+ machina/memory/forgetting.py       |  4 ++--
+ machina/memory/identity.py         |  2 +-
+ machina/memory/persona.py          |  2 +-
+ machina/memory/redaction.py        |  6 +++---
+ machina/memory/scorer.py           |  2 +-
+ machina/memory/store.py            |  4 ++--
+ machina/memory/user_profile.py     |  4 ++--
+ machina/rag/pipeline.py            |  2 --
+ machina/repomap/evidence.py        |  2 +-
+ machina/research/workflow_trial.py |  2 +-
+ machina/soulspec/__init__.py       |  3 ---
+ machina/tools/base.py              |  2 +-
+ tests/test_research_phase2.py      | 10 ++++++----
+ tests/test_soulspec.py             | 32 ++++++++++----------------------
+ tests/test_turns_ownership.py      |  4 +++-
+ 20 files changed, 40 insertions(+), 53 deletions(-)
+
+$ deleted: machina/soulspec/conformance.py (158 lines)
+$ git diff --stat machina/soulspec/conformance.py:
+ machina/soulspec/conformance.py | 158 ----------------------------------------
+ 1 file changed, 158 deletions(-)

@@ -1,0 +1,22 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 5 items
+
+tests/test_chatgpt_auth_adversarial.py::test_pre_logout_tokens_never_recreate_the_store PASSED [ 20%]
+tests/test_chatgpt_auth_adversarial.py::test_login_exchange_publishes_through_a_peer_rotation PASSED [ 40%]
+tests/test_chatgpt_auth_adversarial.py::test_concurrent_refresh_still_adopts_a_single_rotation PASSED [ 60%]
+tests/test_chatgpt_auth_adversarial.py::test_store_lock_default_wait_is_bounded PASSED [ 80%]
+tests/test_chatgpt_auth_adversarial.py::test_chatgpt_refresh_under_lock_contention_fails_typed PASSED [100%]
+
+============================== 5 passed in 1.67s ===============================
+........................................................................ [ 97%]
+..                                                                       [100%]
+74 passed in 16.69s
+........................................................................ [ 92%]
+......                                                                   [100%]
+78 passed in 2.77s

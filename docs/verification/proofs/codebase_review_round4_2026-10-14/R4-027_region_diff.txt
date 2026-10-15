@@ -1,0 +1,20 @@
+ def _shim_points_at(shim_text: str, app_root: str) -> bool:
+-    """True when a ``~/.local/bin/machina`` shim execs an ``machina`` inside ``app_root``."""
+-    return app_root.rstrip("/\\").lower() in shim_text.lower()
++    """True when a ``~/.local/bin/machina`` shim execs an ``machina`` inside ``app_root``.
++
++    Whole path segments only, case-insensitively: ``/x/machina`` never matches a
++    shim pointing at a sibling checkout such as ``/x/machina-old``.
++    """
++    root = app_root.rstrip("/\\").lower()
++    text = shim_text.lower()
++    for at in range(len(text) - len(root) + 1):
++        if not text.startswith(root, at):
++            continue
++        end = at + len(root)
++        if not any(c.isalnum() or c in "-._~" for c in text[at - 1 : at] + text[end : end + 1]):
++            return True
++    return False
+ 
+ 
+ def _docker_container_exists(name: str = "machina-db") -> bool:

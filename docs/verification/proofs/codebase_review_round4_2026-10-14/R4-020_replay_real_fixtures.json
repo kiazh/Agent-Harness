@@ -1,0 +1,94 @@
+{
+  "replay/task1/machina": {
+    "success": true,
+    "passed": 3,
+    "failed": 0,
+    "unchanged": true,
+    "editable": [
+      "calc.py"
+    ],
+    "diff": null,
+    "summary": "3 passed in 0.06s"
+  },
+  "replay/task1/opencode": {
+    "success": true,
+    "passed": 3,
+    "failed": 0,
+    "unchanged": true,
+    "editable": [
+      "calc.py",
+      "opencode.json"
+    ],
+    "diff": null,
+    "summary": "3 passed in 0.06s"
+  },
+  "replay/task2/machina": {
+    "success": true,
+    "passed": 5,
+    "failed": 0,
+    "unchanged": true,
+    "editable": [
+      "filters.py",
+      "pipeline.py"
+    ],
+    "diff": null,
+    "summary": "5 passed in 0.07s"
+  },
+  "replay/task2/opencode": {
+    "success": true,
+    "passed": 5,
+    "failed": 0,
+    "unchanged": true,
+    "editable": [
+      "filters.py",
+      "opencode.json",
+      "pipeline.py"
+    ],
+    "diff": null,
+    "summary": "5 passed in 0.07s"
+  },
+  "replay/task3/machina": {
+    "success": true,
+    "passed": 4,
+    "failed": 0,
+    "unchanged": true,
+    "editable": [
+      "datetools.py",
+      "export.py",
+      "report.py"
+    ],
+    "diff": null,
+    "summary": "4 passed in 0.06s"
+  },
+  "replay/task3/opencode": {
+    "success": true,
+    "passed": 4,
+    "failed": 0,
+    "unchanged": true,
+    "editable": [
+      "datetools.py",
+      "export.py",
+      "opencode.json",
+      "report.py"
+    ],
+    "diff": null,
+    "summary": "4 passed in 0.07s"
+  },
+  "stray/task1/fix + agent pytest.ini": {
+    "success": false,
+    "passed": 3,
+    "failed": 0,
+    "unchanged": false,
+    "editable": [
+      "calc.py"
+    ],
+    "diff": {
+      "changed": [],
+      "added": [
+        "pytest.ini"
+      ],
+      "removed": []
+    },
+    "summary": "3 passed in 0.08s"
+  }
+}

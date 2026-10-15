@@ -1,0 +1,7 @@
+# R4-089 GREEN run — fixed code at current HEAD (2026-10-15)
+# cmd: MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test python -m pytest tests/test_memory.py tests/test_memory_bug_fixes.py tests/test_persona_memory.py tests/test_memory_approval.py tests/test_shared_memory_bus.py tests/test_architecture_layers.py -q -p no:cacheprovider
+
+........................................................................ [ 37%]
+........................................................................ [ 75%]
+..............................................                           [100%]
+190 passed in 2.11s

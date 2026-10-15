@@ -1,0 +1,6 @@
+run-copy link is symlink: True
+run-copy link resolves outside: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/tmp458l3gcb/outside/victim.txt
+editable: ['src/calc.py', 'src/link.py'] | link excluded from hash: True
+victim after harness edit: HARNESS-PWNED
+hashes equal (attack missed): True
+RED REPRODUCED

@@ -1,0 +1,5 @@
+writes_ok=60 rejected=240 escaped_at=(61, 'ATTACKER-61')
+outside/victim.txt='ATTACKER-61'
+outside_files=['victim.txt']
+outside_temp_litter=0
+VERDICT: ESCAPE

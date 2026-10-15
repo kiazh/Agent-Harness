@@ -1,0 +1,7 @@
+$ .venv/bin/python -c import probe
+OK: soulspec exports clean; pipeline has no _last_search_mode
+
+$ pytest tests/test_soulspec.py tests/test_research_phase2.py tests/test_turns_ownership.py tests/test_metrics.py tests/test_repomap.py tests/test_fm4_metrics.py tests/test_s5_turns_counters.py -q
+........................................................................ [ 87%]
+..........                                                               [100%]
+82 passed in 2.57s

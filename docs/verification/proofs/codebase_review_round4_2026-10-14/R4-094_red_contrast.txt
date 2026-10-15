@@ -1,0 +1,2 @@
+cobalt2 pre-fix selection ink/fill contrast = 3.62
+solarized pre-fix selection ink/fill contrast = 4.08

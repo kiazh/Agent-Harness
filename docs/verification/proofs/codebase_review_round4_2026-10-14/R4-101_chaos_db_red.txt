@@ -1,0 +1,168 @@
+F.F                                                                      [100%]
+=================================== FAILURES ===================================
+___________ TestDatabaseChaos.test_agent_handles_db_connection_drop ____________
+
+self = <tests.test_chaos.TestDatabaseChaos object at 0x10a3cfb10>
+mock_session = Session(id=UUID('8c03851d-e99d-4d6a-9381-28cb3b99f58a'), title='Test Session', agent_id='harness', status='active', st..., 43, 56, 838030, tzinfo=datetime.timezone.utc), execution_mode='ask', parent_session_id=None, delegation_authority={})
+
+    async def test_agent_handles_db_connection_drop(self, mock_session):
+        """Agent should handle a database connection drop during context flush.
+    
+        The run path accumulates chunks and persists them through
+        ``context_manager.add_chunks_batch`` — patching ``add_chunk`` (as the
+        old version did) never fires. The second batch (the assistant message)
+        fails here; the turn must still return a response.
+        """
+        provider = AsyncMock()
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="test",
+                model="test",
+                usage={"total_tokens": 10},
+                tool_calls=[],
+            )
+        )
+    
+        with patch("machina.core.agent.session_manager") as mock_sm:
+            mock_sm.get = AsyncMock(return_value=mock_session)
+            mock_sm.update_activity = AsyncMock()
+    
+            with patch("machina.core.agent.context_manager") as mock_cm:
+                # The real seam: the run path flushes via add_chunks_batch.
+                # First flush (user message) succeeds, second (assistant
+                # message) hits the dropped connection.
+                mock_cm.add_chunks_batch = AsyncMock(
+                    side_effect=[None, Exception("Connection lost")]
+                )
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
+                mock_cm.get_recent_context = AsyncMock(return_value=[])
+    
+                agent = ReActAgent(provider=provider, max_iterations=5)
+                # Agent should handle DB errors gracefully (log and continue)
+>               response = await agent.run(mock_session.id, "test", verbose=False)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_chaos.py:635: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/core/agent.py:106: in wrapper
+    response = await func(self, session_id, user_message, verbose, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/core/agent.py:1693: in run
+    await self._flush_pending_chunks(pending_chunks)
+machina/core/agent.py:1332: in _flush_pending_chunks
+    await result
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <AsyncMock name='context_manager.add_chunks_batch' id='4496838000'>
+args = ([{'session_id': UUID('8c03851d-e99d-4d6a-9381-28cb3b99f58a'), 'agent_id': 'harness', 'chunk_type': 'assistant_message', 'payload': {'content': 'test'}, ...}],)
+kwargs = {}
+
+    async def _execute_mock_call(self, /, *args, **kwargs):
+        # This is nearly just like super(), except for special handling
+        # of coroutines
+    
+        _call = _Call((args, kwargs), two=True)
+        self.await_count += 1
+        self.await_args = _call
+        self.await_args_list.append(_call)
+    
+        effect = self.side_effect
+        if effect is not None:
+            if _is_exception(effect):
+                raise effect
+            elif not _callable(effect):
+                try:
+                    result = next(effect)
+                except StopIteration:
+                    # It is impossible to propagate a StopIteration
+                    # through coroutines because of PEP 479
+                    raise StopAsyncIteration
+                if _is_exception(result):
+>                   raise result
+E                   Exception: Connection lost
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2342: Exception
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 21:43:56,869 [AUDIT] {"timestamp": 1792028636.869023, "event": "agent_run_start", "session_id": "8c03851d-e99d-4d6a-9381-28cb3b99f58a", "agent_id": "harness"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028636.869023, "event": "agent_run_start", "session_id": "8c03851d-e99d-4d6a-9381-28cb3b99f58a", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.observability.diagnostics:diagnostics.py:25 boundary failed: agent.growth.prepare error_type=DatabaseError
+WARNING  machina.memory.retriever:retriever.py:187 Sparse search failed: DatabaseError
+WARNING  machina.core.agent:agent.py:706 Archived context retrieval failed: TypeError
+WARNING  machina.skills.registry:registry.py:668 Skipping skill /Users/shadow/machina/skills/cost-optimization/SKILL.md: ValueError
+WARNING  machina.skills.registry:registry.py:668 Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+___________ TestDatabaseChaos.test_agent_handles_db_pool_exhaustion ____________
+
+self = <tests.test_chaos.TestDatabaseChaos object at 0x10bf922c0>
+mock_session = Session(id=UUID('b3863dfd-dda8-401a-955f-8168ad8421f6'), title='Test Session', agent_id='harness', status='active', st..., 43, 57, 232159, tzinfo=datetime.timezone.utc), execution_mode='ask', parent_session_id=None, delegation_authority={})
+
+    async def test_agent_handles_db_pool_exhaustion(self, mock_session):
+        """Agent should handle a database pool exhaustion on every batch write."""
+        provider = AsyncMock()
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="test",
+                model="test",
+                usage={"total_tokens": 10},
+                tool_calls=[],
+            )
+        )
+    
+        with patch("machina.core.agent.session_manager") as mock_sm:
+            mock_sm.get = AsyncMock(return_value=mock_session)
+            mock_sm.update_activity = AsyncMock()
+    
+            with patch("machina.core.agent.context_manager") as mock_cm:
+                # The real seam: every batch flush fails with pool exhaustion.
+                mock_cm.add_chunks_batch = AsyncMock(side_effect=Exception("Pool exhausted"))
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
+                mock_cm.get_recent_context = AsyncMock(return_value=[])
+    
+                agent = ReActAgent(provider=provider, max_iterations=5)
+                # Agent should handle DB errors gracefully (log and continue)
+>               response = await agent.run(mock_session.id, "test", verbose=False)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_chaos.py:698: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/core/agent.py:106: in wrapper
+    response = await func(self, session_id, user_message, verbose, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/core/agent.py:1602: in run
+    await self._flush_pending_chunks(pending_chunks)
+machina/core/agent.py:1332: in _flush_pending_chunks
+    await result
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <AsyncMock name='context_manager.add_chunks_batch' id='4497749536'>
+args = ([{'session_id': UUID('b3863dfd-dda8-401a-955f-8168ad8421f6'), 'agent_id': 'harness', 'chunk_type': 'user_message', 'payload': {'content': 'test'}, ...}],)
+kwargs = {}
+
+    async def _execute_mock_call(self, /, *args, **kwargs):
+        # This is nearly just like super(), except for special handling
+        # of coroutines
+    
+        _call = _Call((args, kwargs), two=True)
+        self.await_count += 1
+        self.await_args = _call
+        self.await_args_list.append(_call)
+    
+        effect = self.side_effect
+        if effect is not None:
+            if _is_exception(effect):
+>               raise effect
+E               Exception: Pool exhausted
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2333: Exception
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 21:43:57,234 [AUDIT] {"timestamp": 1792028637.2343838, "event": "agent_run_start", "session_id": "b3863dfd-dda8-401a-955f-8168ad8421f6", "agent_id": "harness"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028637.2343838, "event": "agent_run_start", "session_id": "b3863dfd-dda8-401a-955f-8168ad8421f6", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.memory.retriever:retriever.py:187 Sparse search failed: DatabaseError
+WARNING  machina.core.agent:agent.py:706 Archived context retrieval failed: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_chaos.py::TestDatabaseChaos::test_agent_handles_db_connection_drop
+FAILED tests/test_chaos.py::TestDatabaseChaos::test_agent_handles_db_pool_exhaustion
+2 failed, 1 passed in 0.86s

@@ -1,0 +1,243 @@
+.FFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+_____________ test_two_tool_batch_coalesces_into_one_user_message ______________
+
+    async def test_two_tool_batch_coalesces_into_one_user_message():
+        captured: list[dict] = []
+        provider = _anthropic_provider(captured)
+        messages = [{"role": "user", "content": "r412 two tools"}]
+        _append_batch(
+            messages,
+            _assistant("", "toolu_a", "toolu_b"),
+            [("toolu_a", "ok-a", False), ("toolu_b", "ok-b", False)],
+        )
+    
+        await provider.complete(messages)
+        await provider.close()
+    
+        payload = captured[0]
+>       _assert_alternating_and_batched(payload)
+
+tests/test_anthropic_tool_results.py:143: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+payload = {'model': 'claude-3-5-sonnet-20241022', 'max_tokens': 4096, 'messages': [{'role': 'user', 'content': 'r412 two tools'}...role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'toolu_b', 'content': 'ok-b'}]}], 'temperature': 0.7}
+
+    def _assert_alternating_and_batched(payload: dict) -> None:
+        """The Messages API contract: alternation + one user per tool batch."""
+        messages = payload["messages"]
+        roles = [message["role"] for message in messages]
+        assert roles[0] == "user", roles
+>       assert all(left != right for left, right in zip(roles, roles[1:])), f"consecutive: {roles}"
+E       AssertionError: consecutive: ['user', 'assistant', 'user', 'user']
+E       assert False
+E        +  where False = all(<generator object _assert_alternating_and_batched.<locals>.<genexpr> at 0x10a199000>)
+
+tests/test_anthropic_tool_results.py:91: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:00:38,020 [AUDIT] {"timestamp": 1792015238.020417, "event": "llm_call_start", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "message_count": 4}
+2026-10-14 18:00:38,020 [AUDIT] {"timestamp": 1792015238.0208158, "event": "llm_call_complete", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.020417, "event": "llm_call_start", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "message_count": 4}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.0208158, "event": "llm_call_complete", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+____________ test_three_tool_batch_preserves_order_and_error_flags _____________
+
+    async def test_three_tool_batch_preserves_order_and_error_flags():
+        captured: list[dict] = []
+        provider = _anthropic_provider(captured)
+        messages = [{"role": "user", "content": "r412 three tools"}]
+        _append_batch(
+            messages,
+            _assistant("", "toolu_a", "toolu_b", "toolu_c"),
+            [
+                ("toolu_a", "ok-a", False),
+                ("toolu_b", "Error: boom-b", True),
+                ("toolu_c", "ok-c", False),
+            ],
+        )
+    
+        await provider.complete(messages)
+        await provider.close()
+    
+        payload = captured[0]
+>       _assert_alternating_and_batched(payload)
+
+tests/test_anthropic_tool_results.py:169: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+payload = {'model': 'claude-3-5-sonnet-20241022', 'max_tokens': 4096, 'messages': [{'role': 'user', 'content': 'r412 three tools...role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'toolu_c', 'content': 'ok-c'}]}], 'temperature': 0.7}
+
+    def _assert_alternating_and_batched(payload: dict) -> None:
+        """The Messages API contract: alternation + one user per tool batch."""
+        messages = payload["messages"]
+        roles = [message["role"] for message in messages]
+        assert roles[0] == "user", roles
+>       assert all(left != right for left, right in zip(roles, roles[1:])), f"consecutive: {roles}"
+E       AssertionError: consecutive: ['user', 'assistant', 'user', 'user', 'user']
+E       assert False
+E        +  where False = all(<generator object _assert_alternating_and_batched.<locals>.<genexpr> at 0x10a1992a0>)
+
+tests/test_anthropic_tool_results.py:91: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:00:38,056 [AUDIT] {"timestamp": 1792015238.056252, "event": "llm_call_start", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "message_count": 5}
+2026-10-14 18:00:38,056 [AUDIT] {"timestamp": 1792015238.056782, "event": "llm_call_complete", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.056252, "event": "llm_call_start", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "message_count": 5}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.056782, "event": "llm_call_complete", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+______________ test_interleaved_batches_alternate_roles_and_text _______________
+
+    async def test_interleaved_batches_alternate_roles_and_text():
+        captured: list[dict] = []
+        provider = _anthropic_provider(captured)
+        messages = [{"role": "user", "content": "r412 two batches"}]
+        _append_batch(
+            messages,
+            _assistant("first batch", "toolu_a", "toolu_b"),
+            [("toolu_a", "ok-a", False), ("toolu_b", "ok-b", False)],
+        )
+        _append_batch(
+            messages,
+            _assistant("second batch", "toolu_c"),
+            [("toolu_c", "Error: boom-c", True)],
+        )
+    
+        await provider.complete(messages)
+        await provider.close()
+    
+        payload = captured[0]
+>       _assert_alternating_and_batched(payload)
+
+tests/test_anthropic_tool_results.py:196: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+payload = {'model': 'claude-3-5-sonnet-20241022', 'max_tokens': 4096, 'messages': [{'role': 'user', 'content': 'r412 two batches...ser', 'content': [{'type': 'tool_result', 'tool_use_id': 'toolu_c', 'content': 'Error: boom-c'}]}], 'temperature': 0.7}
+
+    def _assert_alternating_and_batched(payload: dict) -> None:
+        """The Messages API contract: alternation + one user per tool batch."""
+        messages = payload["messages"]
+        roles = [message["role"] for message in messages]
+        assert roles[0] == "user", roles
+>       assert all(left != right for left, right in zip(roles, roles[1:])), f"consecutive: {roles}"
+E       AssertionError: consecutive: ['user', 'assistant', 'user', 'user', 'assistant', 'user']
+E       assert False
+E        +  where False = all(<generator object _assert_alternating_and_batched.<locals>.<genexpr> at 0x10a199380>)
+
+tests/test_anthropic_tool_results.py:91: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:00:38,067 [AUDIT] {"timestamp": 1792015238.067389, "event": "llm_call_start", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "message_count": 6}
+2026-10-14 18:00:38,067 [AUDIT] {"timestamp": 1792015238.067861, "event": "llm_call_complete", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.067389, "event": "llm_call_start", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "message_count": 6}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.067861, "event": "llm_call_complete", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+________ test_adjacent_tool_run_coalesces_without_corrupting_user_text _________
+
+    async def test_adjacent_tool_run_coalesces_without_corrupting_user_text():
+        """Adversary: a tool run after a user text message must not merge into the
+        text message (string content) yet must still coalesce into one message."""
+        captured: list[dict] = []
+        provider = _anthropic_provider(captured)
+        messages = [
+            {"role": "user", "content": "r412 standalone text"},
+            {"role": "tool", "tool_call_id": "toolu_a", "content": "ok-a"},
+            {"role": "tool", "tool_call_id": "toolu_b", "content": "ok-b"},
+        ]
+    
+        await provider.complete(messages)
+        await provider.close()
+    
+        msgs = captured[0]["messages"]
+        assert msgs[0] == {"role": "user", "content": "r412 standalone text"}
+>       assert [m["role"] for m in msgs] == ["user", "user"]
+E       AssertionError: assert ['user', 'user', 'user'] == ['user', 'user']
+E         
+E         Left contains one more item: 'user'
+E         Use -v to get more diff
+
+tests/test_anthropic_tool_results.py:228: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:00:38,078 [AUDIT] {"timestamp": 1792015238.0781188, "event": "llm_call_start", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "message_count": 3}
+2026-10-14 18:00:38,078 [AUDIT] {"timestamp": 1792015238.078538, "event": "llm_call_complete", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.0781188, "event": "llm_call_start", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "message_count": 3}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.078538, "event": "llm_call_complete", "provider": "anthropic", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+___________________ test_claude_provider_inherits_coalescing ___________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1402/test_claude_provider_inherits_0')
+
+    async def test_claude_provider_inherits_coalescing(tmp_path):
+        """ClaudeProvider shares the converter; capture its wire shape too."""
+        auth_file = tmp_path / "claude.json"
+        claude_auth.save_tokens(
+            {
+                "access_token": "at-r412",
+                "refresh_token": "rt-r412",
+                "expires_at": time.time() + 3600,
+                "scopes": claude_auth.SCOPES.split(),
+                "subscription_type": "max",
+            },
+            auth_file,
+        )
+        captured: list[dict] = []
+    
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json=_message_body())
+    
+        provider = ClaudeProvider(
+            model="claude-sonnet-4-5",
+            auth_path=str(auth_file),
+            transport=httpx.MockTransport(handler),
+        )
+        provider._rate_limiter = AsyncTokenBucket(rate=0, capacity=0)
+        messages = [{"role": "user", "content": "r412 claude two tools"}]
+        _append_batch(
+            messages,
+            _assistant("", "toolu_a", "toolu_b"),
+            [("toolu_a", "ok-a", False), ("toolu_b", "Error: boom-b", True)],
+        )
+    
+        await provider.complete(messages)
+        await provider.close()
+    
+        payload = captured[0]
+>       _assert_alternating_and_batched(payload)
+
+tests/test_anthropic_tool_results.py:269: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+payload = {'model': 'claude-sonnet-4-5', 'max_tokens': 4096, 'messages': [{'role': 'user', 'content': 'r412 claude two tools'}, ...ser', 'content': [{'type': 'tool_result', 'tool_use_id': 'toolu_b', 'content': 'Error: boom-b'}]}], 'temperature': 0.7}
+
+    def _assert_alternating_and_batched(payload: dict) -> None:
+        """The Messages API contract: alternation + one user per tool batch."""
+        messages = payload["messages"]
+        roles = [message["role"] for message in messages]
+        assert roles[0] == "user", roles
+>       assert all(left != right for left, right in zip(roles, roles[1:])), f"consecutive: {roles}"
+E       AssertionError: consecutive: ['user', 'assistant', 'user', 'user']
+E       assert False
+E        +  where False = all(<generator object _assert_alternating_and_batched.<locals>.<genexpr> at 0x10a199d20>)
+
+tests/test_anthropic_tool_results.py:91: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:00:38,084 [AUDIT] {"timestamp": 1792015238.084288, "event": "llm_call_start", "provider": "claude", "model": "claude-sonnet-4-5", "message_count": 4}
+2026-10-14 18:00:38,084 [AUDIT] {"timestamp": 1792015238.084952, "event": "llm_call_complete", "provider": "claude", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.084288, "event": "llm_call_start", "provider": "claude", "model": "claude-sonnet-4-5", "message_count": 4}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792015238.084952, "event": "llm_call_complete", "provider": "claude", "model": "claude-3-5-sonnet-20241022", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+=========================== short test summary info ============================
+FAILED tests/test_anthropic_tool_results.py::test_two_tool_batch_coalesces_into_one_user_message
+FAILED tests/test_anthropic_tool_results.py::test_three_tool_batch_preserves_order_and_error_flags
+FAILED tests/test_anthropic_tool_results.py::test_interleaved_batches_alternate_roles_and_text
+FAILED tests/test_anthropic_tool_results.py::test_adjacent_tool_run_coalesces_without_corrupting_user_text
+FAILED tests/test_anthropic_tool_results.py::test_claude_provider_inherits_coalescing
+5 failed, 1 passed in 0.57s

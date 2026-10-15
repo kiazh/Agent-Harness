@@ -1,0 +1,3 @@
+Isolated wheel imports, 71 ECC agents, resource hashes: OK
+Verified machina-0.2.0-py3-none-any.whl
+Verified clean source distribution: machina-0.2.0.tar.gz

@@ -1,0 +1,7 @@
+tree-wide deferred-import census: 692 (cap 692)
+  security/store_fence.py: deferred=0
+  security/claude_auth.py: deferred=0
+  security/gemini_auth.py: deferred=0
+  security/copilot_auth.py: deferred=0
+  cli/auth.py: deferred=0
+security/* files are not in GOD_FILE_CEILINGS; store_fence.py is a new small leaf (stdlib only).

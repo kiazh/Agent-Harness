@@ -1,0 +1,70 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________________ test_nonpositive_size_guard_never_hangs ____________________
+
+    def test_nonpositive_size_guard_never_hangs():
+        """R4-088(f): non-positive sizes raise a typed error instead of looping.
+    
+        Runs in a subprocess so a regression fails this test instead of hanging
+        the suite forever.
+        """
+        code = (
+            "from machina.rag.chunker import RecursiveCharacterTextSplitter as S\n"
+            "for bad in (0, -1, -10):\n"
+            "    try:\n"
+            "        S._hard_split('abcdef', bad)\n"
+            "    except ValueError:\n"
+            "        pass\n"
+            "    else:\n"
+            "        raise SystemExit(3)\n"
+            "    try:\n"
+            "        S(chunk_size=4)._force_split('abcdef', bad, {})\n"
+            "    except ValueError:\n"
+            "        pass\n"
+            "    else:\n"
+            "        raise SystemExit(4)\n"
+            "try:\n"
+            "    S(chunk_size=0).split_text('ab')\n"
+            "except ValueError:\n"
+            "    pass\n"
+            "else:\n"
+            "    raise SystemExit(5)\n"
+            "print('guarded')\n"
+        )
+>       proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
+        )
+
+tests/test_chunker_overlap.py:41: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:557: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1221: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:2154: in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: -9 args: ['/Users/shadow/machina/.venv/bin/python', '-c'...>
+endtime = 230937.425550166, orig_timeout = 30, stdout_seq = []
+stderr_seq = [b'environment file could not be resolved\n']
+skip_check_and_raise = False
+
+    def _check_timeout(self, endtime, orig_timeout, stdout_seq, stderr_seq,
+                       skip_check_and_raise=False):
+        """Convenience for checking if a timeout has expired."""
+        if endtime is None:
+            return
+        if skip_check_and_raise or _time() > endtime:
+>           raise TimeoutExpired(
+                    self.args, orig_timeout,
+                    output=b''.join(stdout_seq) if stdout_seq else None,
+                    stderr=b''.join(stderr_seq) if stderr_seq else None)
+E           subprocess.TimeoutExpired: Command '['/Users/shadow/machina/.venv/bin/python', '-c', "from machina.rag.chunker import RecursiveCharacterTextSplitter as S\nfor bad in (0, -1, -10):\n    try:\n        S._hard_split('abcdef', bad)\n    except ValueError:\n        pass\n    else:\n        raise SystemExit(3)\n    try:\n        S(chunk_size=4)._force_split('abcdef', bad, {})\n    except ValueError:\n        pass\n    else:\n        raise SystemExit(4)\ntry:\n    S(chunk_size=0).split_text('ab')\nexcept ValueError:\n    pass\nelse:\n    raise SystemExit(5)\nprint('guarded')\n"]' timed out after 30 seconds
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1268: TimeoutExpired
+=========================== short test summary info ============================
+FAILED tests/test_chunker_overlap.py::test_nonpositive_size_guard_never_hangs
+1 failed in 30.44s

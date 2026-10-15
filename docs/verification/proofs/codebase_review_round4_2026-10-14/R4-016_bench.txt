@@ -1,0 +1,5 @@
+small(one secret)    len=    107  before=  0.040 ms  after=  0.046 ms  x1.14
+mid ~5KB             len=   9240  before=  1.702 ms  after=  1.935 ms  x1.14
+big ~64KB            len= 115500  before= 20.075 ms  after= 24.136 ms  x1.20
+huge blob pass1: 348.1 ms (fired=['bearer_token', 'credit_card', 'generic_secret', 'ssn']); pass2(only fired): 119.3 ms
+all-pattern scan cost: 239.3 ms

@@ -1,0 +1,10 @@
+PASS (a) hub: listing/telemetry survive corrupt entries; install raises SkillHubError
+PASS (b) delete: owned tree removed; traversal/foreign manifests refuse; plain dir untouched
+PASS (c1) parse: boundary accepted; cap+1 rejected; symlinked 8x cap never read
+PASS (c2) soulspec: 64 refs ok / 65 rejected; oversized symlink never read
+PASS (d) fsync: best-effort on Windows branch; still strict on POSIX branch
+PASS (e) url: :99999/:abc/:8443 → RepoInstallError; plain link accepted
+PASS (f) workflow: bare go/rust/swift gated; real tech tasks and inherited stack activate
+PASS (b2) registry.delete_skill: manifest tree removed; plain skill unchanged path
+
+all probe cases passed

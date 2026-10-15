@@ -1,0 +1,17 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 6 items
+
+tests/test_r4_049b_fdclose.py::test_chatgpt_save_tokens_chmod_failure_closes_fd PASSED [ 16%]
+tests/test_r4_049b_fdclose.py::test_chatgpt_invalidate_credentials_chmod_failure_closes_fd PASSED [ 33%]
+tests/test_r4_049b_fdclose.py::test_copilot_publish_device_token_chmod_failure_closes_fd PASSED [ 50%]
+tests/test_r4_049b_fdclose.py::test_providers_save_models_chmod_failure_closes_fd PASSED [ 66%]
+tests/test_r4_049b_fdclose.py::test_chmod_temp_file_helper_closes_fd_on_failure PASSED [ 83%]
+tests/test_r4_049b_fdclose.py::test_stores_still_land_0600_after_fix PASSED [100%]
+
+============================== 6 passed in 0.31s ===============================

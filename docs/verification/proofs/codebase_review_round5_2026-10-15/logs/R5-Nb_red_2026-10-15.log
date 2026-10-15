@@ -1,0 +1,27 @@
+environment file could not be resolved
+Ignoring unreadable config persona_description in /Users/shadow/.machina/config.yaml: ImportError
+ImportError
+/Users/shadow/machina/machina/core/config.py:614 (load)
+/Users/shadow/machina/machina/core/config.py:282 (validate_value)
+/Users/shadow/machina/machina/memory/__init__.py:15 (<module>)
+/Users/shadow/machina/machina/memory/approval.py:23 (<module>)
+2026-10-14 23:30:54,237 [AUDIT] {"timestamp": 1792035054.237312, "event": "rag_index_start", "session_id": "01a4aa2d-55f3-4bb4-955a-6e16ee3af4f2", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "doc_type": "text"}
+2026-10-14 23:30:54,248 [AUDIT] {"timestamp": 1792035054.248349, "event": "rag_index_complete", "session_id": "01a4aa2d-55f3-4bb4-955a-6e16ee3af4f2", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "chunks_stored": 1}
+source                   = 'https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1'
+redact_secrets (storage) = 'https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1'
+url_credentials          = 'https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1'
+_redact_or_failed        = 'https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1'
+applied source redactor  = 'https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1' (_redact_or_failed)
+context_chunks rows: 1
+  document_source: userinfo_leak=True query_leak=True
+    https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1
+  payload.metadata.source: userinfo_leak=True query_leak=True
+    https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1
+  payload.source: userinfo_leak=True query_leak=True
+    https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1
+audit rows: 2
+  event=rag_index_start userinfo_leak=False query_leak=False
+    {"event": "rag_index_start", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "doc_type": "text", "timestamp": 1792035054.237312, "session_id": 
+  event=rag_index_complete userinfo_leak=False query_leak=False
+    {"event": "rag_index_complete", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "timestamp": 1792035054.248349, "session_id": "01a4aa2d-55f3-4b
+RED REPRODUCED: raw credential survives in unit-storage-redactor, context_chunks

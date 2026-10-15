@@ -1,0 +1,345 @@
+F.FFFFFFF                                                                [100%]
+=================================== FAILURES ===================================
+E   assert 'Error: Comma... out after 2s' == "Error: tool ... out after 2s"
+      
+      - Error: tool 'terminal' timed out after 2s
+      ?        ^ ------- ^ ^^^
+      + Error: Command timed out after 2s
+      ?        ^  ^^ ^
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:26:14,696 [AUDIT] {"timestamp": 1792016774.696011, "event": "agent_run_stream_start", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "agent_id": "harness"}
+2026-10-14 18:26:14,806 [AUDIT] {"timestamp": 1792016774.806616, "event": "tool_call_start", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "tool_name": "terminal"}
+2026-10-14 18:26:14,812 [AUDIT] {"timestamp": 1792016774.812608, "event": "permission_allowed", "request_id": "beb743138d92457abd46ac2a33a4b29d", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "turn_id": "turn:aa291fc792ab494a8df01b85fd51da89:1bd204cca8df42eeb29e753f2002d880", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "16a8d71982b7a498", "reason": "full-mode session grant"}
+2026-10-14 18:26:16,855 [AUDIT] {"timestamp": 1792016776.855187, "event": "tool_call_error", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "tool_name": "terminal", "duration_ms": 2048}
+2026-10-14 18:26:16,857 [AUDIT] {"timestamp": 1792016776.857148, "event": "tool_call_complete", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "tool_name": "terminal", "duration_ms": 2048}
+2026-10-14 18:26:16,886 [AUDIT] {"timestamp": 1792016776.885988, "event": "agent_run_complete", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016774.696011, "event": "agent_run_stream_start", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.skills.registry:registry.py:659 Skipping skill /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/skills/cost-optimization/SKILL.md: ValueError
+WARNING  machina.skills.registry:registry.py:659 Skipping skill /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/skills/prompt-engineering/SKILL.md: ValueError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016774.806616, "event": "tool_call_start", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016774.812608, "event": "permission_allowed", "request_id": "beb743138d92457abd46ac2a33a4b29d", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "turn_id": "turn:aa291fc792ab494a8df01b85fd51da89:1bd204cca8df42eeb29e753f2002d880", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "16a8d71982b7a498", "reason": "full-mode session grant"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.agent:agent.py:1085 Tool execution failed for 'terminal'
+ToolError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/core/agent.py:1033 (_run_one)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:488 (wait_for)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/tools/base.py:364 (execute)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/tools/terminal.py:440 (terminal)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016776.855187, "event": "tool_call_error", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "tool_name": "terminal", "duration_ms": 2048}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016776.857148, "event": "tool_call_complete", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "tool_name": "terminal", "duration_ms": 2048}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016776.885988, "event": "agent_run_complete", "session_id": "581e60da-c3d1-4c36-92cc-4e64ac85adc3", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    opentelemetry.context:__init__.py:129 Failed to detach context
+Traceback (most recent call last):
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/__init__.py", line 127, in detach
+    _RUNTIME_CONTEXT.detach(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/contextvars_context.py", line 40, in detach
+    self._current_context.reset(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+ValueError: <Token var=<ContextVar name='current_context' default={} at 0x10b0e2020> at 0x10c748600> was created in a different Context
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:200: assert 'Error: Comma... out after 2s' == "Error: tool ... out after 2s"
+E   AssertionError: [60.0]
+    assert [60.0] == [59.0]
+      
+      At index 0 diff: 60.0 != 59.0
+      Use -v to get more diff
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:26:17,193 [AUDIT] {"timestamp": 1792016777.193491, "event": "agent_run_stream_start", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "agent_id": "harness"}
+2026-10-14 18:26:17,271 [AUDIT] {"timestamp": 1792016777.2712069, "event": "tool_call_start", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "tool_name": "terminal"}
+2026-10-14 18:26:17,275 [AUDIT] {"timestamp": 1792016777.275053, "event": "permission_allowed", "request_id": "fc81609d2ec6484ea4a8b2259b8f45cf", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "turn_id": "turn:5f851b3d3fdc48fb9d814eec52b1140e:c6ce33b432c14a94bbf81b9fcd190a37", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "7ff783da7c767e52", "reason": "full-mode session grant"}
+2026-10-14 18:26:17,780 [AUDIT] {"timestamp": 1792016777.7804532, "event": "tool_call_error", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "tool_name": "terminal", "duration_ms": 508}
+2026-10-14 18:26:17,782 [AUDIT] {"timestamp": 1792016777.7824981, "event": "tool_call_complete", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "tool_name": "terminal", "duration_ms": 509}
+2026-10-14 18:26:17,809 [AUDIT] {"timestamp": 1792016777.809581, "event": "agent_run_complete", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016777.193491, "event": "agent_run_stream_start", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016777.2712069, "event": "tool_call_start", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016777.275053, "event": "permission_allowed", "request_id": "fc81609d2ec6484ea4a8b2259b8f45cf", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "turn_id": "turn:5f851b3d3fdc48fb9d814eec52b1140e:c6ce33b432c14a94bbf81b9fcd190a37", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "7ff783da7c767e52", "reason": "full-mode session grant"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.agent:agent.py:1085 Tool execution failed for 'terminal'
+TimeoutError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/core/agent.py:1033 (_run_one)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:104 (recorded)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:487 (wait_for)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/timeouts.py:114 (__aexit__)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016777.7804532, "event": "tool_call_error", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "tool_name": "terminal", "duration_ms": 508}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016777.7824981, "event": "tool_call_complete", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "tool_name": "terminal", "duration_ms": 509}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016777.809581, "event": "agent_run_complete", "session_id": "25f89e3e-e87e-4053-b072-7f398db02f1e", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    opentelemetry.context:__init__.py:129 Failed to detach context
+Traceback (most recent call last):
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/__init__.py", line 127, in detach
+    _RUNTIME_CONTEXT.detach(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/contextvars_context.py", line 40, in detach
+    self._current_context.reset(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+ValueError: <Token var=<ContextVar name='current_context' default={} at 0x10b0e2020> at 0x10cd45780> was created in a different Context
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:239: AssertionError: [60.0]
+E   assert 'Error: ' == "Error: tool ...out after 60s"
+      
+      - Error: tool 'terminal' timed out after 60s
+      + Error:
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:26:17,924 [AUDIT] {"timestamp": 1792016777.9245162, "event": "agent_run_stream_start", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "agent_id": "harness"}
+2026-10-14 18:26:18,014 [AUDIT] {"timestamp": 1792016778.014276, "event": "tool_call_start", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "tool_name": "terminal"}
+2026-10-14 18:26:18,019 [AUDIT] {"timestamp": 1792016778.019009, "event": "permission_allowed", "request_id": "1887c7d7813d4ba983df7e6a7b953796", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "turn_id": "turn:f6f9e4db0375426295d9a673985d5036:0ad1c6fab7694fd6a6da8c4e5c2ee32d", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "3f749c95acb0e501", "reason": "full-mode session grant"}
+2026-10-14 18:26:18,522 [AUDIT] {"timestamp": 1792016778.522889, "event": "tool_call_error", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "tool_name": "terminal", "duration_ms": 507}
+2026-10-14 18:26:18,524 [AUDIT] {"timestamp": 1792016778.524425, "event": "tool_call_complete", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "tool_name": "terminal", "duration_ms": 508}
+2026-10-14 18:26:18,546 [AUDIT] {"timestamp": 1792016778.546338, "event": "agent_run_complete", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016777.9245162, "event": "agent_run_stream_start", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016778.014276, "event": "tool_call_start", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016778.019009, "event": "permission_allowed", "request_id": "1887c7d7813d4ba983df7e6a7b953796", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "turn_id": "turn:f6f9e4db0375426295d9a673985d5036:0ad1c6fab7694fd6a6da8c4e5c2ee32d", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "3f749c95acb0e501", "reason": "full-mode session grant"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.agent:agent.py:1085 Tool execution failed for 'terminal'
+TimeoutError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/core/agent.py:1033 (_run_one)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:104 (recorded)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:487 (wait_for)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/timeouts.py:114 (__aexit__)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016778.522889, "event": "tool_call_error", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "tool_name": "terminal", "duration_ms": 507}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016778.524425, "event": "tool_call_complete", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "tool_name": "terminal", "duration_ms": 508}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016778.546338, "event": "agent_run_complete", "session_id": "d4841fe3-a084-4eef-b91e-e5def048461e", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    opentelemetry.context:__init__.py:129 Failed to detach context
+Traceback (most recent call last):
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/__init__.py", line 127, in detach
+    _RUNTIME_CONTEXT.detach(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/contextvars_context.py", line 40, in detach
+    self._current_context.reset(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+ValueError: <Token var=<ContextVar name='current_context' default={} at 0x10b0e2020> at 0x10cce8a40> was created in a different Context
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:242: assert 'Error: ' == "Error: tool ...out after 60s"
+E   AssertionError: [60.0]
+    assert [60.0] == [90.0]
+      
+      At index 0 diff: 60.0 != 90.0
+      Use -v to get more diff
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:26:18,657 [AUDIT] {"timestamp": 1792016778.657661, "event": "agent_run_stream_start", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "agent_id": "harness"}
+2026-10-14 18:26:18,696 [AUDIT] {"timestamp": 1792016778.6963992, "event": "tool_call_start", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "tool_name": "terminal"}
+2026-10-14 18:26:18,698 [AUDIT] {"timestamp": 1792016778.698546, "event": "permission_allowed", "request_id": "6131afbb6bb94034b588c11aa1b3e49e", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "turn_id": "turn:1339ddd0d3ae412e8f2232fd41114896:cbdb7b46b6e3441bb6f23a5d92bf170e", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "35ec5c2ba4ca6453", "reason": "full-mode session grant"}
+2026-10-14 18:26:19,201 [AUDIT] {"timestamp": 1792016779.201407, "event": "tool_call_error", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "tool_name": "terminal", "duration_ms": 504}
+2026-10-14 18:26:19,202 [AUDIT] {"timestamp": 1792016779.202365, "event": "tool_call_complete", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "tool_name": "terminal", "duration_ms": 504}
+2026-10-14 18:26:19,220 [AUDIT] {"timestamp": 1792016779.220358, "event": "agent_run_complete", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016778.657661, "event": "agent_run_stream_start", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016778.6963992, "event": "tool_call_start", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016778.698546, "event": "permission_allowed", "request_id": "6131afbb6bb94034b588c11aa1b3e49e", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "turn_id": "turn:1339ddd0d3ae412e8f2232fd41114896:cbdb7b46b6e3441bb6f23a5d92bf170e", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "35ec5c2ba4ca6453", "reason": "full-mode session grant"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.agent:agent.py:1085 Tool execution failed for 'terminal'
+TimeoutError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/core/agent.py:1033 (_run_one)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:104 (recorded)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:487 (wait_for)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/timeouts.py:114 (__aexit__)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.201407, "event": "tool_call_error", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "tool_name": "terminal", "duration_ms": 504}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.202365, "event": "tool_call_complete", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "tool_name": "terminal", "duration_ms": 504}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.220358, "event": "agent_run_complete", "session_id": "c5616578-0e4e-4d0f-88b2-3fd804c120bc", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    opentelemetry.context:__init__.py:129 Failed to detach context
+Traceback (most recent call last):
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/__init__.py", line 127, in detach
+    _RUNTIME_CONTEXT.detach(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/contextvars_context.py", line 40, in detach
+    self._current_context.reset(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+ValueError: <Token var=<ContextVar name='current_context' default={} at 0x10b0e2020> at 0x10ce27680> was created in a different Context
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:239: AssertionError: [60.0]
+E   AssertionError: [60.0]
+    assert [60.0] == [300.0]
+      
+      At index 0 diff: 60.0 != 300.0
+      Use -v to get more diff
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:26:19,301 [AUDIT] {"timestamp": 1792016779.30127, "event": "agent_run_stream_start", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "agent_id": "harness"}
+2026-10-14 18:26:19,332 [AUDIT] {"timestamp": 1792016779.332381, "event": "tool_call_start", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "tool_name": "terminal"}
+2026-10-14 18:26:19,334 [AUDIT] {"timestamp": 1792016779.3341289, "event": "permission_allowed", "request_id": "1a0fa6f2883049d58386c36a00fe1e41", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "turn_id": "turn:dd503a60507040cf8fe4e516f46caa20:7c86b6ecec934c7c8436b291a2cd0c53", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "184dca28748f93ab", "reason": "full-mode session grant"}
+2026-10-14 18:26:19,839 [AUDIT] {"timestamp": 1792016779.8394089, "event": "tool_call_error", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "tool_name": "terminal", "duration_ms": 506}
+2026-10-14 18:26:19,841 [AUDIT] {"timestamp": 1792016779.841685, "event": "tool_call_complete", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "tool_name": "terminal", "duration_ms": 507}
+2026-10-14 18:26:19,865 [AUDIT] {"timestamp": 1792016779.8651369, "event": "agent_run_complete", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.30127, "event": "agent_run_stream_start", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.332381, "event": "tool_call_start", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.3341289, "event": "permission_allowed", "request_id": "1a0fa6f2883049d58386c36a00fe1e41", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "turn_id": "turn:dd503a60507040cf8fe4e516f46caa20:7c86b6ecec934c7c8436b291a2cd0c53", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "184dca28748f93ab", "reason": "full-mode session grant"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.agent:agent.py:1085 Tool execution failed for 'terminal'
+TimeoutError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/core/agent.py:1033 (_run_one)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:104 (recorded)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:487 (wait_for)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/timeouts.py:114 (__aexit__)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.8394089, "event": "tool_call_error", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "tool_name": "terminal", "duration_ms": 506}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.841685, "event": "tool_call_complete", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "tool_name": "terminal", "duration_ms": 507}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.8651369, "event": "agent_run_complete", "session_id": "ff21a176-6b78-4d53-b466-11a0d19f4486", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    opentelemetry.context:__init__.py:129 Failed to detach context
+Traceback (most recent call last):
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/__init__.py", line 127, in detach
+    _RUNTIME_CONTEXT.detach(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/contextvars_context.py", line 40, in detach
+    self._current_context.reset(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+ValueError: <Token var=<ContextVar name='current_context' default={} at 0x10b0e2020> at 0x10ce27840> was created in a different Context
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:239: AssertionError: [60.0]
+E   AssertionError: [60.0]
+    assert [60.0] == [1.0]
+      
+      At index 0 diff: 60.0 != 1.0
+      Use -v to get more diff
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:26:19,962 [AUDIT] {"timestamp": 1792016779.962229, "event": "agent_run_stream_start", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "agent_id": "harness"}
+2026-10-14 18:26:19,999 [AUDIT] {"timestamp": 1792016779.999061, "event": "tool_call_start", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "tool_name": "terminal"}
+2026-10-14 18:26:20,000 [AUDIT] {"timestamp": 1792016780.000951, "event": "permission_allowed", "request_id": "e4150bae91834a8885e190351fa59dff", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "turn_id": "turn:965d1b494d4d4c248dd9c6ab0a99ef2c:3fb58e73605444168e9eba7d52fa1741", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "6b53a5891d282044", "reason": "full-mode session grant"}
+2026-10-14 18:26:20,001 [AUDIT] {"timestamp": 1792016780.001677, "event": "tool_call_error", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "tool_name": "terminal", "duration_ms": 2}
+2026-10-14 18:26:20,002 [AUDIT] {"timestamp": 1792016780.002191, "event": "tool_call_complete", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "tool_name": "terminal", "duration_ms": 2}
+2026-10-14 18:26:20,011 [AUDIT] {"timestamp": 1792016780.011162, "event": "agent_run_complete", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.962229, "event": "agent_run_stream_start", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016779.999061, "event": "tool_call_start", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.000951, "event": "permission_allowed", "request_id": "e4150bae91834a8885e190351fa59dff", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "turn_id": "turn:965d1b494d4d4c248dd9c6ab0a99ef2c:3fb58e73605444168e9eba7d52fa1741", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "6b53a5891d282044", "reason": "full-mode session grant"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.agent:agent.py:1085 Tool execution failed for 'terminal'
+ValidationError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/core/agent.py:1033 (_run_one)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:104 (recorded)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:488 (wait_for)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/tools/base.py:364 (execute)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/tools/terminal.py:278 (terminal)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.001677, "event": "tool_call_error", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "tool_name": "terminal", "duration_ms": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.002191, "event": "tool_call_complete", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "tool_name": "terminal", "duration_ms": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.011162, "event": "agent_run_complete", "session_id": "7fa9e175-3ee9-482f-9048-0155a6039201", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    opentelemetry.context:__init__.py:129 Failed to detach context
+Traceback (most recent call last):
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/__init__.py", line 127, in detach
+    _RUNTIME_CONTEXT.detach(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/contextvars_context.py", line 40, in detach
+    self._current_context.reset(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+ValueError: <Token var=<ContextVar name='current_context' default={} at 0x10b0e2020> at 0x10aa473c0> was created in a different Context
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:263: AssertionError: [60.0]
+E   AssertionError: [60.0]
+    assert [60.0] == [1.0]
+      
+      At index 0 diff: 60.0 != 1.0
+      Use -v to get more diff
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:26:20,073 [AUDIT] {"timestamp": 1792016780.073832, "event": "agent_run_stream_start", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "agent_id": "harness"}
+2026-10-14 18:26:20,107 [AUDIT] {"timestamp": 1792016780.107792, "event": "tool_call_start", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "tool_name": "terminal"}
+2026-10-14 18:26:20,109 [AUDIT] {"timestamp": 1792016780.109477, "event": "permission_allowed", "request_id": "1a33091bb8d443bc9982a80c65a8b504", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "turn_id": "turn:5b3b6923e05c443285c8b89d1231133b:282b5038fd854605ac5f8c499cd3f4e6", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "023bcdc6423a141b", "reason": "full-mode session grant"}
+2026-10-14 18:26:20,110 [AUDIT] {"timestamp": 1792016780.110125, "event": "tool_call_error", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "tool_name": "terminal", "duration_ms": 2}
+2026-10-14 18:26:20,110 [AUDIT] {"timestamp": 1792016780.1106298, "event": "tool_call_complete", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "tool_name": "terminal", "duration_ms": 2}
+2026-10-14 18:26:20,120 [AUDIT] {"timestamp": 1792016780.12014, "event": "agent_run_complete", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.073832, "event": "agent_run_stream_start", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.107792, "event": "tool_call_start", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.109477, "event": "permission_allowed", "request_id": "1a33091bb8d443bc9982a80c65a8b504", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "turn_id": "turn:5b3b6923e05c443285c8b89d1231133b:282b5038fd854605ac5f8c499cd3f4e6", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "023bcdc6423a141b", "reason": "full-mode session grant"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.agent:agent.py:1085 Tool execution failed for 'terminal'
+ValidationError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/core/agent.py:1033 (_run_one)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:104 (recorded)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:488 (wait_for)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/tools/base.py:364 (execute)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/tools/terminal.py:278 (terminal)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.110125, "event": "tool_call_error", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "tool_name": "terminal", "duration_ms": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.1106298, "event": "tool_call_complete", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "tool_name": "terminal", "duration_ms": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.12014, "event": "agent_run_complete", "session_id": "4939b69a-59e8-40a4-940d-aad93c259b45", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    opentelemetry.context:__init__.py:129 Failed to detach context
+Traceback (most recent call last):
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/__init__.py", line 127, in detach
+    _RUNTIME_CONTEXT.detach(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/contextvars_context.py", line 40, in detach
+    self._current_context.reset(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+ValueError: <Token var=<ContextVar name='current_context' default={} at 0x10b0e2020> at 0x10ce32b00> was created in a different Context
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:263: AssertionError: [60.0]
+E   AssertionError: [60.0]
+    assert [60.0] == [300.0]
+      
+      At index 0 diff: 60.0 != 300.0
+      Use -v to get more diff
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:26:20,169 [AUDIT] {"timestamp": 1792016780.16919, "event": "agent_run_stream_start", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "agent_id": "harness"}
+2026-10-14 18:26:20,198 [AUDIT] {"timestamp": 1792016780.1980789, "event": "tool_call_start", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "tool_name": "terminal"}
+2026-10-14 18:26:20,199 [AUDIT] {"timestamp": 1792016780.1995142, "event": "permission_allowed", "request_id": "a93865538e354ba9a5a44265398a8631", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "turn_id": "turn:0314aee99f644294902f3c4249617108:b543b90cfeff4081b7d68df20cc7ab47", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "08e160d0e74cf3f1", "reason": "full-mode session grant"}
+2026-10-14 18:26:20,200 [AUDIT] {"timestamp": 1792016780.200105, "event": "tool_call_error", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "tool_name": "terminal", "duration_ms": 1}
+2026-10-14 18:26:20,200 [AUDIT] {"timestamp": 1792016780.200615, "event": "tool_call_complete", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "tool_name": "terminal", "duration_ms": 1}
+2026-10-14 18:26:20,208 [AUDIT] {"timestamp": 1792016780.208683, "event": "agent_run_complete", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.16919, "event": "agent_run_stream_start", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.1980789, "event": "tool_call_start", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "tool_name": "terminal"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.1995142, "event": "permission_allowed", "request_id": "a93865538e354ba9a5a44265398a8631", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "turn_id": "turn:0314aee99f644294902f3c4249617108:b543b90cfeff4081b7d68df20cc7ab47", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "08e160d0e74cf3f1", "reason": "full-mode session grant"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.agent:agent.py:1085 Tool execution failed for 'terminal'
+ValidationError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/core/agent.py:1033 (_run_one)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:104 (recorded)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:488 (wait_for)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/tools/base.py:364 (execute)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/machina/tools/terminal.py:278 (terminal)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.200105, "event": "tool_call_error", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "tool_name": "terminal", "duration_ms": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.200615, "event": "tool_call_complete", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "tool_name": "terminal", "duration_ms": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016780.208683, "event": "agent_run_complete", "session_id": "12666ae1-5351-4e9c-8c6c-0bbaec125405", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    opentelemetry.context:__init__.py:129 Failed to detach context
+Traceback (most recent call last):
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/__init__.py", line 127, in detach
+    _RUNTIME_CONTEXT.detach(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/opentelemetry/context/contextvars_context.py", line 40, in detach
+    self._current_context.reset(token)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+ValueError: <Token var=<ContextVar name='current_context' default={} at 0x10b0e2020> at 0x10cd44f40> was created in a different Context
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina_r4_019_scratch/tests/test_tool_timeout_contract.py:263: AssertionError: [60.0]
+=========================== short test summary info ============================
+FAILED tests/test_tool_timeout_contract.py::test_requested_timeout_cancels_at_boundary_and_reaches_model
+FAILED tests/test_tool_timeout_contract.py::test_boundary_values_map_to_the_requested_budget[59]
+FAILED tests/test_tool_timeout_contract.py::test_boundary_values_map_to_the_requested_budget[60]
+FAILED tests/test_tool_timeout_contract.py::test_boundary_values_map_to_the_requested_budget[90]
+FAILED tests/test_tool_timeout_contract.py::test_boundary_values_map_to_the_requested_budget[300]
+FAILED tests/test_tool_timeout_contract.py::test_out_of_schema_requests_keep_the_handlers_typed_error[0]
+FAILED tests/test_tool_timeout_contract.py::test_out_of_schema_requests_keep_the_handlers_typed_error[-3]
+FAILED tests/test_tool_timeout_contract.py::test_out_of_schema_requests_keep_the_handlers_typed_error[1000]
+8 failed, 1 passed in 6.22s

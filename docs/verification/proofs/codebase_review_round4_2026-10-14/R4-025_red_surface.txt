@@ -1,0 +1,9 @@
+HEAD:machina/core/agent.py:2
+HEAD:machina/core/agent_def.py:15
+HEAD:machina/core/config.py:3
+HEAD:machina/db/schema.sql:1
+HEAD:machina/soulspec/adapters.py:3
+HEAD:machina/soulspec/conformance.py:5
+HEAD:machina/soulspec/lifecycle.py:1
+HEAD:machina/soulspec/merge.py:3
+HEAD:machina/soulspec/schema.py:5

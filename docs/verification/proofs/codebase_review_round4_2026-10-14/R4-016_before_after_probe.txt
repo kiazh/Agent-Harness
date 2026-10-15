@@ -1,0 +1,75 @@
+=== before/after per corpus class ===
+dotted_token_short_lead
+  text : 'token=abc.defghijklmnop.qrstuvwxyz0123'
+  before: 'token=abc.defghijklmnop.qrstuvwxyz0123'  [leak=True tail=True]
+  after : 'token=[REDACTED_SECRET]'  [ok=True]
+dotted_secret_tail
+  text : 'secret=ABCDEFGHIJKLMNOP.qrstuvwxyz012345'
+  before: 'secret=[REDACTED_SECRET].qrstuvwxyz012345'  [leak=False tail=True]
+  after : 'secret=[REDACTED_SECRET]'  [ok=True]
+quoted_dotted_token
+  text : 'token="abc.defghijklmnop.qrstuvwxyz0123"'
+  before: 'token="abc.defghijklmnop.qrstuvwxyz0123"'  [leak=True tail=True]
+  after : 'token=[REDACTED_SECRET]'  [ok=True]
+quoted_dotted_secret
+  text : 'secret="ABCDEFGHIJKLMNOP.qrstuvwxyz012345"'
+  before: 'secret=[REDACTED_SECRET].qrstuvwxyz012345"'  [leak=False tail=True]
+  after : 'secret=[REDACTED_SECRET]'  [ok=True]
+dotted_access_token
+  text : 'access_token=abc.defghijklmnop.qrstuvwxyz0123'
+  before: 'access_token=abc.defghijklmnop.qrstuvwxyz0123'  [leak=True tail=True]
+  after : 'access_token=[REDACTED_SECRET]'  [ok=True]
+dotted_api_key_short_lead
+  text : 'api_key=abc.defghijklmnop.qrstuvwxyz0123'
+  before: 'api_key=abc.defghijklmnop.qrstuvwxyz0123'  [leak=True tail=True]
+  after : 'api_key=[REDACTED_SECRET]'  [ok=True]
+urlsafe_token_tail
+  text : 'token=Zm9vYmFyQmF6UXV4+KzEy/MzQ1Njc4OT='
+  before: 'token=[REDACTED_SECRET]+KzEy/MzQ1Njc4OT='  [leak=False tail=True]
+  after : 'token=[REDACTED_SECRET]'  [ok=True]
+urlsafe_quoted_secret_tail
+  text : 'secret="Zm9vYmFyQmF6UXV4+KzEy/MzQ1Njc4OTA="'
+  before: 'secret=[REDACTED_SECRET]+KzEy/MzQ1Njc4OTA="'  [leak=False tail=True]
+  after : 'secret=[REDACTED_SECRET]'  [ok=True]
+padded_jwt
+  text : 'token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0=.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'
+  before: 'token=[REDACTED_SECRET].eyJzdWIiOiIxMjM0NTY3ODkwIn0=.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'  [leak=False tail=True]
+  after : 'token=[REDACTED_JWT]'  [ok=True]
+card_17_luhn_valid
+  text : 'card 40000000000000006 charged'
+  before: 'card 40000000000000006 charged'  [leak=True tail=True]
+  after : 'card [REDACTED_CC] charged'  [ok=True]
+card_19_luhn_valid
+  text : 'card 4000000000000000006 charged'
+  before: 'card 4000000000000000006 charged'  [leak=True tail=True]
+  after : 'card [REDACTED_CC] charged'  [ok=True]
+bearer_of_bad_news
+  text : 'the report was a bearer of bad news'
+  before: 'the report was a bearer [REDACTED_TOKEN] bad news'  [leak=False tail=False]
+  after : 'the report was a bearer of bad news'  [ok=True]
+bearer_token_phrase
+  text : 'the bearer token is not configured yet'
+  before: 'the bearer [REDACTED_TOKEN] is not configured yet'  [leak=False tail=False]
+  after : 'the bearer token is not configured yet'  [ok=True]
+task_hex_identifier
+  text : 'task-0123456789abcdef0123456789'
+  before: 'ta[REDACTED_OPENAI_KEY]'  [leak=False tail=False]
+  after : 'task-0123456789abcdef0123456789'  [ok=True]
+math_9_pow_9
+  text : '387420489'
+  before: '[REDACTED_SSN]'  [leak=False tail=False]
+  after : '387420489'  [ok=True]
+
+=== idempotence (all corpus texts) ===
+non-idempotent cases: none
+
+=== streamed benign task- identifier (no mangle check) ===
+char-at-a-time: 'task-0123456789abcdef0123456789' equal: True
+all 2-way splits equal: True
+
+=== fuzz: no 8-char fragment of embedded secret survives (batch) ===
+fuzz batch leaks: 0 / 300
+
+=== micro-benchmark (hot path, 200 x ~24KB text) ===
+text length: 1836000 chars
+before: 281.33 ms/call; after: 448.79 ms/call; delta: +167.46 ms (+59.5%)

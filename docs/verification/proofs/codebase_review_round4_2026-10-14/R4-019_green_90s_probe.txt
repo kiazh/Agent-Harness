@@ -1,0 +1,11 @@
+2026-10-14 18:29:39,280 [AUDIT] {"timestamp": 1792016979.280301, "event": "agent_run_stream_start", "session_id": "ac539452-8c22-4e98-89fd-b7e44d23ec72", "agent_id": "harness"}
+2026-10-14 18:29:39,392 [AUDIT] {"timestamp": 1792016979.39284, "event": "tool_call_start", "session_id": "ac539452-8c22-4e98-89fd-b7e44d23ec72", "tool_name": "terminal"}
+2026-10-14 18:29:39,400 [AUDIT] {"timestamp": 1792016979.400227, "event": "permission_allowed", "request_id": "78df2ed8f1994d4495ce1fc8a11a2940", "session_id": "ac539452-8c22-4e98-89fd-b7e44d23ec72", "turn_id": "turn:d141813714674914bd2e8ed40eae0556:c24ac289008045efa59d975f579e451c", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "full", "digest_prefix": "4ade0bb14b81158a", "reason": "full-mode session grant"}
+2026-10-14 18:31:09,410 [AUDIT] {"timestamp": 1792017069.4097338, "event": "tool_call_error", "session_id": "ac539452-8c22-4e98-89fd-b7e44d23ec72", "tool_name": "terminal", "duration_ms": 90014}
+2026-10-14 18:31:09,418 [AUDIT] {"timestamp": 1792017069.418016, "event": "tool_call_complete", "session_id": "ac539452-8c22-4e98-89fd-b7e44d23ec72", "tool_name": "terminal", "duration_ms": 90017}
+2026-10-14 18:31:09,472 [AUDIT] {"timestamp": 1792017069.472589, "event": "agent_run_complete", "session_id": "ac539452-8c22-4e98-89fd-b7e44d23ec72", "iterations": 2, "total_tokens": 24, "tool_calls_count": 1}
+
+RED-PROBE elapsed=90.3s result="Error: tool 'terminal' timed out after 90s"
+
+.
+1 passed in 90.90s (0:01:30)

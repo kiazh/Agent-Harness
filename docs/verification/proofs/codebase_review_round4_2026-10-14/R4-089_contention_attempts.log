@@ -1,0 +1,46 @@
+attempt 1: 7 failed, 183 passed in 79.72s (0:01:19) (db-lock errors seen: 15)
+--- attempt 1 failures ---
+ERROR    machina.memory.consolidator:consolidator.py:429 Failed to write memory: DeadlockDetectedError
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.tools.memory:memory.py:108 Failed to store memory: DeadlockDetectedError
+FAILED tests/test_memory_bug_fixes.py::TestConsolidatorDedupEmbedding::test_paraphrase_of_stored_memory_is_deduped
+FAILED tests/test_memory_bug_fixes.py::TestConsolidatorDedupEmbedding::test_intra_batch_paraphrases_write_once
+FAILED tests/test_memory_approval.py::TestApprovalGateWiring::test_enabled_routes_add_to_pending_then_approve
+FAILED tests/test_memory_approval.py::TestApprovalGateWiring::test_enabled_reject_creates_no_memory
+   6 asyncpg.exceptions.DeadlockDetectedError
+attempt 2: 5 failed, 184 passed, 1 error in 105.77s (0:01:45) (db-lock errors seen: 12)
+--- attempt 2 failures ---
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+FAILED tests/test_memory_bug_fixes.py::TestConsolidatorDedupEmbedding::test_paraphrase_of_stored_memory_is_deduped
+FAILED tests/test_memory_approval.py::TestApprovalGateWiring::test_enabled_routes_add_to_pending_then_approve
+FAILED tests/test_memory_approval.py::TestApprovalGateWiring::test_enabled_reject_creates_no_memory
+FAILED tests/test_shared_memory_bus.py::test_delivery_is_scoped_idempotent_and_rejects_tampering
+FAILED tests/test_shared_memory_bus.py::test_missing_provenance_rejection_is_retryable
+   6 asyncpg.exceptions.DeadlockDetectedError
+attempt 3: 5 failed, 185 passed in 102.44s (0:01:42) (db-lock errors seen: 10)
+--- attempt 3 failures ---
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+FAILED tests/test_memory_bug_fixes.py::TestUpdateAccessQuarantined::test_update_access_skips_quarantined
+FAILED tests/test_memory_approval.py::TestApprovalGateWiring::test_enabled_reject_creates_no_memory
+FAILED tests/test_shared_memory_bus.py::test_delivery_is_scoped_idempotent_and_rejects_tampering
+FAILED tests/test_shared_memory_bus.py::test_missing_provenance_rejection_is_retryable
+   5 asyncpg.exceptions.DeadlockDetectedError
+attempt 4: 2 failed, 188 passed in 47.51s (db-lock errors seen: 4)
+--- attempt 4 failures ---
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+FAILED tests/test_memory_bug_fixes.py::TestUpdateAccessQuarantined::test_update_access_skips_quarantined
+FAILED tests/test_shared_memory_bus.py::test_delivery_without_signing_key_is_rejected
+   2 asyncpg.exceptions.DeadlockDetectedError
+attempt 5: 2 failed, 188 passed in 27.44s (db-lock errors seen: 4)
+--- attempt 5 failures ---
+FAILED tests/test_memory_bug_fixes.py::TestUpdateAccessQuarantined::test_update_access_skips_quarantined
+FAILED tests/test_memory_approval.py::TestApprovalGateWiring::test_enabled_reject_creates_no_memory
+   2 asyncpg.exceptions.DeadlockDetectedError
+attempt 6: 190 passed in 23.68s (db-lock errors seen: 0)
+CLEAN PASS on attempt 6

@@ -1,0 +1,204 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+__________ test_chat_sigint_cancels_slow_tool_turn_and_releases_claim __________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1414/test_chat_sigint_cancels_slow_0')
+
+    def test_chat_sigint_cancels_slow_tool_turn_and_releases_claim(tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            tool_name="terminal",
+            tool_arguments={"command": "pytest slow_test.py", "timeout": 60},
+            final_text="slow tool should never complete in this test",
+        )
+        slow_pid: int | None = None
+        with provider:
+            env, workspace = _cli_env(tmp_path, provider, mode="ask")
+            marker = workspace / "started.marker"
+            (workspace / "slow_test.py").write_text(
+                "import os, time\n"
+                "from pathlib import Path\n"
+                "Path(__file__).with_name('started.marker').write_text(str(os.getpid()))\n"
+                "\n"
+                "def test_slow_started():\n"
+                "    time.sleep(60)\n",
+                encoding="utf-8",
+            )
+            proc = _spawn_chat(env)
+            try:
+                assert _wait_for_path(marker, STARTUP_DEADLINE_S), (
+                    "the slow tool never started (provider boundary or broker refused)"
+                )
+                slow_pid = int(marker.read_text(encoding="utf-8").strip() or 0)
+    
+                started = time.monotonic()
+                proc.send_signal(signal.SIGINT)
+                try:
+>                   output, _ = proc.communicate(timeout=SIGINT_EXIT_DEADLINE_S)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_cli_turn_e2e.py:324: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1221: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:2154: in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: -9 args: ['/Users/shadow/machina/.venv/bin/python', '-m'...>
+endtime = 223981.048845458, orig_timeout = 10.0
+stdout_seq = [b'New session: 2af3394c-0ce0-4b88-b98f-0cba6f146b34\nModel: fake-model (custom)\nMode: ask (backend: host)\n\n2026-10...n": "routine trusted project command"}\nAudit event dropped before the writer started; event was not persisted\n', b'']
+stderr_seq = None, skip_check_and_raise = False
+
+    def _check_timeout(self, endtime, orig_timeout, stdout_seq, stderr_seq,
+                       skip_check_and_raise=False):
+        """Convenience for checking if a timeout has expired."""
+        if endtime is None:
+            return
+        if skip_check_and_raise or _time() > endtime:
+>           raise TimeoutExpired(
+                    self.args, orig_timeout,
+                    output=b''.join(stdout_seq) if stdout_seq else None,
+                    stderr=b''.join(stderr_seq) if stderr_seq else None)
+E           subprocess.TimeoutExpired: Command '['/Users/shadow/machina/.venv/bin/python', '-m', 'machina', 'chat', 'go', '--provider', 'custom', '--model', 'fake-model']' timed out after 10.0 seconds
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1268: TimeoutExpired
+
+During handling of the above exception, another exception occurred:
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1414/test_chat_sigint_cancels_slow_0')
+
+    def test_chat_sigint_cancels_slow_tool_turn_and_releases_claim(tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            tool_name="terminal",
+            tool_arguments={"command": "pytest slow_test.py", "timeout": 60},
+            final_text="slow tool should never complete in this test",
+        )
+        slow_pid: int | None = None
+        with provider:
+            env, workspace = _cli_env(tmp_path, provider, mode="ask")
+            marker = workspace / "started.marker"
+            (workspace / "slow_test.py").write_text(
+                "import os, time\n"
+                "from pathlib import Path\n"
+                "Path(__file__).with_name('started.marker').write_text(str(os.getpid()))\n"
+                "\n"
+                "def test_slow_started():\n"
+                "    time.sleep(60)\n",
+                encoding="utf-8",
+            )
+            proc = _spawn_chat(env)
+            try:
+                assert _wait_for_path(marker, STARTUP_DEADLINE_S), (
+                    "the slow tool never started (provider boundary or broker refused)"
+                )
+                slow_pid = int(marker.read_text(encoding="utf-8").strip() or 0)
+    
+                started = time.monotonic()
+                proc.send_signal(signal.SIGINT)
+                try:
+                    output, _ = proc.communicate(timeout=SIGINT_EXIT_DEADLINE_S)
+                except subprocess.TimeoutExpired:
+                    _kill_process_group(proc.pid)
+                    output, _ = proc.communicate(timeout=5)
+>                   pytest.fail(
+                        "machina chat kept running after SIGINT (deferred interrupt; "
+                        f"the worker was not cancelled):\n{output}"
+                    )
+E                   Failed: machina chat kept running after SIGINT (deferred interrupt; the worker was not cancelled):
+E                   New session: 2af3394c-0ce0-4b88-b98f-0cba6f146b34
+E                   Model: fake-model (custom)
+E                   Mode: ask (backend: host)
+E                   
+E                   2026-10-14 18:21:54,680 [AUDIT] {"timestamp": 1792016514.680303, "event": "agent_run_stream_start", "session_id": "2af3394c-0ce0-4b88-b98f-0cba6f146b34", "agent_id": "harness"}
+E                   Audit event dropped before the writer started; event was not persisted
+E                   2026-10-14 18:21:54,722 [AUDIT] {"timestamp": 1792016514.7224588, "event": "rag_search_start", "session_id": "2af3394c-0ce0-4b88-b98f-0cba6f146b34", "top_k": 5}
+E                   Audit event dropped before the writer started; event was not persisted
+E                   no embedder configured, keyword-only search
+E                   2026-10-14 18:21:54,743 [AUDIT] {"timestamp": 1792016514.7437, "event": "rag_search_complete", "session_id": "2af3394c-0ce0-4b88-b98f-0cba6f146b34", "results_returned": 0}
+E                   Audit event dropped before the writer started; event was not persisted
+E                   Skipping skill /Users/shadow/machina/skills/cost-optimization/SKILL.md: ValueError
+E                   Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+E                   2026-10-14 18:21:54,838 [AUDIT] {"timestamp": 1792016514.838791, "event": "llm_stream_start", "provider": "custom", "model": "fake-model", "message_count": 1}
+E                   Audit event dropped before the writer started; event was not persisted
+E                   2026-10-14 18:21:54,861 [AUDIT] {"timestamp": 1792016514.861569, "event": "llm_stream_complete", "provider": "custom", "model": "fake-model", "tool_calls": 1}
+E                   Audit event dropped before the writer started; event was not persisted
+E                   
+E                   → terminal
+E                   2026-10-14 18:21:54,865 [AUDIT] {"timestamp": 1792016514.8650858, "event": "tool_call_start", "session_id": "2af3394c-0ce0-4b88-b98f-0cba6f146b34", "tool_name": "terminal"}
+E                   Audit event dropped before the writer started; event was not persisted
+E                   2026-10-14 18:21:54,872 [AUDIT] {"timestamp": 1792016514.8729548, "event": "permission_allowed", "request_id": "fcddb62b92154fd38a70fff976c542b8", "session_id": "2af3394c-0ce0-4b88-b98f-0cba6f146b34", "turn_id": "", "agent_id": "harness", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "c6b7406a074f1729", "reason": "routine trusted project command"}
+E                   Audit event dropped before the writer started; event was not persisted
+
+tests/test_cli_turn_e2e.py:328: Failed
+___________ test_headless_full_mode_runs_routine_tool_without_pause ____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1414/test_headless_full_mode_runs_r0')
+
+    def test_headless_full_mode_runs_routine_tool_without_pause(tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            tool_name="read_file",
+            tool_arguments={"path": "hello.txt"},
+            final_text="HEADLESS FULL MODE COMPLETE",
+        )
+        with provider:
+            env, workspace = _cli_env(tmp_path, provider, mode="full")
+            (workspace / "hello.txt").write_text("FULL MODE FILE CONTENT\n", encoding="utf-8")
+            proc = _spawn_chat(env)
+            try:
+                output, _ = proc.communicate(timeout=120)
+            finally:
+                if proc.poll() is None:
+                    _kill_process_group(proc.pid)
+                    proc.wait(timeout=5)
+    
+>           assert proc.returncode == 0, (
+                f"saved full mode must run the routine tool; got exit {proc.returncode}:\n{output}"
+            )
+E           AssertionError: saved full mode must run the routine tool; got exit 3:
+E             New session: 599f1577-9eab-45a5-ac87-1447d190ccf6
+E             Model: fake-model (custom)
+E             Mode: full (backend: host)
+E             
+E             2026-10-14 18:22:05,855 [AUDIT] {"timestamp": 1792016525.8550138, "event": "agent_run_stream_start", "session_id": "599f1577-9eab-45a5-ac87-1447d190ccf6", "agent_id": "harness"}
+E             Audit event dropped before the writer started; event was not persisted
+E             2026-10-14 18:22:05,884 [AUDIT] {"timestamp": 1792016525.8844202, "event": "rag_search_start", "session_id": "599f1577-9eab-45a5-ac87-1447d190ccf6", "top_k": 5}
+E             Audit event dropped before the writer started; event was not persisted
+E             no embedder configured, keyword-only search
+E             2026-10-14 18:22:05,906 [AUDIT] {"timestamp": 1792016525.905985, "event": "rag_search_complete", "session_id": "599f1577-9eab-45a5-ac87-1447d190ccf6", "results_returned": 0}
+E             Audit event dropped before the writer started; event was not persisted
+E             Skipping skill /Users/shadow/machina/skills/cost-optimization/SKILL.md: ValueError
+E             Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+E             2026-10-14 18:22:05,992 [AUDIT] {"timestamp": 1792016525.992605, "event": "llm_stream_start", "provider": "custom", "model": "fake-model", "message_count": 1}
+E             Audit event dropped before the writer started; event was not persisted
+E             2026-10-14 18:22:06,016 [AUDIT] {"timestamp": 1792016526.015994, "event": "llm_stream_complete", "provider": "custom", "model": "fake-model", "tool_calls": 1}
+E             Audit event dropped before the writer started; event was not persisted
+E             
+E             → read_file
+E             2026-10-14 18:22:06,063 [AUDIT] {"timestamp": 1792016526.063945, "event": "tool_call_start", "session_id": "599f1577-9eab-45a5-ac87-1447d190ccf6", "tool_name": "read_file"}
+E             Audit event dropped before the writer started; event was not persisted
+E             2026-10-14 18:22:06,075 [AUDIT] {"timestamp": 1792016526.075488, "event": "permission_pending", "request_id": "6dc9b1ae1d384e518441953bd00ac641", "session_id": "599f1577-9eab-45a5-ac87-1447d190ccf6", "turn_id": "", "agent_id": "harness", "operation": "file.read", "tool": "read_file", "mode": "full", "digest_prefix": "09ccc14e7d9fc3ed", "reason": "full mode requires explicit session activation (/mode full)"}
+E             Audit event dropped before the writer started; event was not persisted
+E               ← Needs approval (6dc9b1ae1d384e518441953bd00ac641:file.read 
+E             /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pyte
+E             2026-10-14 18:22:06,271 [AUDIT] {"timestamp": 1792016526.27119, "event": "tool_call_complete", "session_id": "599f1577-9eab-45a5-ac87-1447d190ccf6", "tool_name": "read_file", "duration_ms": 206}
+E             Audit event dropped before the writer started; event was not persisted
+E             
+E             
+E             Waiting for approval.
+E             ✗ Turn paused for approval; it did not run to completion.
+E               Resolve the request, then resume the session.
+E               request 6dc9b1ae1d384e518441953bd00ac641 (file.read — 
+E             /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest
+E             -1414/test_headless_full_mode_runs_r0/workspace/hello.txt)
+E             Iterations: 1 | Tool calls: 1 | Tokens: 12
+E             Session ID: 599f1577-9eab-45a5-ac87-1447d190ccf6
+E             
+E           assert 3 == 0
+E            +  where 3 = <Popen: returncode: 3 args: ['/Users/shadow/machina/.venv/bin/python', '-m',...>.returncode
+
+tests/test_cli_turn_e2e.py:376: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_cli_turn_e2e.py::test_chat_sigint_cancels_slow_tool_turn_and_releases_claim
+FAILED tests/test_cli_turn_e2e.py::test_headless_full_mode_runs_routine_tool_without_pause
+2 failed in 12.65s

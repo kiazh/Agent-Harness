@@ -1,0 +1,76 @@
+FF.F..................                                                   [100%]
+=================================== FAILURES ===================================
+_ test_r4_089_long_digit_run_stream_matches_batch[ref 4111 1111 1111 1111 4111 1111 1111 1111 4111 done] _
+
+text = 'ref 4111 1111 1111 1111 4111 1111 1111 1111 4111 done'
+
+    @pytest.mark.parametrize("text", _R4_089_LONG_DIGIT_SECRETS)
+    def test_r4_089_long_digit_run_stream_matches_batch(text: str) -> None:
+        batch = redact_secrets(text).text
+        assert "[REDACTED_CC]" in batch
+        for size in (1, 2, 3, 5, 8, 13):
+            _assert_secret_gone(
+                _R4_089_CC_UNIT, _stream_sized(text, size), f"chunks of {size}"
+            )
+>           assert _stream_sized(text, size) == batch, f"chunks of {size}"
+E           AssertionError: chunks of 1
+E           assert 'ref 4111 [RE...CTED_CC] done' == 'ref [REDACTE...CC] 4111 done'
+E             
+E             - ref [REDACTED_CC] [REDACTED_CC] 4111 done
+E             ?                                 -----
+E             + ref 4111 [REDACTED_CC] [REDACTED_CC] done
+E             ?    +++++
+
+tests/test_redaction_adversarial.py:275: AssertionError
+_ test_r4_089_long_digit_run_stream_matches_batch[ref 4111 1111 1111 1111 4111 1111 1111 1111 4111 1111 1111 1111 done] _
+
+text = 'ref 4111 1111 1111 1111 4111 1111 1111 1111 4111 1111 1111 1111 done'
+
+    @pytest.mark.parametrize("text", _R4_089_LONG_DIGIT_SECRETS)
+    def test_r4_089_long_digit_run_stream_matches_batch(text: str) -> None:
+        batch = redact_secrets(text).text
+        assert "[REDACTED_CC]" in batch
+        for size in (1, 2, 3, 5, 8, 13):
+>           _assert_secret_gone(
+                _R4_089_CC_UNIT, _stream_sized(text, size), f"chunks of {size}"
+            )
+
+tests/test_redaction_adversarial.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+secret = '4111 1111 1111 1111'
+output = 'ref 4111 1111 1111 1111 [REDACTED_CC] [REDACTED_CC] done'
+where = 'chunks of 1'
+
+    def _assert_secret_gone(secret: str, output: str, where: str) -> None:
+>       assert secret not in output, f"{where}: raw secret survived redaction: {output!r}"
+E       AssertionError: chunks of 1: raw secret survived redaction: 'ref 4111 1111 1111 1111 [REDACTED_CC] [REDACTED_CC] done'
+E       assert '4111 1111 1111 1111' not in 'ref 4111 11...TED_CC] done'
+E         
+E         '4111 1111 1111 1111' is contained here:
+E           ref 4111 1111 1111 1111 [REDACTED_CC] [REDACTED_CC] done
+E         ?     +++++++++++++++++++
+
+tests/test_redaction_adversarial.py:197: AssertionError
+_ test_r4_089_over_40_run_head_withheld_until_terminated[ref 4111 1111 1111 1111 4111 1111 1111 1111 4111 done] _
+
+text = 'ref 4111 1111 1111 1111 4111 1111 1111 1111 4111 done'
+
+    @pytest.mark.parametrize("text", _R4_089_LONG_DIGIT_SECRETS)
+    def test_r4_089_over_40_run_head_withheld_until_terminated(text: str) -> None:
+        head, _, _ = text.partition("done")
+        redactor = StreamingSecretRedactor()
+        emitted = redactor.feed(head)
+        # The whole trailing run is held: the pre-run prefixes carry no digits,
+        # so no run byte may be out before the run terminates.
+>       assert not any(ch.isdigit() for ch in emitted), f"run bytes out: {emitted!r}"
+E       AssertionError: run bytes out: 'ref 4111 '
+E       assert not True
+E        +  where True = any(<generator object test_r4_089_over_40_run_head_withheld_until_terminated.<locals>.<genexpr> at 0x10a14f030>)
+
+tests/test_redaction_adversarial.py:287: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_redaction_adversarial.py::test_r4_089_long_digit_run_stream_matches_batch[ref 4111 1111 1111 1111 4111 1111 1111 1111 4111 done]
+FAILED tests/test_redaction_adversarial.py::test_r4_089_long_digit_run_stream_matches_batch[ref 4111 1111 1111 1111 4111 1111 1111 1111 4111 1111 1111 1111 done]
+FAILED tests/test_redaction_adversarial.py::test_r4_089_over_40_run_head_withheld_until_terminated[ref 4111 1111 1111 1111 4111 1111 1111 1111 4111 done]
+3 failed, 19 passed, 119 deselected in 5.45s

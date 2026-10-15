@@ -1,0 +1,354 @@
+EEEEEEEEEE                                                               [100%]
+==================================== ERRORS ====================================
+_______________ ERROR at setup of test_idle_claim_release_cycle ________________
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+________ ERROR at setup of test_crash_expiry_recovery_and_stale_release ________
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+____________ ERROR at setup of test_mutation_turn_mutual_exclusion _____________
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+_______________ ERROR at setup of test_two_sessions_independent ________________
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+_______ ERROR at setup of test_nested_child_progress_during_parent_turn ________
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+_____ ERROR at setup of test_concurrent_begin_does_not_hang_and_cleans_up ______
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+_________ ERROR at setup of test_idle_delete_and_compress_take_effect __________
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+_________ ERROR at setup of test_active_turn_rejects_mutation_handlers _________
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+_________ ERROR at setup of test_gateway_submit_vs_rest_claim_fencing __________
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+_________ ERROR at setup of test_rag_cold_restart_and_keyword_fallback _________
+
+    @pytest.fixture
+    async def live_db():
+        """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+        from machina.db.connection import db
+    
+>       await db.connect()
+
+tests/test_turns_ownership.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.db.connection.Database object at 0x10b427380>
+
+    async def connect(self) -> None:
+        """Initialize the connection pool with configurable sizes.
+    
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
+        if self._pool is not None:
+            return
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+>               raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+E               ValueError: Database DSN not configured. Set DATABASE_URL or database_url in config.
+
+machina/db/connection.py:63: ValueError
+=========================== short test summary info ============================
+ERROR tests/test_turns_ownership.py::test_idle_claim_release_cycle - ValueErr...
+ERROR tests/test_turns_ownership.py::test_crash_expiry_recovery_and_stale_release
+ERROR tests/test_turns_ownership.py::test_mutation_turn_mutual_exclusion - Va...
+ERROR tests/test_turns_ownership.py::test_two_sessions_independent - ValueErr...
+ERROR tests/test_turns_ownership.py::test_nested_child_progress_during_parent_turn
+ERROR tests/test_turns_ownership.py::test_concurrent_begin_does_not_hang_and_cleans_up
+ERROR tests/test_turns_ownership.py::test_idle_delete_and_compress_take_effect
+ERROR tests/test_turns_ownership.py::test_active_turn_rejects_mutation_handlers
+ERROR tests/test_turns_ownership.py::test_gateway_submit_vs_rest_claim_fencing
+ERROR tests/test_turns_ownership.py::test_rag_cold_restart_and_keyword_fallback
+10 errors in 0.34s

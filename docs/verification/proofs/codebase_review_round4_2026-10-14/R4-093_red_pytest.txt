@@ -1,0 +1,662 @@
+FF.FF.FF..FFF.FFF.FFFFFF.F.                                              [100%]
+=================================== FAILURES ===================================
+____________ test_config_set_provider_persist_syncs_env_and_dotenv _____________
+
+isolated_cli = <module 'machina.cli' from '/Users/shadow/machina/machina/cli/__init__.py'>
+
+    def test_config_set_provider_persist_syncs_env_and_dotenv(isolated_cli) -> None:
+        cli = isolated_cli
+        result = runner.invoke(cli.app, ["config-set", "provider", "openrouter", "--persist"])
+        assert result.exit_code == 0, result.output
+>       assert os.environ.get("MACHINA_PROVIDER") == "openrouter"
+E       AssertionError: assert None == 'openrouter'
+E        +  where None = get('MACHINA_PROVIDER')
+E        +    where get = environ({'COLORTERM': 'truecolor', 'DISPLAY': '/var/run/com.apple.launchd.RBbUuD1g7f/org.xquartz:0', 'HOME': '/Users/s...ders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_config_set_provider_persi0/providers.json'}).get
+E        +      where environ({'COLORTERM': 'truecolor', 'DISPLAY': '/var/run/com.apple.launchd.RBbUuD1g7f/org.xquartz:0', 'HOME': '/Users/s...ders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_config_set_provider_persi0/providers.json'}) = os.environ
+
+tests/test_r4_093_cli_cluster.py:60: AssertionError
+------------------------------ Captured log call -------------------------------
+DEBUG    machina.core.config:config.py:586 Config saved to /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_config_set_provider_persi0/config.yaml
+______________ test_config_set_model_persist_syncs_env_and_dotenv ______________
+
+isolated_cli = <module 'machina.cli' from '/Users/shadow/machina/machina/cli/__init__.py'>
+
+    def test_config_set_model_persist_syncs_env_and_dotenv(isolated_cli) -> None:
+        cli = isolated_cli
+        result = runner.invoke(cli.app, ["config-set", "model", "openrouter/free", "--persist"])
+        assert result.exit_code == 0, result.output
+>       assert os.environ.get("MACHINA_MODEL") == "openrouter/free"
+E       AssertionError: assert None == 'openrouter/free'
+E        +  where None = get('MACHINA_MODEL')
+E        +    where get = environ({'COLORTERM': 'truecolor', 'DISPLAY': '/var/run/com.apple.launchd.RBbUuD1g7f/org.xquartz:0', 'HOME': '/Users/s...ders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_config_set_model_persist_0/providers.json'}).get
+E        +      where environ({'COLORTERM': 'truecolor', 'DISPLAY': '/var/run/com.apple.launchd.RBbUuD1g7f/org.xquartz:0', 'HOME': '/Users/s...ders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_config_set_model_persist_0/providers.json'}) = os.environ
+
+tests/test_r4_093_cli_cluster.py:71: AssertionError
+------------------------------ Captured log call -------------------------------
+DEBUG    machina.core.config:config.py:586 Config saved to /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_config_set_model_persist_0/config.yaml
+_________________ test_config_set_invalid_value_is_typed_error _________________
+
+isolated_cli = <module 'machina.cli' from '/Users/shadow/machina/machina/cli/__init__.py'>
+
+    def test_config_set_invalid_value_is_typed_error(isolated_cli) -> None:
+        cli = isolated_cli
+        result = runner.invoke(cli.app, ["config-set", "execution_mode", "bogus"])
+        assert result.exit_code == 1, result.output
+>       assert "ask|workspace|sandbox|full" in result.output, "validation message, never a traceback"
+E       AssertionError: validation message, never a traceback
+E       assert 'ask|workspace|sandbox|full' in ''
+E        +  where '' = <Result ValueError('execution_mode must be ask|workspace|sandbox|full')>.output
+
+tests/test_r4_093_cli_cluster.py:92: AssertionError
+______________________ test_mode_set_syncs_env_and_dotenv ______________________
+
+isolated_cli = <module 'machina.cli' from '/Users/shadow/machina/machina/cli/__init__.py'>
+
+    def test_mode_set_syncs_env_and_dotenv(isolated_cli) -> None:
+        cli = isolated_cli
+        result = runner.invoke(cli.app, ["mode", "workspace"])
+        assert result.exit_code == 0, result.output
+        assert cli.config.get("execution_mode") == "workspace"
+>       assert os.environ.get("MACHINA_EXECUTION_MODE") == "workspace"
+E       AssertionError: assert None == 'workspace'
+E        +  where None = get('MACHINA_EXECUTION_MODE')
+E        +    where get = environ({'COLORTERM': 'truecolor', 'DISPLAY': '/var/run/com.apple.launchd.RBbUuD1g7f/org.xquartz:0', 'HOME': '/Users/s...ders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_mode_set_syncs_env_and_do0/providers.json'}).get
+E        +      where environ({'COLORTERM': 'truecolor', 'DISPLAY': '/var/run/com.apple.launchd.RBbUuD1g7f/org.xquartz:0', 'HOME': '/Users/s...ders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_mode_set_syncs_env_and_do0/providers.json'}) = os.environ
+
+tests/test_r4_093_cli_cluster.py:104: AssertionError
+------------------------------ Captured log call -------------------------------
+DEBUG    machina.core.config:config.py:586 Config saved to /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_mode_set_syncs_env_and_do0/config.yaml
+_______________ test_repl_rejects_invalid_mode_without_launching _______________
+
+isolated_cli = <module 'machina.cli' from '/Users/shadow/machina/machina/cli/__init__.py'>
+
+    def test_repl_rejects_invalid_mode_without_launching(isolated_cli) -> None:
+        cli = isolated_cli
+        result = runner.invoke(cli.app, ["repl", "--mode", "bogus"])
+        assert result.exit_code == 1, result.output
+>       assert "Invalid --mode" in result.output
+E       assert 'Invalid --mode' in '✗ The interactive UI needs a terminal.\n  For scripts and pipes use one-shot mode: machina chat "your message"\n'
+E        +  where '✗ The interactive UI needs a terminal.\n  For scripts and pipes use one-shot mode: machina chat "your message"\n' = <Result SystemExit(1)>.output
+
+tests/test_r4_093_cli_cluster.py:124: AssertionError
+__________________ test_setup_bad_env_override_is_typed_error __________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_setup_bad_env_override_is0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ebfe990>
+
+    def test_setup_bad_env_override_is_typed_error(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import machina.cli as cli
+    
+        monkeypatch.setenv("MACHINA_ENV_FILE", "bad-override-without-dotenv-suffix")
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(cli.app, ["setup", "--non-interactive", "--interop", "none"])
+        assert result.exit_code == 1, result.output
+        assert "Traceback" not in result.output
+>       assert ".env" in result.output
+E       assert '.env' in ''
+E        +  where '' = <Result ValueError("MACHINA_ENV_FILE must end with .env or be an existing file: 'bad-override-without-dotenv-suffix'")>.output
+
+/Users/shadow/machina/tests/test_r4_093_cli_cluster.py:141: AssertionError
+_________________ test_output_helpers_render_markup_literally __________________
+
+    def test_output_helpers_render_markup_literally() -> None:
+        """Direct supplement: the shared helpers escape; a stray tag must survive."""
+        from machina.cli import output
+    
+>       output.success("ok [/b] done")
+
+tests/test_r4_093_cli_cluster.py:173: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/cli/output.py:38: in success
+    console.print(f"[bold green]✓[/bold green] {message}")
+.venv/lib/python3.14/site-packages/rich/console.py:1705: in print
+    renderables = self._collect_renderables(
+.venv/lib/python3.14/site-packages/rich/console.py:1560: in _collect_renderables
+    self.render_str(
+.venv/lib/python3.14/site-packages/rich/console.py:1442: in render_str
+    rich_text = render_markup(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+markup = '[bold green]✓[/bold green] ok [/b] done', style = '', emoji = True
+emoji_variant = None
+
+    def render(
+        markup: str,
+        style: Union[str, Style] = "",
+        emoji: bool = True,
+        emoji_variant: Optional[EmojiVariant] = None,
+    ) -> Text:
+        """Render console markup in to a Text instance.
+    
+        Args:
+            markup (str): A string containing console markup.
+            style: (Union[str, Style]): The style to use.
+            emoji (bool, optional): Also render emoji code. Defaults to True.
+            emoji_variant (str, optional): Optional emoji variant, either "text" or "emoji". Defaults to None.
+    
+    
+        Raises:
+            MarkupError: If there is a syntax error in the markup.
+    
+        Returns:
+            Text: A test instance.
+        """
+        emoji_replace = _emoji_replace
+        if "[" not in markup:
+            return Text(
+                emoji_replace(markup, default_variant=emoji_variant) if emoji else markup,
+                style=style,
+            )
+        text = Text(style=style)
+        append = text.append
+        normalize = Style.normalize
+    
+        style_stack: List[Tuple[int, Tag]] = []
+        pop = style_stack.pop
+    
+        spans: List[Span] = []
+        append_span = spans.append
+    
+        _Span = Span
+        _Tag = Tag
+    
+        def pop_style(style_name: str) -> Tuple[int, Tag]:
+            """Pop tag matching given style name."""
+            for index, (_, tag) in enumerate(reversed(style_stack), 1):
+                if tag.name == style_name:
+                    return pop(-index)
+            raise KeyError(style_name)
+    
+        for position, plain_text, tag in _parse(markup):
+            if plain_text is not None:
+                # Handle open brace escapes, where the brace is not part of a tag.
+                plain_text = plain_text.replace("\\[", "[")
+                append(emoji_replace(plain_text) if emoji else plain_text)
+            elif tag is not None:
+                if tag.name.startswith("/"):  # Closing tag
+                    style_name = tag.name[1:].strip()
+    
+                    if style_name:  # explicit close
+                        style_name = normalize(style_name)
+                        try:
+                            start, open_tag = pop_style(style_name)
+                        except KeyError:
+>                           raise MarkupError(
+                                f"closing tag '{tag.markup}' at position {position} doesn't match any open tag"
+                            ) from None
+E                           rich.errors.MarkupError: closing tag '[/b]' at position 30 doesn't match any open tag
+
+.venv/lib/python3.14/site-packages/rich/markup.py:167: MarkupError
+_____________ test_sessions_table_renders_hostile_title_literally ______________
+
+capsys = <_pytest.capture.CaptureFixture object at 0x10de292b0>
+
+    def test_sessions_table_renders_hostile_title_literally(capsys) -> None:
+        """Direct supplement: table cells interpret markup, so they must escape."""
+        from machina.cli.output import sessions_table
+    
+        row = SimpleNamespace(
+            id="abc123",
+            title="[/b] evil",
+            status="active",
+            agent_id="harness",
+            goal="[red]goal",
+            last_activity=None,
+        )
+>       sessions_table([row])
+
+tests/test_r4_093_cli_cluster.py:191: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/cli/output.py:81: in sessions_table
+    console.print(table)
+.venv/lib/python3.14/site-packages/rich/console.py:1731: in print
+    extend(render(renderable, render_options))
+.venv/lib/python3.14/site-packages/rich/console.py:1339: in render
+    for render_output in iter_render:
+                         ^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/rich/table.py:488: in __rich_console__
+    widths = self._calculate_column_widths(
+.venv/lib/python3.14/site-packages/rich/table.py:530: in _calculate_column_widths
+    self._measure_column(console, options, column) for column in columns
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/rich/table.py:741: in _measure_column
+    _min, _max = get_render_width(console, options, cell.renderable)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/rich/measure.py:109: in get
+    get_console_width(console, options)
+.venv/lib/python3.14/site-packages/rich/padding.py:132: in __rich_measure__
+    measure_min, measure_max = Measurement.get(console, options, self.renderable)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/rich/measure.py:99: in get
+    renderable = console.render_str(
+.venv/lib/python3.14/site-packages/rich/console.py:1442: in render_str
+    rich_text = render_markup(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+markup = '[/b] evil', style = '', emoji = True, emoji_variant = None
+
+    def render(
+        markup: str,
+        style: Union[str, Style] = "",
+        emoji: bool = True,
+        emoji_variant: Optional[EmojiVariant] = None,
+    ) -> Text:
+        """Render console markup in to a Text instance.
+    
+        Args:
+            markup (str): A string containing console markup.
+            style: (Union[str, Style]): The style to use.
+            emoji (bool, optional): Also render emoji code. Defaults to True.
+            emoji_variant (str, optional): Optional emoji variant, either "text" or "emoji". Defaults to None.
+    
+    
+        Raises:
+            MarkupError: If there is a syntax error in the markup.
+    
+        Returns:
+            Text: A test instance.
+        """
+        emoji_replace = _emoji_replace
+        if "[" not in markup:
+            return Text(
+                emoji_replace(markup, default_variant=emoji_variant) if emoji else markup,
+                style=style,
+            )
+        text = Text(style=style)
+        append = text.append
+        normalize = Style.normalize
+    
+        style_stack: List[Tuple[int, Tag]] = []
+        pop = style_stack.pop
+    
+        spans: List[Span] = []
+        append_span = spans.append
+    
+        _Span = Span
+        _Tag = Tag
+    
+        def pop_style(style_name: str) -> Tuple[int, Tag]:
+            """Pop tag matching given style name."""
+            for index, (_, tag) in enumerate(reversed(style_stack), 1):
+                if tag.name == style_name:
+                    return pop(-index)
+            raise KeyError(style_name)
+    
+        for position, plain_text, tag in _parse(markup):
+            if plain_text is not None:
+                # Handle open brace escapes, where the brace is not part of a tag.
+                plain_text = plain_text.replace("\\[", "[")
+                append(emoji_replace(plain_text) if emoji else plain_text)
+            elif tag is not None:
+                if tag.name.startswith("/"):  # Closing tag
+                    style_name = tag.name[1:].strip()
+    
+                    if style_name:  # explicit close
+                        style_name = normalize(style_name)
+                        try:
+                            start, open_tag = pop_style(style_name)
+                        except KeyError:
+>                           raise MarkupError(
+                                f"closing tag '{tag.markup}' at position {position} doesn't match any open tag"
+                            ) from None
+E                           rich.errors.MarkupError: closing tag '[/b]' at position 0 doesn't match any open tag
+
+.venv/lib/python3.14/site-packages/rich/markup.py:167: MarkupError
+___________________ test_fork_unknown_session_is_typed_error ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10eb82390>
+
+    def test_fork_unknown_session_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+        """The store raises ValueError for a missing session (session.py); the
+        CLI maps it to exit 1 with the message, never a traceback."""
+        import uuid as uuid_mod
+    
+        import machina.cli as cli
+    
+        _stub_db(monkeypatch)
+    
+        async def _missing(session_id, title=None):
+            raise ValueError(f"Session {session_id} not found")
+    
+        monkeypatch.setattr(cli.session_manager, "fork", _missing)
+        result = runner.invoke(cli.app, ["fork", str(uuid_mod.uuid4())])
+        assert result.exit_code == 1, result.output
+>       assert "not found" in result.output
+E       AssertionError: assert 'not found' in ''
+E        +  where '' = <Result ValueError('Session 395d5a14-88a3-4a23-9a59-5e08d6215ebe not found')>.output
+
+tests/test_r4_093_cli_cluster.py:215: AssertionError
+____________ test_growth_import_policy_missing_file_is_typed_error _____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_growth_import_policy_miss0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10eb90c00>
+
+    def test_growth_import_policy_missing_file_is_typed_error(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from machina.cli.growth import app as growth_app
+    
+        import machina.cli as cli
+    
+        _stub_db(monkeypatch)
+        monkeypatch.setattr(cli.db, "initialize_runtime_schema", AsyncMock())
+        import uuid as uuid_mod
+    
+        fake = SimpleNamespace(id=uuid_mod.uuid4(), agent_id="harness")
+        monkeypatch.setattr(cli.session_manager, "get", AsyncMock(return_value=fake))
+        result = runner.invoke(
+            growth_app, ["import-policy", str(tmp_path / "nope.json"), "--session", str(fake.id)]
+        )
+        assert result.exit_code == 1, result.output
+>       assert "Error" in result.output, "typed file error, never a traceback"
+E       AssertionError: typed file error, never a traceback
+E       assert 'Error' in ''
+E        +  where '' = <Result FileNotFoundError(2, 'No such file or directory')>.output
+
+tests/test_r4_093_cli_cluster.py:248: AssertionError
+______________ test_growth_import_policy_bad_json_is_typed_error _______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_growth_import_policy_bad_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ebd3750>
+
+    def test_growth_import_policy_bad_json_is_typed_error(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from machina.cli.growth import app as growth_app
+    
+        import machina.cli as cli
+    
+        _stub_db(monkeypatch)
+        monkeypatch.setattr(cli.db, "initialize_runtime_schema", AsyncMock())
+        import uuid as uuid_mod
+    
+        fake = SimpleNamespace(id=uuid_mod.uuid4(), agent_id="harness")
+        monkeypatch.setattr(cli.session_manager, "get", AsyncMock(return_value=fake))
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        result = runner.invoke(
+            growth_app, ["import-policy", str(bad), "--session", str(fake.id)]
+        )
+        assert result.exit_code == 1, result.output
+>       assert "Error" in result.output, "typed JSON error, never a traceback"
+E       AssertionError: typed JSON error, never a traceback
+E       assert 'Error' in ''
+E        +  where '' = <Result JSONDecodeError('Expecting property name enclosed in double quotes: line 1 column 2 (char 1)')>.output
+
+tests/test_r4_093_cli_cluster.py:271: AssertionError
+________________ test_models_refresh_empty_success_keeps_cache _________________
+
+isolated_cli = <module 'machina.cli' from '/Users/shadow/machina/machina/cli/__init__.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ebb0cd0>
+
+    def test_models_refresh_empty_success_keeps_cache(
+        isolated_cli, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Seed a cached catalog, then refresh against an endpoint whose live
+        fetch succeeds but returns no models: exit stays 0, the cached list is
+        shown with an honest warning, and the store keeps the cached rows."""
+        import machina.cli.providers as providers_cli
+        from machina.security import providers as store
+    
+        cli = isolated_cli
+        store.add_provider("cachekeep", "http://127.0.0.1:9/v1", api_key="k-secret")
+        store.save_models("cachekeep", [{"id": "cached-model"}])
+        monkeypatch.setattr(store, "fetch_models", lambda *a, **k: [])
+        result = runner.invoke(cli.app, ["providers", "models", "cachekeep", "--refresh"])
+>       assert result.exit_code == 0, result.output
+E       AssertionError: No models for cachekeep.
+E         
+E       assert 1 == 0
+E        +  where 1 = <Result SystemExit(1)>.exit_code
+
+tests/test_r4_093_cli_cluster.py:292: AssertionError
+______ test_secrets_set_accepts_previously_refused_keys[OPENCODE_API_KEY] ______
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_secrets_set_accepts_previ0/.env')
+key = 'OPENCODE_API_KEY'
+
+    @pytest.mark.parametrize(
+        "key", ["OPENCODE_API_KEY", "KIMI_API_KEY", "CUSTOM_API_KEY", "CUSTOM_BASE_URL"]
+    )
+    async def test_secrets_set_accepts_previously_refused_keys(
+        env_file: Path, key: str
+    ) -> None:
+        """The D1 RED probe, now GREEN: set persists to env AND .env, clear removes."""
+        from machina.security.env_file import read_env_values
+    
+        value = _value(key)
+>       result = await secrets_set(_gw(), {"key": key, "value": value, "persist": True})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_093_cli_allowlist.py:65: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/gateway/features/secrets.py:99: in secrets_set
+    _require_managed_key(key)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+key = 'OPENCODE_API_KEY'
+
+    def _require_managed_key(key: str) -> str:
+        """Validate a key against the catalog allowlist, with a clear error."""
+        if key not in _ALLOWED_SECRET_KEYS and not _PROVIDER_ENV_KEY_RE.match(key):
+            supported = ", ".join(sorted(_ALLOWED_SECRET_KEYS))
+>           raise RpcError(
+                INVALID_PARAMS,
+                f"{key} is not a managed secret key; supported keys: {supported}",
+            )
+E           machina.gateway.errors.RpcError: OPENCODE_API_KEY is not a managed secret key; supported keys: ANTHROPIC_API_KEY, COHERE_API_KEY, DATABASE_URL, DEEPSEEK_API_KEY, GOOGLE_API_KEY, GROQ_API_KEY, MACHINA_MODEL, MISTRAL_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, SEARXNG_URL, TOGETHER_API_KEY, XAI_API_KEY
+
+machina/gateway/features/secrets.py:51: RpcError
+________ test_secrets_set_accepts_previously_refused_keys[KIMI_API_KEY] ________
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_secrets_set_accepts_previ1/.env')
+key = 'KIMI_API_KEY'
+
+    @pytest.mark.parametrize(
+        "key", ["OPENCODE_API_KEY", "KIMI_API_KEY", "CUSTOM_API_KEY", "CUSTOM_BASE_URL"]
+    )
+    async def test_secrets_set_accepts_previously_refused_keys(
+        env_file: Path, key: str
+    ) -> None:
+        """The D1 RED probe, now GREEN: set persists to env AND .env, clear removes."""
+        from machina.security.env_file import read_env_values
+    
+        value = _value(key)
+>       result = await secrets_set(_gw(), {"key": key, "value": value, "persist": True})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_093_cli_allowlist.py:65: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/gateway/features/secrets.py:99: in secrets_set
+    _require_managed_key(key)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+key = 'KIMI_API_KEY'
+
+    def _require_managed_key(key: str) -> str:
+        """Validate a key against the catalog allowlist, with a clear error."""
+        if key not in _ALLOWED_SECRET_KEYS and not _PROVIDER_ENV_KEY_RE.match(key):
+            supported = ", ".join(sorted(_ALLOWED_SECRET_KEYS))
+>           raise RpcError(
+                INVALID_PARAMS,
+                f"{key} is not a managed secret key; supported keys: {supported}",
+            )
+E           machina.gateway.errors.RpcError: KIMI_API_KEY is not a managed secret key; supported keys: ANTHROPIC_API_KEY, COHERE_API_KEY, DATABASE_URL, DEEPSEEK_API_KEY, GOOGLE_API_KEY, GROQ_API_KEY, MACHINA_MODEL, MISTRAL_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, SEARXNG_URL, TOGETHER_API_KEY, XAI_API_KEY
+
+machina/gateway/features/secrets.py:51: RpcError
+_______ test_secrets_set_accepts_previously_refused_keys[CUSTOM_API_KEY] _______
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_secrets_set_accepts_previ2/.env')
+key = 'CUSTOM_API_KEY'
+
+    @pytest.mark.parametrize(
+        "key", ["OPENCODE_API_KEY", "KIMI_API_KEY", "CUSTOM_API_KEY", "CUSTOM_BASE_URL"]
+    )
+    async def test_secrets_set_accepts_previously_refused_keys(
+        env_file: Path, key: str
+    ) -> None:
+        """The D1 RED probe, now GREEN: set persists to env AND .env, clear removes."""
+        from machina.security.env_file import read_env_values
+    
+        value = _value(key)
+>       result = await secrets_set(_gw(), {"key": key, "value": value, "persist": True})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_093_cli_allowlist.py:65: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/gateway/features/secrets.py:99: in secrets_set
+    _require_managed_key(key)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+key = 'CUSTOM_API_KEY'
+
+    def _require_managed_key(key: str) -> str:
+        """Validate a key against the catalog allowlist, with a clear error."""
+        if key not in _ALLOWED_SECRET_KEYS and not _PROVIDER_ENV_KEY_RE.match(key):
+            supported = ", ".join(sorted(_ALLOWED_SECRET_KEYS))
+>           raise RpcError(
+                INVALID_PARAMS,
+                f"{key} is not a managed secret key; supported keys: {supported}",
+            )
+E           machina.gateway.errors.RpcError: CUSTOM_API_KEY is not a managed secret key; supported keys: ANTHROPIC_API_KEY, COHERE_API_KEY, DATABASE_URL, DEEPSEEK_API_KEY, GOOGLE_API_KEY, GROQ_API_KEY, MACHINA_MODEL, MISTRAL_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, SEARXNG_URL, TOGETHER_API_KEY, XAI_API_KEY
+
+machina/gateway/features/secrets.py:51: RpcError
+______ test_secrets_set_accepts_previously_refused_keys[CUSTOM_BASE_URL] _______
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_secrets_set_accepts_previ3/.env')
+key = 'CUSTOM_BASE_URL'
+
+    @pytest.mark.parametrize(
+        "key", ["OPENCODE_API_KEY", "KIMI_API_KEY", "CUSTOM_API_KEY", "CUSTOM_BASE_URL"]
+    )
+    async def test_secrets_set_accepts_previously_refused_keys(
+        env_file: Path, key: str
+    ) -> None:
+        """The D1 RED probe, now GREEN: set persists to env AND .env, clear removes."""
+        from machina.security.env_file import read_env_values
+    
+        value = _value(key)
+>       result = await secrets_set(_gw(), {"key": key, "value": value, "persist": True})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_093_cli_allowlist.py:65: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/gateway/features/secrets.py:99: in secrets_set
+    _require_managed_key(key)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+key = 'CUSTOM_BASE_URL'
+
+    def _require_managed_key(key: str) -> str:
+        """Validate a key against the catalog allowlist, with a clear error."""
+        if key not in _ALLOWED_SECRET_KEYS and not _PROVIDER_ENV_KEY_RE.match(key):
+            supported = ", ".join(sorted(_ALLOWED_SECRET_KEYS))
+>           raise RpcError(
+                INVALID_PARAMS,
+                f"{key} is not a managed secret key; supported keys: {supported}",
+            )
+E           machina.gateway.errors.RpcError: CUSTOM_BASE_URL is not a managed secret key; supported keys: ANTHROPIC_API_KEY, COHERE_API_KEY, DATABASE_URL, DEEPSEEK_API_KEY, GOOGLE_API_KEY, GROQ_API_KEY, MACHINA_MODEL, MISTRAL_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, SEARXNG_URL, TOGETHER_API_KEY, XAI_API_KEY
+
+machina/gateway/features/secrets.py:51: RpcError
+______________ test_secrets_set_session_only_leaves_dotenv_alone _______________
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_secrets_set_session_only_0/.env')
+
+    async def test_secrets_set_session_only_leaves_dotenv_alone(env_file: Path) -> None:
+        from machina.security.env_file import read_env_values
+    
+        key, value = "KIMI_API_KEY", _value("KIMI_API_KEY")
+>       result = await secrets_set(_gw(), {"key": key, "value": value, "persist": False})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_093_cli_allowlist.py:84: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/gateway/features/secrets.py:99: in secrets_set
+    _require_managed_key(key)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+key = 'KIMI_API_KEY'
+
+    def _require_managed_key(key: str) -> str:
+        """Validate a key against the catalog allowlist, with a clear error."""
+        if key not in _ALLOWED_SECRET_KEYS and not _PROVIDER_ENV_KEY_RE.match(key):
+            supported = ", ".join(sorted(_ALLOWED_SECRET_KEYS))
+>           raise RpcError(
+                INVALID_PARAMS,
+                f"{key} is not a managed secret key; supported keys: {supported}",
+            )
+E           machina.gateway.errors.RpcError: KIMI_API_KEY is not a managed secret key; supported keys: ANTHROPIC_API_KEY, COHERE_API_KEY, DATABASE_URL, DEEPSEEK_API_KEY, GOOGLE_API_KEY, GROQ_API_KEY, MACHINA_MODEL, MISTRAL_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, SEARXNG_URL, TOGETHER_API_KEY, XAI_API_KEY
+
+machina/gateway/features/secrets.py:51: RpcError
+________________ test_secrets_list_catalog_covers_widened_keys _________________
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1941/test_secrets_list_catalog_cove0/.env')
+
+    async def test_secrets_list_catalog_covers_widened_keys(env_file: Path) -> None:
+        catalog = (await secrets_list(_gw(), {}))["secrets"]
+        keys = {item["key"] for item in catalog}
+>       assert {
+            "OPENCODE_API_KEY",
+            "KIMI_API_KEY",
+            "CUSTOM_API_KEY",
+            "CUSTOM_BASE_URL",
+            "OPENROUTER_API_KEY",
+        } <= keys
+E       AssertionError: assert {'CUSTOM_API_...UTER_API_KEY'} <= {'ANTHROPIC_A...API_KEY', ...}
+E         
+E         Extra items in the left set:
+E         'CUSTOM_API_KEY'
+E         'KIMI_API_KEY'
+E         'OPENCODE_API_KEY'
+E         'CUSTOM_BASE_URL'
+
+tests/test_r4_093_cli_allowlist.py:93: AssertionError
+_________________ test_allowlist_source_of_truth_stays_single __________________
+
+    def test_allowlist_source_of_truth_stays_single() -> None:
+        """PROVIDER_KEYS + MANAGED_ENV_KEYS feed the gateway allowlist; the UI
+        mirror (keys.ts KNOWN_KEYS) must carry exactly the same key set."""
+        import re
+    
+        from machina.gateway.features.secrets import MANAGED_ENV_KEYS
+        from machina.security.env_file import PROVIDER_KEYS
+    
+        python_keys = {key for key, _ in (*PROVIDER_KEYS, *MANAGED_ENV_KEYS)}
+>       assert {
+            "OPENCODE_API_KEY",
+            "KIMI_API_KEY",
+            "CUSTOM_API_KEY",
+            "CUSTOM_BASE_URL",
+        } <= python_keys
+E       AssertionError: assert {'CUSTOM_API_...CODE_API_KEY'} <= {'ANTHROPIC_A...API_KEY', ...}
+E         
+E         Extra items in the left set:
+E         'CUSTOM_API_KEY'
+E         'KIMI_API_KEY'
+E         'CUSTOM_BASE_URL'
+E         'OPENCODE_API_KEY'
+
+tests/test_r4_093_cli_allowlist.py:136: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r4_093_cli_cluster.py::test_config_set_provider_persist_syncs_env_and_dotenv
+FAILED tests/test_r4_093_cli_cluster.py::test_config_set_model_persist_syncs_env_and_dotenv
+FAILED tests/test_r4_093_cli_cluster.py::test_config_set_invalid_value_is_typed_error
+FAILED tests/test_r4_093_cli_cluster.py::test_mode_set_syncs_env_and_dotenv
+FAILED tests/test_r4_093_cli_cluster.py::test_repl_rejects_invalid_mode_without_launching
+FAILED tests/test_r4_093_cli_cluster.py::test_setup_bad_env_override_is_typed_error
+FAILED tests/test_r4_093_cli_cluster.py::test_output_helpers_render_markup_literally
+FAILED tests/test_r4_093_cli_cluster.py::test_sessions_table_renders_hostile_title_literally
+FAILED tests/test_r4_093_cli_cluster.py::test_fork_unknown_session_is_typed_error
+FAILED tests/test_r4_093_cli_cluster.py::test_growth_import_policy_missing_file_is_typed_error
+FAILED tests/test_r4_093_cli_cluster.py::test_growth_import_policy_bad_json_is_typed_error
+FAILED tests/test_r4_093_cli_cluster.py::test_models_refresh_empty_success_keeps_cache
+FAILED tests/test_r4_093_cli_allowlist.py::test_secrets_set_accepts_previously_refused_keys[OPENCODE_API_KEY]
+FAILED tests/test_r4_093_cli_allowlist.py::test_secrets_set_accepts_previously_refused_keys[KIMI_API_KEY]
+FAILED tests/test_r4_093_cli_allowlist.py::test_secrets_set_accepts_previously_refused_keys[CUSTOM_API_KEY]
+FAILED tests/test_r4_093_cli_allowlist.py::test_secrets_set_accepts_previously_refused_keys[CUSTOM_BASE_URL]
+FAILED tests/test_r4_093_cli_allowlist.py::test_secrets_set_session_only_leaves_dotenv_alone
+FAILED tests/test_r4_093_cli_allowlist.py::test_secrets_list_catalog_covers_widened_keys
+FAILED tests/test_r4_093_cli_allowlist.py::test_allowlist_source_of_truth_stays_single
+19 failed, 8 passed in 0.81s

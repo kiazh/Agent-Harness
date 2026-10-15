@@ -1,0 +1,681 @@
+   Building machina @ file:///Users/shadow/machina
+      Built machina @ file:///Users/shadow/machina
+Uninstalled 1 package in 1ms
+Installed 1 package in 1ms
+.....FFFFFF.FFFFFF..FF...FF.................................FFFFF..      [100%]
+=================================== FAILURES ===================================
+______________________ test_section_failure_exits_nonzero ______________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_section_failure_exits_non0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1094e14f0>
+
+    def test_section_failure_exits_nonzero(tmp_path, monkeypatch):
+        """A broken section must fail the run, not print a green "done.".
+    
+        RED before R4-092a: ``main()`` always returned 0.
+        """
+    
+        def explode():
+            raise RuntimeError("section exploded")
+    
+        monkeypatch.setattr(benchmark, "_environment", explode)
+        out = tmp_path / "bench.json"
+    
+        rc = benchmark.main(["--section", "environment", "--json", str(out)])
+    
+>       assert rc == 1
+E       assert 0 == 1
+
+tests/test_benchmark_tool.py:151: AssertionError
+----------------------------- Captured stdout call -----------------------------
+============================================================
+Machina offline benchmark
+============================================================
+
+## environment
+  error: RuntimeError: section exploded
+  _section_seconds: 0.0
+
+## comparisons
+  incident_vs_now:
+    incident: 2,119,552 tokens, 228 calls, 25 post-ask recalls, no report
+    now: provider_calls=None, recall_calls=None, artifact_written=None
+  memory_baseline_vs_production: run with --locomo-data and --locomo-db for the baseline-vs-production table
+  cross_tool_vs_opencode:
+    status: PROTOCOL — not directly comparable by construction
+    why: OpenCode has no LoCoMo-style persistent-memory implementation to run the same questions through, and this benchmark cannot drive another agent harness headlessly. Comparing token counts across different systems without a shared task is not a measurement.
+    fair_axes: ["same-task delivery: tokens/calls/wall-time to produce the same artifact (this benchmark's replay harness is the task definition)", "memory quality: LoCoMo recall@k/MRR of each system's memory engine"]
+    how_to_fill: run the identical replay task and LoCoMo dataset through the other system with its own harness, then compare rows here
+
+JSON written: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_section_failure_exits_non0/bench.json
+
+done.
+_______________________ test_suite_failure_exits_nonzero _______________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_suite_failure_exits_nonze0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a04bd40>
+
+    def test_suite_failure_exits_nonzero(tmp_path, monkeypatch):
+        """A failing --with-suite row must fail the benchmark run too."""
+        monkeypatch.setattr(
+            benchmark,
+            "_suite",
+            lambda: {"summary": "1 failed, 2 passed", "wall_seconds": 0.1, "exit_code": 1},
+        )
+    
+        rc = benchmark.main(
+            ["--section", "environment", "--with-suite", "--json", str(tmp_path / "bench.json")]
+        )
+    
+>       assert rc == 1
+E       assert 0 == 1
+
+tests/test_benchmark_tool.py:168: AssertionError
+----------------------------- Captured stdout call -----------------------------
+============================================================
+Machina offline benchmark
+============================================================
+
+## environment
+  version: 0.2.0
+  git_head: 6f0df5b
+  python: 3.14.5
+  platform: macOS-26.5.1-arm64-arm-64bit-Mach-O
+  _section_seconds: 0.01
+
+## suite
+  running: full backend suite — this takes minutes
+
+## suite
+  summary: 1 failed, 2 passed
+  wall_seconds: 0.1
+  exit_code: 1
+
+## comparisons
+  incident_vs_now:
+    incident: 2,119,552 tokens, 228 calls, 25 post-ask recalls, no report
+    now: provider_calls=None, recall_calls=None, artifact_written=None
+  memory_baseline_vs_production: run with --locomo-data and --locomo-db for the baseline-vs-production table
+  cross_tool_vs_opencode:
+    status: PROTOCOL — not directly comparable by construction
+    why: OpenCode has no LoCoMo-style persistent-memory implementation to run the same questions through, and this benchmark cannot drive another agent harness headlessly. Comparing token counts across different systems without a shared task is not a measurement.
+    fair_axes: ["same-task delivery: tokens/calls/wall-time to produce the same artifact (this benchmark's replay harness is the task definition)", "memory quality: LoCoMo recall@k/MRR of each system's memory engine"]
+    how_to_fill: run the identical replay task and LoCoMo dataset through the other system with its own harness, then compare rows here
+
+JSON written: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_suite_failure_exits_nonze0/bench.json
+
+done.
+____________________ test_subprocess_sections_have_timeouts ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a037930>
+
+    def test_subprocess_sections_have_timeouts(monkeypatch):
+        """The suite/UI subprocesses must be bounded (they could hang forever).
+    
+        RED before R4-092a: neither ``subprocess.run`` call passed a timeout.
+        """
+        calls: list[dict] = []
+    
+        def fake_run(command, **kwargs):
+            calls.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+    
+        monkeypatch.setattr(subprocess, "run", fake_run)
+    
+        assert benchmark._suite()["exit_code"] == 0
+        assert benchmark._ui()["exit_code"] == 0
+        assert len(calls) == 2
+        for kwargs in calls:
+>           assert kwargs.get("timeout", 0) > 0
+E           AssertionError: assert 0 > 0
+E            +  where 0 = <built-in method get of dict object at 0x10b146000>('timeout', 0)
+E            +    where <built-in method get of dict object at 0x10b146000> = {'cwd': PosixPath('/Users/shadow/machina'), 'capture_output': True, 'text': True}.get
+
+tests/test_benchmark_tool.py:188: AssertionError
+__________________ test_suite_timeout_is_reported_as_an_error __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1096a9710>
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_suite_timeout_is_reported0')
+
+    def test_suite_timeout_is_reported_as_an_error(monkeypatch, tmp_path):
+        """A timed-out subprocess section is an error, never a silent empty row."""
+    
+        def timeout_run(command, **kwargs):
+            raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 0))
+    
+        monkeypatch.setattr(subprocess, "run", timeout_run)
+>       payload = benchmark._suite()
+                  ^^^^^^^^^^^^^^^^^^
+
+tests/test_benchmark_tool.py:198: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/research/benchmark.py:390: in _suite
+    out = subprocess.run(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+command = ['/Users/shadow/machina/.venv/bin/python', '-m', 'pytest', 'tests/', '-q', '-p', ...]
+kwargs = {'cwd': PosixPath('/Users/shadow/machina'), 'capture_output': True, 'text': True}
+
+    def timeout_run(command, **kwargs):
+>       raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 0))
+E       subprocess.TimeoutExpired: Command '['/Users/shadow/machina/.venv/bin/python', '-m', 'pytest', 'tests/', '-q', '-p', 'no:cacheprovider']' timed out after 0 seconds
+
+tests/test_benchmark_tool.py:195: TimeoutExpired
+__________ test_workflow_benchmark_has_no_side_effects_inside_asserts __________
+
+    def test_workflow_benchmark_has_no_side_effects_inside_asserts():
+        """RED before R4-092c: ``assert await ...`` is stripped by ``python -O``,
+        silently skipping the measured calls (fabricated timings)."""
+        tree = ast.parse(Path(workflow_benchmark.__file__).read_text(encoding="utf-8"))
+        offenders: list[int] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assert):
+                offenders.extend(
+                    child.lineno for child in ast.walk(node.test) if isinstance(child, ast.Await)
+                )
+>       assert not offenders, f"awaits inside assert are skipped under -O: lines {offenders}"
+E       AssertionError: awaits inside assert are skipped under -O: lines [55, 56, 64, 66]
+E       assert not [55, 56, 64, 66]
+
+tests/test_benchmark_tool.py:225: AssertionError
+___________ test_compare_measures_steps_under_python_optimized_mode ____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_compare_measures_steps_un0')
+
+    def test_compare_measures_steps_under_python_optimized_mode(tmp_path):
+        """RED before R4-092c: under ``-O`` the measured awaits never ran."""
+        probe = tmp_path / "optimized_probe.py"
+        probe.write_text(_OPTIMIZED_PROBE, encoding="utf-8")
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_ROOT), env.get("PYTHONPATH", "")]))
+    
+        out = subprocess.run(
+            [sys.executable, "-O", str(probe)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+    
+        assert out.returncode == 0, out.stderr
+>       assert "starts=2" in out.stdout
+E       AssertionError: assert 'starts=2' in 'starts=0\nresumes=0\n'
+E        +  where 'starts=0\nresumes=0\n' = CompletedProcess(args=['/Users/shadow/machina/.venv/bin/python', '-O', '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4.../optimized_probe.py'], returncode=0, stdout='starts=0\nresumes=0\n', stderr='environment file could not be resolved\n').stdout
+
+tests/test_benchmark_tool.py:301: AssertionError
+_________ test_compare_cleanup_attempts_every_step_when_a_delete_fails _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a0ffa10>
+
+    async def test_compare_cleanup_attempts_every_step_when_a_delete_fails(monkeypatch):
+        """RED before R4-092b: the first failing delete aborted the remaining
+        cleanup steps (runs/session deletes and the pool close were skipped)."""
+        calls: list[tuple[str, str, object]] = []
+        databases: list = []
+        _install_workflow_fakes(
+            monkeypatch,
+            calls,
+            databases,
+            fail_deletes=("DELETE FROM workflow_trial_effects",),
+        )
+    
+>       with pytest.raises(RuntimeError, match="cleanup failed"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'cleanup failed'
+E         Actual message: 'delete failed: DELETE FROM workflow_trial_effects WHERE'
+
+tests/test_benchmark_tool.py:410: AssertionError
+__________ test_compare_cleanup_failure_does_not_mask_the_trial_error __________
+
+self = <tests.test_benchmark_tool._install_workflow_fakes.<locals>.FakeNative object at 0x10a104d70>
+run_id = UUID('e7e3f8ff-1ea5-4121-849b-ac781bdd4a6d')
+session_id = UUID('20328877-9896-4fc6-9186-786ee40cb03e')
+agent_id = 'workflow-benchmark-90a66007-b6f2-4ce7-acaa-1ced4fb5acfd'
+action = 'database effect'
+
+    async def start(self, run_id, session_id, agent_id, action):
+        calls.append(("native", "start", run_id))
+        if start_error is not None:
+>           raise start_error
+E           LookupError: trial exploded
+
+tests/test_benchmark_tool.py:343: LookupError
+
+During handling of the above exception, another exception occurred:
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b186850>
+
+    async def test_compare_cleanup_failure_does_not_mask_the_trial_error(monkeypatch):
+        """RED before R4-092b: the cleanup RuntimeError masked the trial error."""
+        calls: list[tuple[str, str, object]] = []
+        databases: list = []
+        _install_workflow_fakes(
+            monkeypatch,
+            calls,
+            databases,
+            start_error=LookupError("trial exploded"),
+            fail_deletes=("DELETE FROM workflow_trial_effects",),
+        )
+    
+        with pytest.raises(LookupError, match="trial exploded") as excinfo:
+>           await workflow_benchmark.compare("postgresql://unused", iterations=1)
+
+tests/test_benchmark_tool.py:433: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/research/workflow_benchmark.py:85: in compare
+    await database.execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <tests.test_benchmark_tool._install_workflow_fakes.<locals>.FakeDatabase object at 0x10a601be0>
+sql = 'DELETE FROM workflow_trial_effects WHERE run_id = ANY($1::uuid[])'
+args = ([UUID('e7e3f8ff-1ea5-4121-849b-ac781bdd4a6d')],)
+
+    async def execute(self, sql, *args):
+        self.statements.append(sql)
+        if fail_deletes and sql.strip().startswith(fail_deletes):
+>           raise RuntimeError(f"delete failed: {sql.strip()[:40]}")
+E           RuntimeError: delete failed: DELETE FROM workflow_trial_effects WHERE
+
+tests/test_benchmark_tool.py:328: RuntimeError
+_____________ test_session_recall_cleanup_isolates_delete_failures _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1096c5cd0>
+
+    async def test_session_recall_cleanup_isolates_delete_failures(monkeypatch):
+        """RED before R4-092b: one failed delete skipped the remaining sessions."""
+        deleted: list[uuid.UUID] = []
+    
+        class FakeSessionManager:
+            async def create(self, title, agent_id=None):
+                return SimpleNamespace(id=uuid.uuid4())
+    
+            async def delete(self, session_id):
+                deleted.append(session_id)
+                if len(deleted) == 1:
+                    raise RuntimeError("session delete exploded")
+    
+        _fake_recall_modules(monkeypatch, FakeSessionManager())
+    
+>       with pytest.raises(RuntimeError, match="cleanup failed"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'cleanup failed'
+E         Actual message: 'session delete exploded'
+
+tests/test_benchmark_tool.py:488: AssertionError
+_____ test_session_recall_cleanup_failure_does_not_mask_the_original_error _____
+
+self = <tests.test_benchmark_tool.test_session_recall_cleanup_failure_does_not_mask_the_original_error.<locals>.FakeSessionManager object at 0x10a105400>
+title = 'LoCoMo transcript'
+agent_id = 'locomo-recall-0ea8291f-e630-4b58-9665-005411a66ce6'
+
+    async def create(self, title, agent_id=None):
+        self.created += 1
+        if self.created == 2:
+>           raise LookupError("second session exploded")
+E           LookupError: second session exploded
+
+tests/test_benchmark_tool.py:505: LookupError
+
+During handling of the above exception, another exception occurred:
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a0aee40>
+
+    async def test_session_recall_cleanup_failure_does_not_mask_the_original_error(monkeypatch):
+        """A cleanup failure must never replace the error that caused it."""
+        deleted: list[uuid.UUID] = []
+    
+        class FakeSessionManager:
+            def __init__(self):
+                self.created = 0
+    
+            async def create(self, title, agent_id=None):
+                self.created += 1
+                if self.created == 2:
+                    raise LookupError("second session exploded")
+                return SimpleNamespace(id=uuid.uuid4())
+    
+            async def delete(self, session_id):
+                deleted.append(session_id)
+                raise RuntimeError("session delete exploded")
+    
+        _fake_recall_modules(monkeypatch, FakeSessionManager())
+    
+        with pytest.raises(LookupError, match="second session exploded") as excinfo:
+>           await evaluate_session_recall(_recall_dataset(), k=1, turns_per_session=1)
+
+tests/test_benchmark_tool.py:515: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/research/locomo.py:534: in evaluate_session_recall
+    await session_manager.delete(session_id)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <tests.test_benchmark_tool.test_session_recall_cleanup_failure_does_not_mask_the_original_error.<locals>.FakeSessionManager object at 0x10a105400>
+session_id = UUID('14e8323b-063d-4d95-9bbb-51983edfde5b')
+
+    async def delete(self, session_id):
+        deleted.append(session_id)
+>       raise RuntimeError("session delete exploded")
+E       RuntimeError: session delete exploded
+
+tests/test_benchmark_tool.py:510: RuntimeError
+_________________ test_identity_cleanup_attempts_every_delete __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b108050>
+
+    async def test_identity_cleanup_attempts_every_delete(monkeypatch):
+        """RED before R4-092b: the first failing delete skipped the rest."""
+        statements: list[str] = []
+    
+        class FakeGate:
+            async def save_beliefs(self, belief):
+                return None
+    
+            async def observe_transition(self, belief, causal_memory_ids=None, threshold=0.5):
+                return SimpleNamespace(quarantined_count=0, accepted=True)
+    
+        class FakeDatabase:
+            async def execute(self, sql, *args):
+                statements.append(sql)
+                if len(statements) == 1:
+                    raise RuntimeError("cleanup exploded")
+    
+            async def fetchval(self, sql, *args):
+                return 1
+    
+        monkeypatch.setattr(identity_eval, "IdentityGate", FakeGate)
+        monkeypatch.setattr(identity_eval, "db", FakeDatabase())
+    
+>       with pytest.raises(RuntimeError, match="cleanup failed"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'cleanup failed'
+E         Actual message: 'cleanup exploded'
+
+tests/test_benchmark_tool.py:558: AssertionError
+________ test_identity_cleanup_failure_does_not_mask_the_original_error ________
+
+self = <tests.test_benchmark_tool.test_identity_cleanup_failure_does_not_mask_the_original_error.<locals>.ExplodingGate object at 0x10a105e80>
+belief = AgentBelief(agent_id='identity-benchmark-91097a4c-ffe2-43d0-b6aa-cc4a7384d0d9', known_facts={}, traits={}, values={}, updated_at=datetime.datetime(2026, 10, 15, 0, 18, 20, 403770, tzinfo=datetime.timezone.utc))
+
+    async def save_beliefs(self, belief):
+>       raise LookupError("gate exploded")
+E       LookupError: gate exploded
+
+tests/test_benchmark_tool.py:570: LookupError
+
+During handling of the above exception, another exception occurred:
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b1089f0>
+
+    async def test_identity_cleanup_failure_does_not_mask_the_original_error(monkeypatch):
+        """A cleanup failure must never replace the error that caused it."""
+        statements: list[str] = []
+    
+        class ExplodingGate:
+            async def save_beliefs(self, belief):
+                raise LookupError("gate exploded")
+    
+        class FakeDatabase:
+            async def execute(self, sql, *args):
+                statements.append(sql)
+                raise RuntimeError("cleanup exploded")
+    
+            async def fetchval(self, sql, *args):
+                return 1
+    
+        monkeypatch.setattr(identity_eval, "IdentityGate", ExplodingGate)
+        monkeypatch.setattr(identity_eval, "db", FakeDatabase())
+    
+        with pytest.raises(LookupError, match="gate exploded") as excinfo:
+>           await identity_eval.evaluate_identity_scenarios(_identity_scenarios())
+
+tests/test_benchmark_tool.py:584: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/research/identity_eval.py:93: in evaluate_identity_scenarios
+    await db.execute("DELETE FROM agent_belief_history WHERE agent_id = $1", agent_id)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <tests.test_benchmark_tool.test_identity_cleanup_failure_does_not_mask_the_original_error.<locals>.FakeDatabase object at 0x10a105d30>
+sql = 'DELETE FROM agent_belief_history WHERE agent_id = $1'
+args = ('identity-benchmark-91097a4c-ffe2-43d0-b6aa-cc4a7384d0d9',)
+
+    async def execute(self, sql, *args):
+        statements.append(sql)
+>       raise RuntimeError("cleanup exploded")
+E       RuntimeError: cleanup exploded
+
+tests/test_benchmark_tool.py:575: RuntimeError
+__________________ test_non_integral_float_keeps_its_decimal ___________________
+
+    def test_non_integral_float_keeps_its_decimal():
+        assert token_f1("3.5", 3.5) == 1.0
+>       assert _normalize_answer(3.5) == "3.5"
+E       AssertionError: assert '35' == '3.5'
+E         
+E         - 3.5
+E         ?  -
+E         + 35
+
+tests/test_fm6_locomo.py:27: AssertionError
+___________ test_decimal_gold_does_not_merge_with_integer_prediction ___________
+
+    def test_decimal_gold_does_not_merge_with_integer_prediction():
+        """The decimal point is meaningful: gold 3.5 must NOT score against 35.
+    
+        RED before R4-092d: punctuation stripping collapsed "3.5" to "35", so a
+        wrong integer prediction earned a perfect F1 against a decimal gold.
+        """
+>       assert token_f1("35", 3.5) == 0.0
+E       AssertionError: assert 1.0 == 0.0
+E        +  where 1.0 = token_f1('35', 3.5)
+
+tests/test_fm6_locomo.py:36: AssertionError
+____________ test_numeric_render_uses_compact_format[2024.5-2024.5] ____________
+
+value = 2024.5, expected = '2024.5'
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (2024.0, "2024"),
+            (2024.5, "2024.5"),
+            (0.5, "0.5"),
+            (0.0, "0"),
+            (100, "100"),
+            (1e21, "1e21"),
+        ],
+    )
+    def test_numeric_render_uses_compact_format(value, expected):
+>       assert _normalize_answer(value) == expected
+E       AssertionError: assert '20245' == '2024.5'
+E         
+E         - 2024.5
+E         ?     -
+E         + 20245
+
+tests/test_fm6_locomo.py:63: AssertionError
+_______________ test_numeric_render_uses_compact_format[0.5-0.5] _______________
+
+value = 0.5, expected = '0.5'
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (2024.0, "2024"),
+            (2024.5, "2024.5"),
+            (0.5, "0.5"),
+            (0.0, "0"),
+            (100, "100"),
+            (1e21, "1e21"),
+        ],
+    )
+    def test_numeric_render_uses_compact_format(value, expected):
+>       assert _normalize_answer(value) == expected
+E       AssertionError: assert '05' == '0.5'
+E         
+E         - 0.5
+E         ?  -
+E         + 05
+
+tests/test_fm6_locomo.py:63: AssertionError
+__________ test_load_locomo_rejects_non_string_turn_fields[text-123] ___________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_load_locomo_rejects_non_s0')
+field = 'text', value = 123
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("text", 123),
+            ("text", None),
+            ("text", ["I moved to Toronto."]),
+            ("speaker", {"name": "Ada"}),
+            ("speaker", 7),
+        ],
+    )
+    def test_load_locomo_rejects_non_string_turn_fields(tmp_path, field, value):
+        """RED before R4-092e: non-string text/speaker passed through silently."""
+        turn = {"dia_id": "D1:1", "speaker": "Ada", "text": "I moved to Toronto."}
+        turn[field] = value
+        path = tmp_path / "locomo-bad.json"
+        path.write_text(json.dumps(_locomo_sample(turn)), encoding="utf-8")
+    
+>       with pytest.raises(ValueError, match="text and speaker must be strings"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_locomo_answers.py:419: Failed
+__________ test_load_locomo_rejects_non_string_turn_fields[text-None] __________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_load_locomo_rejects_non_s1')
+field = 'text', value = None
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("text", 123),
+            ("text", None),
+            ("text", ["I moved to Toronto."]),
+            ("speaker", {"name": "Ada"}),
+            ("speaker", 7),
+        ],
+    )
+    def test_load_locomo_rejects_non_string_turn_fields(tmp_path, field, value):
+        """RED before R4-092e: non-string text/speaker passed through silently."""
+        turn = {"dia_id": "D1:1", "speaker": "Ada", "text": "I moved to Toronto."}
+        turn[field] = value
+        path = tmp_path / "locomo-bad.json"
+        path.write_text(json.dumps(_locomo_sample(turn)), encoding="utf-8")
+    
+>       with pytest.raises(ValueError, match="text and speaker must be strings"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_locomo_answers.py:419: Failed
+_________ test_load_locomo_rejects_non_string_turn_fields[text-value2] _________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_load_locomo_rejects_non_s2')
+field = 'text', value = ['I moved to Toronto.']
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("text", 123),
+            ("text", None),
+            ("text", ["I moved to Toronto."]),
+            ("speaker", {"name": "Ada"}),
+            ("speaker", 7),
+        ],
+    )
+    def test_load_locomo_rejects_non_string_turn_fields(tmp_path, field, value):
+        """RED before R4-092e: non-string text/speaker passed through silently."""
+        turn = {"dia_id": "D1:1", "speaker": "Ada", "text": "I moved to Toronto."}
+        turn[field] = value
+        path = tmp_path / "locomo-bad.json"
+        path.write_text(json.dumps(_locomo_sample(turn)), encoding="utf-8")
+    
+>       with pytest.raises(ValueError, match="text and speaker must be strings"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_locomo_answers.py:419: Failed
+_______ test_load_locomo_rejects_non_string_turn_fields[speaker-value3] ________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_load_locomo_rejects_non_s3')
+field = 'speaker', value = {'name': 'Ada'}
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("text", 123),
+            ("text", None),
+            ("text", ["I moved to Toronto."]),
+            ("speaker", {"name": "Ada"}),
+            ("speaker", 7),
+        ],
+    )
+    def test_load_locomo_rejects_non_string_turn_fields(tmp_path, field, value):
+        """RED before R4-092e: non-string text/speaker passed through silently."""
+        turn = {"dia_id": "D1:1", "speaker": "Ada", "text": "I moved to Toronto."}
+        turn[field] = value
+        path = tmp_path / "locomo-bad.json"
+        path.write_text(json.dumps(_locomo_sample(turn)), encoding="utf-8")
+    
+>       with pytest.raises(ValueError, match="text and speaker must be strings"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_locomo_answers.py:419: Failed
+__________ test_load_locomo_rejects_non_string_turn_fields[speaker-7] __________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1638/test_load_locomo_rejects_non_s4')
+field = 'speaker', value = 7
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("text", 123),
+            ("text", None),
+            ("text", ["I moved to Toronto."]),
+            ("speaker", {"name": "Ada"}),
+            ("speaker", 7),
+        ],
+    )
+    def test_load_locomo_rejects_non_string_turn_fields(tmp_path, field, value):
+        """RED before R4-092e: non-string text/speaker passed through silently."""
+        turn = {"dia_id": "D1:1", "speaker": "Ada", "text": "I moved to Toronto."}
+        turn[field] = value
+        path = tmp_path / "locomo-bad.json"
+        path.write_text(json.dumps(_locomo_sample(turn)), encoding="utf-8")
+    
+>       with pytest.raises(ValueError, match="text and speaker must be strings"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_locomo_answers.py:419: Failed
+=========================== short test summary info ============================
+FAILED tests/test_benchmark_tool.py::test_section_failure_exits_nonzero - ass...
+FAILED tests/test_benchmark_tool.py::test_suite_failure_exits_nonzero - asser...
+FAILED tests/test_benchmark_tool.py::test_subprocess_sections_have_timeouts
+FAILED tests/test_benchmark_tool.py::test_suite_timeout_is_reported_as_an_error
+FAILED tests/test_benchmark_tool.py::test_workflow_benchmark_has_no_side_effects_inside_asserts
+FAILED tests/test_benchmark_tool.py::test_compare_measures_steps_under_python_optimized_mode
+FAILED tests/test_benchmark_tool.py::test_compare_cleanup_attempts_every_step_when_a_delete_fails
+FAILED tests/test_benchmark_tool.py::test_compare_cleanup_failure_does_not_mask_the_trial_error
+FAILED tests/test_benchmark_tool.py::test_session_recall_cleanup_isolates_delete_failures
+FAILED tests/test_benchmark_tool.py::test_session_recall_cleanup_failure_does_not_mask_the_original_error
+FAILED tests/test_benchmark_tool.py::test_identity_cleanup_attempts_every_delete
+FAILED tests/test_benchmark_tool.py::test_identity_cleanup_failure_does_not_mask_the_original_error
+FAILED tests/test_fm6_locomo.py::test_non_integral_float_keeps_its_decimal - ...
+FAILED tests/test_fm6_locomo.py::test_decimal_gold_does_not_merge_with_integer_prediction
+FAILED tests/test_fm6_locomo.py::test_numeric_render_uses_compact_format[2024.5-2024.5]
+FAILED tests/test_fm6_locomo.py::test_numeric_render_uses_compact_format[0.5-0.5]
+FAILED tests/test_locomo_answers.py::test_load_locomo_rejects_non_string_turn_fields[text-123]
+FAILED tests/test_locomo_answers.py::test_load_locomo_rejects_non_string_turn_fields[text-None]
+FAILED tests/test_locomo_answers.py::test_load_locomo_rejects_non_string_turn_fields[text-value2]
+FAILED tests/test_locomo_answers.py::test_load_locomo_rejects_non_string_turn_fields[speaker-value3]
+FAILED tests/test_locomo_answers.py::test_load_locomo_rejects_non_string_turn_fields[speaker-7]
+21 failed, 46 passed in 1.47s

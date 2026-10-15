@@ -1,0 +1,95 @@
+# RED: test_head_to_head_grader_adversarial.py vs UNFIXED machina/research/head_to_head.py (HEAD, bound via PYTHONPATH)
+# command: PYTHONPATH=<scratch> .venv/bin/python -m pytest tests/test_head_to_head_grader_adversarial.py -q -p no:cacheprovider
+# date: 2026-10-14T22:31:05Z, python: Python 3.14.5, pytest: pytest 9.1.1
+FFFF.F.                                                                  [100%]
+=================================== FAILURES ===================================
+___________________ test_addopts_deselect_attack_is_blocked ____________________
+
+tmp_path = PosixPath('TMP/pytest-of-shadow/...)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1095cdba0>
+
+    def test_addopts_deselect_attack_is_blocked(tmp_path: Path, monkeypatch) -> None:
+        result = _run_case(tmp_path, monkeypatch, flat_test=False, mutations=_DESELECT_ATTACK)
+>       assert result["success"] is False, result
+E       AssertionError: {'harness': 'opencode', 'run_dir': 'TMP/pytest-of-shadow/... 'session_id': 'ses-adversarial', 'wall_seconds': 0.268, ...}
+E       assert True is False
+
+tests/test_head_to_head_grader_adversarial.py:223: AssertionError
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: TMP/pytest-of-shadow/...
+_____________________ test_root_conftest_hijack_is_blocked _____________________
+
+tmp_path = PosixPath('TMP/pytest-of-shadow/...)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1095cd940>
+
+    def test_root_conftest_hijack_is_blocked(tmp_path: Path, monkeypatch) -> None:
+        result = _run_case(tmp_path, monkeypatch, flat_test=False, mutations=_CONFTEST_HIJACK)
+>       assert result["success"] is False, result
+E       AssertionError: {'harness': 'opencode', 'run_dir': 'TMP/pytest-of-shadow/... 'session_id': 'ses-adversarial', 'wall_seconds': 0.261, ...}
+E       assert True is False
+
+tests/test_head_to_head_grader_adversarial.py:233: AssertionError
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: TMP/pytest-of-shadow/...
+___________________ test_cacheprovider_poisoning_is_blocked ____________________
+
+tmp_path = PosixPath('TMP/pytest-of-shadow/...)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b0a0950>
+
+    def test_cacheprovider_poisoning_is_blocked(tmp_path: Path, monkeypatch) -> None:
+        result = _run_case(tmp_path, monkeypatch, flat_test=False, mutations=_CACHE_POISON_ATTACK)
+>       assert result["success"] is False, result
+E       AssertionError: {'harness': 'opencode', 'run_dir': 'TMP/pytest-of-shadow/... 'session_id': 'ses-adversarial', 'wall_seconds': 0.22, ...}
+E       assert True is False
+
+tests/test_head_to_head_grader_adversarial.py:242: AssertionError
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: TMP/pytest-of-shadow/...
+_________________ test_pytest_addopts_env_cannot_bypass_grade __________________
+
+tmp_path = PosixPath('TMP/pytest-of-shadow/...)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a59b350>
+
+    def test_pytest_addopts_env_cannot_bypass_grade(tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setenv(
+            "PYTEST_ADDOPTS",
+            "--deselect tests/test_calc.py::test_add --deselect tests/test_calc.py::test_mul",
+        )
+        result = _run_case(tmp_path, monkeypatch, flat_test=False, mutations="")
+>       assert result["success"] is False, result
+E       AssertionError: {'harness': 'opencode', 'run_dir': 'TMP/pytest-of-shadow/... 'session_id': 'ses-adversarial', 'wall_seconds': 0.211, ...}
+E       assert True is False
+
+tests/test_head_to_head_grader_adversarial.py:255: AssertionError
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: TMP/pytest-of-shadow/...
+_____________ test_root_level_test_path_genuine_fix_scores_success _____________
+
+tmp_path = PosixPath('TMP/pytest-of-shadow/...)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b046050>
+
+    def test_root_level_test_path_genuine_fix_scores_success(tmp_path: Path, monkeypatch) -> None:
+        result = _run_case(tmp_path, monkeypatch, flat_test=True, mutations=_FIX)
+>       assert result["success"] is True, result
+E       AssertionError: {'harness': 'opencode', 'run_dir': 'TMP/pytest-of-shadow/... 'session_id': 'ses-adversarial', 'wall_seconds': 0.232, ...}
+E       assert False is True
+
+tests/test_head_to_head_grader_adversarial.py:276: AssertionError
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: TMP/pytest-of-shadow/...
+==================================== PASSES ====================================
+_______________________ test_genuine_fix_scores_success ________________________
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: TMP/pytest-of-shadow/...
+_____________ test_git_noise_in_workspace_does_not_break_integrity _____________
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: TMP/pytest-of-shadow/...
+=========================== short test summary info ============================
+PASSED tests/test_head_to_head_grader_adversarial.py::test_genuine_fix_scores_success
+PASSED tests/test_head_to_head_grader_adversarial.py::test_git_noise_in_workspace_does_not_break_integrity
+FAILED tests/test_head_to_head_grader_adversarial.py::test_addopts_deselect_attack_is_blocked
+FAILED tests/test_head_to_head_grader_adversarial.py::test_root_conftest_hijack_is_blocked
+FAILED tests/test_head_to_head_grader_adversarial.py::test_cacheprovider_poisoning_is_blocked
+FAILED tests/test_head_to_head_grader_adversarial.py::test_pytest_addopts_env_cannot_bypass_grade
+FAILED tests/test_head_to_head_grader_adversarial.py::test_root_level_test_path_genuine_fix_scores_success
+5 failed, 2 passed in 8.91s

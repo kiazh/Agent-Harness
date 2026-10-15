@@ -1,0 +1,27 @@
+environment file could not be resolved
+Ignoring unreadable config persona_description in /Users/shadow/.machina/config.yaml: ImportError
+ImportError
+/Users/shadow/machina/machina/core/config.py:614 (load)
+/Users/shadow/machina/machina/core/config.py:282 (validate_value)
+/Users/shadow/machina/machina/memory/__init__.py:15 (<module>)
+/Users/shadow/machina/machina/memory/approval.py:23 (<module>)
+2026-10-14 23:32:49,093 [AUDIT] {"timestamp": 1792035169.0938308, "event": "rag_index_start", "session_id": "b2ba114e-75a7-4a33-9b41-166cc2e59be3", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "doc_type": "text"}
+2026-10-14 23:32:49,103 [AUDIT] {"timestamp": 1792035169.1035259, "event": "rag_index_complete", "session_id": "b2ba114e-75a7-4a33-9b41-166cc2e59be3", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "chunks_stored": 1}
+source                   = 'https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1'
+redact_secrets (storage) = 'https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1'
+url_credentials          = 'https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1'
+_redact_or_failed        = 'https://alice:example-passphrase@example.invalid/doc?api_key=short1&x=1'
+applied source redactor  = 'https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1' (_redact_source)
+context_chunks rows: 1
+  document_source: userinfo_leak=False query_leak=False
+    https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1
+  payload.metadata.source: userinfo_leak=False query_leak=False
+    https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1
+  payload.source: userinfo_leak=False query_leak=False
+    https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1
+audit rows: 2
+  event=rag_index_start userinfo_leak=False query_leak=False
+    {"event": "rag_index_start", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "doc_type": "text", "timestamp": 1792035169.0938308, "session_id":
+  event=rag_index_complete userinfo_leak=False query_leak=False
+    {"event": "rag_index_complete", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "timestamp": 1792035169.1035259, "session_id": "b2ba114e-75a7-4
+GREEN: no raw credential in storage or audit rows

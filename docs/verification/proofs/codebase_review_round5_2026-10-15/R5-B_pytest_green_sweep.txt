@@ -1,0 +1,210 @@
+........................................................................ [ 13%]
+.................................................F...................... [ 26%]
+........................................................................ [ 40%]
+........................................................................ [ 53%]
+...................................s...................EE......E........ [ 66%]
+........................................................................ [ 80%]
+........................................................................ [ 93%]
+...................................                                      [100%]
+==================================== ERRORS ====================================
+_ ERROR at setup of test_paused_and_cancelled_turns_do_not_record_rsi_success[False] _
+
+self = <Coroutine test_paused_and_cancelled_turns_do_not_record_rsi_success[False]>
+
+    def setup(self) -> None:
+        runner_fixture_id = f"_{self._loop_scope}_scoped_runner"
+        if runner_fixture_id not in self.fixturenames:
+            self.fixturenames.append(runner_fixture_id)
+        # When loop factories are configured, resolve the loop factory
+        # fixture early so that a factory variant change cascades cache
+        # invalidation before any async fixture checks its cache.
+        hook_caller = self.config.hook.pytest_asyncio_loop_factories
+        if hook_caller.get_hookimpls():
+            _ = self._request.getfixturevalue(_asyncio_loop_factory.__name__)
+>       return super().setup()
+               ^^^^^^^^^^^^^^^
+
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:558: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:944: in pytest_fixture_setup
+    hook_result = yield
+                  ^^^^^
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:407: in _asyncgen_fixture_wrapper
+    result = runner.run(setup(), context=context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:127: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:719: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:403: in setup
+    res = await gen_obj.__anext__()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/conftest.py:183: in db_pool
+    await test_db.initialize_schema()
+machina/db/connection.py:206: in initialize_schema
+    await conn.execute(schema_sql)
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:377: in execute
+    result = await self._protocol.query(query, timeout)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+E   DETAIL:  Process 5644 waits for AccessExclusiveLock on relation 541518 of database 541086; blocked by process 5631.
+E   Process 5631 waits for RowShareLock on relation 541496 of database 541086; blocked by process 5644.
+E   HINT:  See server log for query details.
+
+asyncpg/protocol/protocol.pyx:341: DeadlockDetectedError
+_ ERROR at setup of test_paused_and_cancelled_turns_do_not_record_rsi_success[True] _
+
+self = <Coroutine test_paused_and_cancelled_turns_do_not_record_rsi_success[True]>
+
+    def setup(self) -> None:
+        runner_fixture_id = f"_{self._loop_scope}_scoped_runner"
+        if runner_fixture_id not in self.fixturenames:
+            self.fixturenames.append(runner_fixture_id)
+        # When loop factories are configured, resolve the loop factory
+        # fixture early so that a factory variant change cascades cache
+        # invalidation before any async fixture checks its cache.
+        hook_caller = self.config.hook.pytest_asyncio_loop_factories
+        if hook_caller.get_hookimpls():
+            _ = self._request.getfixturevalue(_asyncio_loop_factory.__name__)
+>       return super().setup()
+               ^^^^^^^^^^^^^^^
+
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:558: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:944: in pytest_fixture_setup
+    hook_result = yield
+                  ^^^^^
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:407: in _asyncgen_fixture_wrapper
+    result = runner.run(setup(), context=context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:127: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:719: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:403: in setup
+    res = await gen_obj.__anext__()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/conftest.py:183: in db_pool
+    await test_db.initialize_schema()
+machina/db/connection.py:206: in initialize_schema
+    await conn.execute(schema_sql)
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:377: in execute
+    result = await self._protocol.query(query, timeout)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+E   DETAIL:  Process 5648 waits for AccessExclusiveLock on relation 541518 of database 541086; blocked by process 5635.
+E   Process 5635 waits for RowShareLock on relation 541496 of database 541086; blocked by process 5648.
+E   HINT:  See server log for query details.
+
+asyncpg/protocol/protocol.pyx:341: DeadlockDetectedError
+_ ERROR at setup of test_agent_records_evidence_and_reuses_routing_after_restart[manual_skill-False] _
+
+self = <Coroutine test_agent_records_evidence_and_reuses_routing_after_restart[manual_skill-False]>
+
+    def setup(self) -> None:
+        runner_fixture_id = f"_{self._loop_scope}_scoped_runner"
+        if runner_fixture_id not in self.fixturenames:
+            self.fixturenames.append(runner_fixture_id)
+        # When loop factories are configured, resolve the loop factory
+        # fixture early so that a factory variant change cascades cache
+        # invalidation before any async fixture checks its cache.
+        hook_caller = self.config.hook.pytest_asyncio_loop_factories
+        if hook_caller.get_hookimpls():
+            _ = self._request.getfixturevalue(_asyncio_loop_factory.__name__)
+>       return super().setup()
+               ^^^^^^^^^^^^^^^
+
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:558: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:944: in pytest_fixture_setup
+    hook_result = yield
+                  ^^^^^
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:407: in _asyncgen_fixture_wrapper
+    result = runner.run(setup(), context=context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:127: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:719: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:403: in setup
+    res = await gen_obj.__anext__()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/conftest.py:183: in db_pool
+    await test_db.initialize_schema()
+machina/db/connection.py:206: in initialize_schema
+    await conn.execute(schema_sql)
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:377: in execute
+    result = await self._protocol.query(query, timeout)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+E   DETAIL:  Process 5757 waits for AccessExclusiveLock on relation 541518 of database 541086; blocked by process 5738.
+E   Process 5738 waits for RowShareLock on relation 541496 of database 541086; blocked by process 5757.
+E   HINT:  See server log for query details.
+
+asyncpg/protocol/protocol.pyx:341: DeadlockDetectedError
+=================================== FAILURES ===================================
+________________ test_persona_interpretation_reaches_retrieval _________________
+
+db_pool = <machina.db.connection.Database object at 0x10f7b9c50>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10f82eb30>
+
+    async def test_persona_interpretation_reaches_retrieval(db_pool, monkeypatch):
+        monkeypatch.setattr("machina.memory.identity.db", db_pool)
+        monkeypatch.setattr("machina.memory.store.db", db_pool)
+        monkeypatch.setattr("machina.memory.retriever.db", db_pool)
+        monkeypatch.setattr("machina.memory.persona.db", db_pool)
+        monkeypatch.delenv("MACHINA_PROVENANCE_KEY", raising=False)
+        agent = f"persona-{uuid.uuid4()}"
+        store = MemoryStore()
+>       fact = await store.add(None, agent, "Python is useful", "fact")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_research_integration.py:127: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/memory/store.py:204: in add
+    row = await insert(db)
+          ^^^^^^^^^^^^^^^^
+machina/memory/store.py:149: in insert
+    row = await executor.fetchrow(
+machina/db/connection.py:170: in fetchrow
+    result = await conn.fetchrow(query, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:775: in fetchrow
+    data = await self._execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:1904: in _execute
+    result, _ = await self.__execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2003: in __execute
+    result, stmt = await self._do_execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2069: in _do_execute
+    result = await executor(stmt, timeout)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+E   DETAIL:  Process 5501 waits for RowShareLock on relation 541496 of database 541086; blocked by process 5504.
+E   Process 5504 waits for AccessExclusiveLock on relation 541559 of database 541086; blocked by process 5501.
+E   HINT:  See server log for query details.
+
+asyncpg/protocol/protocol.pyx:197: DeadlockDetectedError
+=========================== short test summary info ============================
+FAILED tests/test_research_integration.py::test_persona_interpretation_reaches_retrieval
+ERROR tests/test_rsi_agent.py::test_paused_and_cancelled_turns_do_not_record_rsi_success[False]
+ERROR tests/test_rsi_agent.py::test_paused_and_cancelled_turns_do_not_record_rsi_success[True]
+ERROR tests/test_rsi_agent.py::test_agent_records_evidence_and_reuses_routing_after_restart[manual_skill-False]
+1 failed, 534 passed, 1 skipped, 3 errors in 33.69s

@@ -1,0 +1,59 @@
+.............F..................                                         [100%]
+=================================== FAILURES ===================================
+____________________ test_document_benchmark_real_postgres _____________________
+
+db_pool = <machina.db.connection.Database object at 0x10a9d0cd0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108f1e5f0>
+
+    async def test_document_benchmark_real_postgres(db_pool, monkeypatch):
+        import json
+        from pathlib import Path
+    
+        from machina.rag import evaluation
+        from machina.rag import pipeline as pipeline_module
+        from machina.rag.pipeline import RAGConfig
+    
+        monkeypatch.setattr("machina.db.connection.db", db_pool)
+        monkeypatch.setattr(pipeline_module, "db", db_pool)
+        root = Path(__file__).resolve().parents[1]
+        dataset = json.loads((root / "tests/data/rag/machina_docs_v1.json").read_text())
+        pipeline = RAGPipeline(config=RAGConfig(enable_embeddings=False, enable_reranking=False))
+>       report = await evaluation.benchmark_documents(pipeline, dataset, root)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_rag_quality.py:141: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/rag/evaluation.py:131: in benchmark_documents
+    await pipeline.index_document(str(path), sid)
+machina/rag/pipeline.py:401: in index_document
+    rows = await _replace_and_insert(conn)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/rag/pipeline.py:379: in _replace_and_insert
+    return await executor.fetch(insert_sql, *insert_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:717: in fetch
+    return await self._execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:1904: in _execute
+    result, _ = await self.__execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2003: in __execute
+    result, stmt = await self._do_execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2069: in _do_execute
+    result = await executor(stmt, timeout)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+E   DETAIL:  Process 11699 waits for RowShareLock on relation 541496 of database 541086; blocked by process 11701.
+E   Process 11701 waits for AccessExclusiveLock on relation 541518 of database 541086; blocked by process 11699.
+E   HINT:  See server log for query details.
+
+asyncpg/protocol/protocol.pyx:197: DeadlockDetectedError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 23:32:18,741 [AUDIT] {"timestamp": 1792035138.741461, "event": "rag_index_start", "session_id": "286654d9-00ed-4b58-b0a1-b69a1a5502fb", "source": "/Users/shadow/machina/docs/PERSONALITY_GROWTH.md", "doc_type": "markdown"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:216 {"timestamp": 1792035138.741461, "event": "rag_index_start", "session_id": "286654d9-00ed-4b58-b0a1-b69a1a5502fb", "source": "/Users/shadow/machina/docs/PERSONALITY_GROWTH.md", "doc_type": "markdown"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+=========================== short test summary info ============================
+FAILED tests/test_rag_quality.py::test_document_benchmark_real_postgres - asy...
+1 failed, 31 passed in 2.07s

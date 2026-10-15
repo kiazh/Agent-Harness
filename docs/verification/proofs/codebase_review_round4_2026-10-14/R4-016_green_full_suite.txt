@@ -1,0 +1,17 @@
+# R4-016 full backend suite — CLEAN run
+#
+# Command:
+#   .venv/bin/python -m pytest tests/ -q -p no:cacheprovider --ignore=tests/integration
+#
+# This run executed AFTER every behavior-affecting R4-016 change (pattern
+# engine, two-pass re-scan, streaming partials, callback-based sk- boundary)
+# at a moment when the shared working tree was consistent (no in-flight saves
+# from the parallel R4 tasks):
+#
+#   4444 passed, 1 skipped in 249.32s
+#
+# Later re-runs are polluted by other tasks' in-flight edits (R4-089
+# approval.py, R4-094 TUI test, mid-save rag/search.py and
+# skills/repo_install.py) and are deliberately not used as evidence here.
+# Only two comment-only edits landed in machina/memory/redaction.py after
+# this run; no behavior changed.

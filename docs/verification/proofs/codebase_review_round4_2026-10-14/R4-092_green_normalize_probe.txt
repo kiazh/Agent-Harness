@@ -1,0 +1,11 @@
+'3.5' -> '3.5'
+'3.5.' -> '3.5'
+'$3.50!' -> '3.50'
+'1,234.5 dollars' -> '1234.5 dollars'
+'Toronto, 2024!' -> 'toronto 2024'
+'café résumé' -> 'café résumé'
+'e.g. version 1.2.3' -> 'eg version 1.2.3'
+'1.2.3.4' -> '1.2.3.4'
+'...' -> ''
+normalization cases OK
+decimal semantics OK (35 vs gold 3.5 scores 0.0)

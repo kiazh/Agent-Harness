@@ -1,0 +1,184 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 6 items
+
+tests/test_r4_049b_fdclose.py::test_chatgpt_save_tokens_chmod_failure_closes_fd FAILED [ 16%]
+tests/test_r4_049b_fdclose.py::test_chatgpt_invalidate_credentials_chmod_failure_closes_fd FAILED [ 33%]
+tests/test_r4_049b_fdclose.py::test_copilot_publish_device_token_chmod_failure_closes_fd FAILED [ 50%]
+tests/test_r4_049b_fdclose.py::test_providers_save_models_chmod_failure_closes_fd FAILED [ 66%]
+tests/test_r4_049b_fdclose.py::test_chmod_temp_file_helper_closes_fd_on_failure FAILED [ 83%]
+tests/test_r4_049b_fdclose.py::test_stores_still_land_0600_after_fix PASSED [100%]
+
+=================================== FAILURES ===================================
+_______________ test_chatgpt_save_tokens_chmod_failure_closes_fd _______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1955/test_chatgpt_save_tokens_chmod0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10addefd0>
+chmod_fault = <tests.test_r4_049b_fdclose._ChmodFault object at 0x10bd24d70>
+
+    def test_chatgpt_save_tokens_chmod_failure_closes_fd(
+        tmp_path, monkeypatch: pytest.MonkeyPatch, chmod_fault: _ChmodFault
+    ) -> None:
+        from machina.security import chatgpt_auth
+    
+        target = tmp_path / "chatgpt.json"
+        monkeypatch.setenv(chatgpt_auth.AUTH_FILE_ENV, str(target))
+        tokens = {"access_token": "a" * 32, "refresh_token": "r" * 32}
+        with pytest.raises(OSError, match="injected chmod failure"):
+            with chatgpt_auth._store_lock(target):
+                chatgpt_auth.save_tokens(tokens, target)
+>       chmod_fault.assert_all_closed()
+
+tests/test_r4_049b_fdclose.py:84: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <tests.test_r4_049b_fdclose._ChmodFault object at 0x10bd24d70>
+
+    def assert_all_closed(self) -> None:
+        assert self.opened, "harness never saw an mkstemp fd (seam not reached?)"
+        for fd in self.opened:
+            try:
+                os.fstat(fd)
+            except OSError:
+                continue  # EBADF — closed, as required
+>           raise AssertionError(f"mkstemp fd {fd} leaked: still open after chmod failure")
+E           AssertionError: mkstemp fd 12 leaked: still open after chmod failure
+
+tests/test_r4_049b_fdclose.py:56: AssertionError
+_________ test_chatgpt_invalidate_credentials_chmod_failure_closes_fd __________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1955/test_chatgpt_invalidate_creden0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10addf100>
+chmod_fault = <tests.test_r4_049b_fdclose._ChmodFault object at 0x10bdb4a50>
+
+    def test_chatgpt_invalidate_credentials_chmod_failure_closes_fd(
+        tmp_path, monkeypatch: pytest.MonkeyPatch, chmod_fault: _ChmodFault
+    ) -> None:
+        from machina.security import chatgpt_auth
+    
+        target = tmp_path / "chatgpt.json"
+        monkeypatch.setenv(chatgpt_auth.AUTH_FILE_ENV, str(target))
+        # NOTE: invalidate_credentials fail-softs a lost durable counter into the
+        # in-process generation (by design — logout must never fail), so the chmod
+        # fault does NOT propagate here. The observable is fd hygiene only.
+        generation = chatgpt_auth.invalidate_credentials(target)
+        assert isinstance(generation, int)
+>       chmod_fault.assert_all_closed()
+
+tests/test_r4_049b_fdclose.py:101: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <tests.test_r4_049b_fdclose._ChmodFault object at 0x10bdb4a50>
+
+    def assert_all_closed(self) -> None:
+        assert self.opened, "harness never saw an mkstemp fd (seam not reached?)"
+        for fd in self.opened:
+            try:
+                os.fstat(fd)
+            except OSError:
+                continue  # EBADF — closed, as required
+>           raise AssertionError(f"mkstemp fd {fd} leaked: still open after chmod failure")
+E           AssertionError: mkstemp fd 11 leaked: still open after chmod failure
+
+tests/test_r4_049b_fdclose.py:56: AssertionError
+__________ test_copilot_publish_device_token_chmod_failure_closes_fd ___________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1955/test_copilot_publish_device_to0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bc53d10>
+chmod_fault = <tests.test_r4_049b_fdclose._ChmodFault object at 0x10bdb4050>
+
+    def test_copilot_publish_device_token_chmod_failure_closes_fd(
+        tmp_path, monkeypatch: pytest.MonkeyPatch, chmod_fault: _ChmodFault
+    ) -> None:
+        from machina.security import copilot_auth
+    
+        target = tmp_path / "copilot.json"
+        monkeypatch.setenv(copilot_auth.AUTH_FILE_ENV, str(target))
+        generation = copilot_auth.credential_generation(target)
+        with pytest.raises(OSError, match="injected chmod failure"):
+            copilot_auth.publish_device_token(
+                "gho_" + "t" * 28, account="octocat", generation=generation, path=target
+            )
+>       chmod_fault.assert_all_closed()
+
+tests/test_r4_049b_fdclose.py:122: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <tests.test_r4_049b_fdclose._ChmodFault object at 0x10bdb4050>
+
+    def assert_all_closed(self) -> None:
+        assert self.opened, "harness never saw an mkstemp fd (seam not reached?)"
+        for fd in self.opened:
+            try:
+                os.fstat(fd)
+            except OSError:
+                continue  # EBADF — closed, as required
+>           raise AssertionError(f"mkstemp fd {fd} leaked: still open after chmod failure")
+E           AssertionError: mkstemp fd 14 leaked: still open after chmod failure
+
+tests/test_r4_049b_fdclose.py:56: AssertionError
+______________ test_providers_save_models_chmod_failure_closes_fd ______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1955/test_providers_save_models_chm0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd7d480>
+
+    def test_providers_save_models_chmod_failure_closes_fd(
+        tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from machina.security import providers
+    
+        store = tmp_path / "providers.json"
+        monkeypatch.setenv("MACHINA_PROVIDERS_FILE", str(store))
+        # Register first with a healthy chmod so the failing call is the save.
+        providers.add_provider("r4test", "http://127.0.0.1:11434", api_key=None)
+        assert store.exists()
+        fault = _ChmodFault(monkeypatch)
+        with pytest.raises(OSError, match="injected chmod failure"):
+            providers.save_models("r4test", [{"id": "m1"}])
+>       fault.assert_all_closed()
+
+tests/test_r4_049b_fdclose.py:145: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <tests.test_r4_049b_fdclose._ChmodFault object at 0x10bcd2ea0>
+
+    def assert_all_closed(self) -> None:
+        assert self.opened, "harness never saw an mkstemp fd (seam not reached?)"
+        for fd in self.opened:
+            try:
+                os.fstat(fd)
+            except OSError:
+                continue  # EBADF — closed, as required
+>           raise AssertionError(f"mkstemp fd {fd} leaked: still open after chmod failure")
+E           AssertionError: mkstemp fd 15 leaked: still open after chmod failure
+
+tests/test_r4_049b_fdclose.py:56: AssertionError
+_______________ test_chmod_temp_file_helper_closes_fd_on_failure _______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1955/test_chmod_temp_file_helper_cl0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd7de10>
+
+    def test_chmod_temp_file_helper_closes_fd_on_failure(tmp_path, monkeypatch) -> None:
+        def boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+            raise OSError(13, "injected")
+    
+        monkeypatch.setattr(os, "chmod", boom)
+        fd, tmp_name = tempfile.mkstemp(dir=str(tmp_path))
+        with pytest.raises(OSError, match="injected"):
+>           store_fence.chmod_temp_file(fd, tmp_name, 0o600)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: module 'machina.security.store_fence' has no attribute 'chmod_temp_file'
+
+tests/test_r4_049b_fdclose.py:163: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_r4_049b_fdclose.py::test_chatgpt_save_tokens_chmod_failure_closes_fd
+FAILED tests/test_r4_049b_fdclose.py::test_chatgpt_invalidate_credentials_chmod_failure_closes_fd
+FAILED tests/test_r4_049b_fdclose.py::test_copilot_publish_device_token_chmod_failure_closes_fd
+FAILED tests/test_r4_049b_fdclose.py::test_providers_save_models_chmod_failure_closes_fd
+FAILED tests/test_r4_049b_fdclose.py::test_chmod_temp_file_helper_closes_fd_on_failure
+========================= 5 failed, 1 passed in 0.42s ==========================

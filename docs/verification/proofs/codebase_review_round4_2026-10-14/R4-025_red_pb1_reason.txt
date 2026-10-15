@@ -1,0 +1,6 @@
+E                   Exception: Connection lost
+WARNING  machina.observability.diagnostics:diagnostics.py:25 boundary failed: agent.growth.prepare error_type=DatabaseError
+WARNING  machina.memory.retriever:retriever.py:187 Sparse search failed: DatabaseError
+WARNING  machina.core.agent:agent.py:706 Archived context retrieval failed: TypeError
+WARNING  machina.skills.registry:registry.py:668 Skipping skill /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-025-wt-pristine/skills/cost-optimization/SKILL.md: ValueError
+WARNING  machina.skills.registry:registry.py:668 Skipping skill /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-025-wt-pristine/skills/prompt-engineering/SKILL.md: ValueError

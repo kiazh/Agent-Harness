@@ -1,0 +1,5 @@
+PASS probe_gemini_refresh_after_logout
+PASS probe_claude_post_error_adoption
+PASS probe_generation_bump_is_durable[claude.json]
+PASS probe_generation_bump_is_durable[gemini.json]
+all probes passed

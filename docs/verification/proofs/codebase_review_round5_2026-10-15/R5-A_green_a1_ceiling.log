@@ -1,0 +1,17 @@
+mcp mode ceiling refused mode=full ceiling=ask
+mcp mode ceiling refused mode=workspace ceiling=ask
+mcp mode ceiling refused mode=workspace ceiling=ask
+mcp mode ceiling refused mode=full ceiling=ask
+invalid MCP_MAX_MODE 'bogus'; failing closed to 'ask'
+mcp mode ceiling refused mode=workspace ceiling=ask
+mcp mode ceiling refused mode=full ceiling=ask
+PASS default-ask refuses full: status=invalid_request code=mode_ceiling_exceeded ceiling=ask spawned=False
+PASS default-ask refuses workspace: status=invalid_request code=mode_ceiling_exceeded ceiling=ask spawned=False
+PASS operator-full allows full: status=completed code=None ceiling=None spawned=True
+PASS operator-full allows workspace: status=completed code=None ceiling=None spawned=True
+PASS MCP_MAX_MODE tightens: status=invalid_request code=mode_ceiling_exceeded ceiling=ask spawned=False
+PASS MCP_MAX_MODE never escalates: status=invalid_request code=mode_ceiling_exceeded ceiling=ask spawned=False
+PASS invalid MCP_MAX_MODE fails closed: status=invalid_request code=mode_ceiling_exceeded ceiling=ask spawned=False
+PASS no mode arg unchanged: status=completed code=None ceiling=None spawned=True
+PASS refusal is typed (code/ceiling present, never a grant)
+GREEN A1: ceiling enforced, at/under-ceiling paths unchanged

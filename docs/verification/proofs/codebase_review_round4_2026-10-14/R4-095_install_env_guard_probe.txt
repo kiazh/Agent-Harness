@@ -1,0 +1,47 @@
+== extracted guard block (verbatim from install.sh) ==
+  # --- env-file parent guard ---------------------------------------------------
+  # MACHINA_ENV_FILE pointing into a missing or read-only directory used to abort
+  # below with a bare bash redirection error (`: > $ENV_FILE` / `cp .env.example`)
+  # and no explanation. Fail with installer guidance instead; the code between the
+  # markers is exercised verbatim by the guarded probe in the R4-095 proof doc.
+  ENV_PARENT="$(dirname "$ENV_FILE")"
+  if [ ! -d "$ENV_PARENT" ]; then
+    die "MACHINA_ENV_FILE=$ENV_FILE cannot be used: directory $ENV_PARENT does not exist (create it, or point MACHINA_ENV_FILE at an existing directory)"
+  fi
+  if [ ! -w "$ENV_PARENT" ]; then
+    die "MACHINA_ENV_FILE=$ENV_FILE cannot be written: directory $ENV_PARENT is not writable"
+  fi
+  # --- end env-file parent guard -----------------------------------------------
+
+== probe 1: parent directory missing ==
+DIE: MACHINA_ENV_FILE=/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-envguard.AlultB/missing-dir/.env cannot be used: directory /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-envguard.AlultB/missing-dir does not exist (create it, or point MACHINA_ENV_FILE at an existing directory)
+rc=99
+PASS missing parent rc                              = rc=99
+PASS missing parent names the directory             = 1
+PASS missing parent is not a raw bash error         = 0
+
+== probe 2: parent directory not writable ==
+DIE: MACHINA_ENV_FILE=/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-envguard.AlultB/readonly/.env cannot be written: directory /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-envguard.AlultB/readonly is not writable
+rc=99
+PASS readonly parent rc                             = rc=99
+PASS readonly parent names the directory            = 1
+
+== probe 3: valid parent proceeds ==
+PROCEEDED
+rc=0
+PASS valid parent rc                                = rc=0
+PASS valid parent proceeds                          = 1
+
+== RED: pre-fix snippet hits the raw redirection error ==
+bash: line 2: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-envguard.AlultB/missing-dir/.env: No such file or directory
+rc=1
+PASS pre-fix rc (raw failure)                       = 1
+PASS pre-fix emits raw bash error                   = 1
+
+== static: guard precedes the .env redirection ==
+PASS guard marker found                             = yes
+PASS redirection line found                         = yes
+PASS guard runs before redirection                  = yes
+
+== result: ALL PROBES PASS
+probe exit: 0

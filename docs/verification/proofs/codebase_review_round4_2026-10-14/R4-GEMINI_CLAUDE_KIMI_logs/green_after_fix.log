@@ -1,0 +1,26 @@
+.......................                                                  [100%]
+=========================== short test summary info ============================
+PASSED tests/test_subscription_removals.py::test_removed_providers_answer_the_generic_unknown_provider_error[claude]
+PASSED tests/test_subscription_removals.py::test_removed_providers_answer_the_generic_unknown_provider_error[gemini]
+PASSED tests/test_subscription_removals.py::test_removed_auth_subcommands_are_gone_from_the_cli[claude]
+PASSED tests/test_subscription_removals.py::test_removed_auth_subcommands_are_gone_from_the_cli[gemini]
+PASSED tests/test_subscription_removals.py::test_auth_help_keeps_only_the_remaining_subscription_providers
+PASSED tests/test_subscription_removals.py::test_removed_modules_are_not_importable[machina.security.claude_auth]
+PASSED tests/test_subscription_removals.py::test_removed_modules_are_not_importable[machina.security.gemini_auth]
+PASSED tests/test_subscription_removals.py::test_removed_modules_are_not_importable[machina.core.provider.claude]
+PASSED tests/test_subscription_removals.py::test_removed_modules_are_not_importable[machina.core.provider.gemini]
+PASSED tests/test_subscription_removals.py::test_provider_facade_no_longer_exports_removed_transports[ClaudeProvider]
+PASSED tests/test_subscription_removals.py::test_provider_facade_no_longer_exports_removed_transports[GeminiProvider]
+PASSED tests/test_subscription_removals.py::test_no_machina_source_mentions_a_removed_flow
+PASSED tests/test_subscription_removals.py::test_removed_providers_report_unknown_in_runtime_readiness[claude]
+PASSED tests/test_subscription_removals.py::test_removed_providers_report_unknown_in_runtime_readiness[gemini]
+PASSED tests/test_kimi_provider.py::test_kimi_spec_pins_endpoint_key_and_default_model
+PASSED tests/test_kimi_provider.py::test_kimi_key_is_registered_in_config_plumbing
+PASSED tests/test_kimi_provider.py::test_kimi_context_windows_match_the_documented_model_ids
+PASSED tests/test_kimi_provider.py::test_kimi_resolves_through_the_factory_to_a_direct_provider
+PASSED tests/test_kimi_provider.py::test_kimi_requires_the_api_key
+PASSED tests/test_kimi_provider.py::test_kimi_chat_completions_wire_shape
+PASSED tests/test_kimi_provider.py::test_kimi_reasoning_effort_uses_the_documented_top_level_param
+PASSED tests/test_kimi_provider.py::test_kimi_runtime_readiness_reports_key_state
+PASSED tests/test_kimi_provider.py::test_kimi_is_reserved_against_user_added_shadowing
+23 passed in 1.10s

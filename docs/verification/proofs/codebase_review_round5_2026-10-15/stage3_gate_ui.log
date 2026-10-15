@@ -1,0 +1,20 @@
+✔ tool turns use quiet frames and honest markers (1.681583ms)
+✔ skins switch palette and art, unknown names throw (0.867667ms)
+✔ transcript blocks re-skin live without losing content (0.912541ms)
+✔ transcript restyle keeps every block (0.225917ms)
+✔ every skin keeps its accent roles distinct (0.309292ms)
+✔ V01 multiline user text stays plain and assistant markdown renders inside a frame (0.871833ms)
+✔ V02 tool previews count wrapping with honest local and backend truncation (1.607959ms)
+✔ V03 diff headers, additions, deletions and whitespace classify correctly (1.272709ms)
+ℹ tests 471
+ℹ suites 0
+ℹ pass 465
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 6
+ℹ todo 0
+ℹ duration_ms 11512.667708
+
+> machina-ui@0.1.0 lint
+> eslint src/ test/ --ext .ts
+

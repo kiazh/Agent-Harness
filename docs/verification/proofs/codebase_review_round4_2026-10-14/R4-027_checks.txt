@@ -1,0 +1,17 @@
+$ pytest tests/test_uninstall.py -q -p no:cacheprovider
+20 passed in 0.40s
+
+$ pytest tests/test_architecture_layers.py -q -p no:cacheprovider
+27 passed in 0.96s
+
+$ pytest tests/test_fm7_cli.py -q -p no:cacheprovider
+20 passed, 1 xfailed in 0.77s
+
+$ ruff format --check machina/cli/__init__.py tests/test_uninstall.py
+2 files already formatted
+
+$ ruff check machina/cli/__init__.py tests/test_uninstall.py
+All checks passed!
+
+$ wc -l machina/cli/__init__.py
+    2329 machina/cli/__init__.py

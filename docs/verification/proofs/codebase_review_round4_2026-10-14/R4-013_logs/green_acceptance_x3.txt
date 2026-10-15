@@ -1,0 +1,4 @@
+== acceptance gate x3 (each line: separate run) ==
+7 passed in 6.01s
+7 passed in 6.04s
+7 passed in 5.90s

@@ -1,0 +1,186 @@
+........................................................................ [  1%]
+........................................................................ [  3%]
+........................................................................ [  4%]
+........................................................................ [  6%]
+........................................................................ [  8%]
+........................................................................ [  9%]
+........................................................................ [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 16%]
+........................................................................ [ 17%]
+........................................................................ [ 19%]
+........................................................................ [ 21%]
+........................................................................ [ 22%]
+........................................................................ [ 24%]
+........................................................................ [ 25%]
+........................................................................ [ 27%]
+........................................................................ [ 29%]
+........................................................................ [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 34%]
+........................................................................ [ 35%]
+........................................................................ [ 37%]
+........................................................................ [ 38%]
+........................................................................ [ 40%]
+........................................................................ [ 42%]
+........................................................................ [ 43%]
+........................................................................ [ 45%]
+........................................................................ [ 46%]
+............F........................................................... [ 48%]
+........................................................................ [ 50%]
+................................................................s....... [ 51%]
+........................................................................ [ 53%]
+........................................................................ [ 55%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 59%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+........................................................................ [ 68%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 72%]
+........................................................................ [ 74%]
+........................................................................ [ 76%]
+........................................................................ [ 77%]
+............FFFFFFFFFFFFFFFFFFFFFF......................FFFFFFFFFFFFFFF. [ 79%]
+........................................................................ [ 80%]
+........................................................................ [ 82%]
+........................................................................ [ 84%]
+........................................................................ [ 85%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 90%]
+........................................................................ [ 92%]
+........................................................................ [ 93%]
+........................................................................ [ 95%]
+........................................................................ [ 97%]
+........................................................................ [ 98%]
+.....................................................                    [100%]
+=================================== FAILURES ===================================
+________ test_streaming_equals_whole_recognition_all_formats_all_splits ________
+tests/test_handoff_regressions.py:69: in test_streaming_equals_whole_recognition_all_formats_all_splits
+    assert out == expected, f"split {i} of {secret[:12]} in {ctx}"
+E   AssertionError: split 38 of password=hun in {"k": "{s}"}
+E   assert '{"k": "passw...ED_PASSWORD]}' == '{"k": "passw...TED_PASSWORD]'
+E     
+E     - {"k": "password=[REDACTED_PASSWORD]
+E     + {"k": "password=[REDACTED_PASSWORD]}
+E     ?                                    +
+____ test_secret_does_not_survive_redaction[dotted_token_short_lead-plain] _____
+[XPASS(strict)] R4-016: generic_secret's value class cannot match a short leading run before '.', and generic_quoted_key only covers keys ending in 'key'; the value leaks
+____ test_secret_does_not_survive_redaction[dotted_token_short_lead-prose] _____
+[XPASS(strict)] R4-016: generic_secret's value class cannot match a short leading run before '.', and generic_quoted_key only covers keys ending in 'key'; the value leaks
+_______ test_secret_does_not_survive_redaction[dotted_secret_tail-plain] _______
+[XPASS(strict)] R4-016: generic_secret stops at the first '.' after a 16-char run; the tail '.qrstuvwxyz012345' survives
+_______ test_secret_does_not_survive_redaction[dotted_secret_tail-prose] _______
+[XPASS(strict)] R4-016: generic_secret stops at the first '.' after a 16-char run; the tail '.qrstuvwxyz012345' survives
+______ test_secret_does_not_survive_redaction[quoted_dotted_token-plain] _______
+[XPASS(strict)] R4-016: generic_secret cannot match the short leading run and generic_quoted_key requires a key ending in 'key'; the value leaks
+______ test_secret_does_not_survive_redaction[quoted_dotted_token-prose] _______
+[XPASS(strict)] R4-016: generic_secret cannot match the short leading run and generic_quoted_key requires a key ending in 'key'; the value leaks
+______ test_secret_does_not_survive_redaction[quoted_dotted_secret-plain] ______
+[XPASS(strict)] R4-016: generic_secret redacts only the 16-char run after the opening quote; the tail '.qrstuvwxyz012345"' survives
+______ test_secret_does_not_survive_redaction[quoted_dotted_secret-prose] ______
+[XPASS(strict)] R4-016: generic_secret redacts only the 16-char run after the opening quote; the tail '.qrstuvwxyz012345"' survives
+______ test_secret_does_not_survive_redaction[dotted_access_token-plain] _______
+[XPASS(strict)] R4-016: generic_secret matches the embedded 'token=' but the short run before '.' fails its {16,} quantifier; the value leaks
+______ test_secret_does_not_survive_redaction[dotted_access_token-prose] _______
+[XPASS(strict)] R4-016: generic_secret matches the embedded 'token=' but the short run before '.' fails its {16,} quantifier; the value leaks
+___ test_secret_does_not_survive_redaction[dotted_api_key_short_lead-plain] ____
+[XPASS(strict)] R4-016: unquoted values are missed by generic_quoted_key and the short leading run fails generic_secret's {16,}; the value leaks
+___ test_secret_does_not_survive_redaction[dotted_api_key_short_lead-prose] ____
+[XPASS(strict)] R4-016: unquoted values are missed by generic_quoted_key and the short leading run fails generic_secret's {16,}; the value leaks
+_______ test_secret_does_not_survive_redaction[urlsafe_token_tail-plain] _______
+[XPASS(strict)] R4-016: the '+' after the 16-char run breaks generic_secret's value class; '+KzEy/MzQ1Njc4OT=' survives
+_______ test_secret_does_not_survive_redaction[urlsafe_token_tail-prose] _______
+[XPASS(strict)] R4-016: the '+' after the 16-char run breaks generic_secret's value class; '+KzEy/MzQ1Njc4OT=' survives
+___ test_secret_does_not_survive_redaction[urlsafe_quoted_secret_tail-plain] ___
+[XPASS(strict)] R4-016: generic_secret redacts only the first 16 value chars; '+KzEy/MzQ1Njc4OTA="' survives
+___ test_secret_does_not_survive_redaction[urlsafe_quoted_secret_tail-prose] ___
+[XPASS(strict)] R4-016: generic_secret redacts only the first 16 value chars; '+KzEy/MzQ1Njc4OTA="' survives
+___________ test_secret_does_not_survive_redaction[padded_jwt-plain] ___________
+[XPASS(strict)] R4-016: jwt_token segments exclude '=' padding, so generic_secret then matches only the eyJ header run and the payload/signature survive
+___________ test_secret_does_not_survive_redaction[padded_jwt-prose] ___________
+[XPASS(strict)] R4-016: jwt_token segments exclude '=' padding, so generic_secret then matches only the eyJ header run and the payload/signature survive
+_______ test_secret_does_not_survive_redaction[card_17_luhn_valid-plain] _______
+[XPASS(strict)] R4-016: credit_card's {13,16} quantifier cannot match a 17-digit number
+_______ test_secret_does_not_survive_redaction[card_17_luhn_valid-prose] _______
+[XPASS(strict)] R4-016: credit_card's {13,16} quantifier cannot match a 17-digit number
+_______ test_secret_does_not_survive_redaction[card_19_luhn_valid-plain] _______
+[XPASS(strict)] R4-016: credit_card's {13,16} quantifier cannot match a 19-digit number
+_______ test_secret_does_not_survive_redaction[card_19_luhn_valid-prose] _______
+[XPASS(strict)] R4-016: credit_card's {13,16} quantifier cannot match a 19-digit number
+____ test_streaming_never_leaks_across_boundaries[dotted_token_short_lead] _____
+[XPASS(strict)] R4-016: generic_secret's value class cannot match a short leading run before '.', and generic_quoted_key only covers keys ending in 'key'; the value leaks
+_______ test_streaming_never_leaks_across_boundaries[dotted_secret_tail] _______
+[XPASS(strict)] R4-016: generic_secret stops at the first '.' after a 16-char run; the tail '.qrstuvwxyz012345' survives
+______ test_streaming_never_leaks_across_boundaries[quoted_dotted_token] _______
+[XPASS(strict)] R4-016: generic_secret cannot match the short leading run and generic_quoted_key requires a key ending in 'key'; the value leaks
+______ test_streaming_never_leaks_across_boundaries[quoted_dotted_secret] ______
+[XPASS(strict)] R4-016: generic_secret redacts only the 16-char run after the opening quote; the tail '.qrstuvwxyz012345"' survives
+______ test_streaming_never_leaks_across_boundaries[dotted_access_token] _______
+[XPASS(strict)] R4-016: generic_secret matches the embedded 'token=' but the short run before '.' fails its {16,} quantifier; the value leaks
+___ test_streaming_never_leaks_across_boundaries[dotted_api_key_short_lead] ____
+[XPASS(strict)] R4-016: unquoted values are missed by generic_quoted_key and the short leading run fails generic_secret's {16,}; the value leaks
+_______ test_streaming_never_leaks_across_boundaries[urlsafe_token_tail] _______
+[XPASS(strict)] R4-016: the '+' after the 16-char run breaks generic_secret's value class; '+KzEy/MzQ1Njc4OT=' survives
+___ test_streaming_never_leaks_across_boundaries[urlsafe_quoted_secret_tail] ___
+[XPASS(strict)] R4-016: generic_secret redacts only the first 16 value chars; '+KzEy/MzQ1Njc4OTA="' survives
+___________ test_streaming_never_leaks_across_boundaries[padded_jwt] ___________
+[XPASS(strict)] R4-016: jwt_token segments exclude '=' padding, so generic_secret then matches only the eyJ header run and the payload/signature survive
+_______ test_streaming_never_leaks_across_boundaries[card_17_luhn_valid] _______
+[XPASS(strict)] R4-016: credit_card's {13,16} quantifier cannot match a 17-digit number
+_______ test_streaming_never_leaks_across_boundaries[card_19_luhn_valid] _______
+[XPASS(strict)] R4-016: credit_card's {13,16} quantifier cannot match a 19-digit number
+____________ test_benign_text_is_left_untouched[bearer_of_bad_news] ____________
+[XPASS(strict)] R4-016: bearer_token treats the English word 'bearer' as a credential prefix
+___________ test_benign_text_is_left_untouched[bearer_token_phrase] ____________
+[XPASS(strict)] R4-016: bearer_token mangles the ordinary phrase 'bearer token'
+___________ test_benign_text_is_left_untouched[task_hex_identifier] ____________
+[XPASS(strict)] R4-016: openai_api_key matches the 'sk-' inside the identifier 'task-...'
+_______________ test_benign_text_is_left_untouched[math_9_pow_9] _______________
+[XPASS(strict)] R4-016: ssn_contiguous redacts any stand-alone 9-digit number (387420489 is 9**9)
+=========================== short test summary info ============================
+FAILED tests/test_handoff_regressions.py::test_streaming_equals_whole_recognition_all_formats_all_splits
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[dotted_token_short_lead-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[dotted_token_short_lead-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[dotted_secret_tail-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[dotted_secret_tail-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[quoted_dotted_token-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[quoted_dotted_token-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[quoted_dotted_secret-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[quoted_dotted_secret-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[dotted_access_token-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[dotted_access_token-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[dotted_api_key_short_lead-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[dotted_api_key_short_lead-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[urlsafe_token_tail-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[urlsafe_token_tail-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[urlsafe_quoted_secret_tail-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[urlsafe_quoted_secret_tail-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[padded_jwt-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[padded_jwt-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[card_17_luhn_valid-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[card_17_luhn_valid-prose]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[card_19_luhn_valid-plain]
+FAILED tests/test_redaction_adversarial.py::test_secret_does_not_survive_redaction[card_19_luhn_valid-prose]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[dotted_token_short_lead]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[dotted_secret_tail]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[quoted_dotted_token]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[quoted_dotted_secret]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[dotted_access_token]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[dotted_api_key_short_lead]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[urlsafe_token_tail]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[urlsafe_quoted_secret_tail]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[padded_jwt]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[card_17_luhn_valid]
+FAILED tests/test_redaction_adversarial.py::test_streaming_never_leaks_across_boundaries[card_19_luhn_valid]
+FAILED tests/test_redaction_adversarial.py::test_benign_text_is_left_untouched[bearer_of_bad_news]
+FAILED tests/test_redaction_adversarial.py::test_benign_text_is_left_untouched[bearer_token_phrase]
+FAILED tests/test_redaction_adversarial.py::test_benign_text_is_left_untouched[task_hex_identifier]
+FAILED tests/test_redaction_adversarial.py::test_benign_text_is_left_untouched[math_9_pow_9]
+38 failed, 4406 passed, 1 skipped in 229.06s (0:03:49)

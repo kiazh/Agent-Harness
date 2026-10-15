@@ -1,0 +1,12 @@
+ ui/src/app.ts                |  19 ++++++-
+ ui/src/components.ts         | 119 +++++++++++++++++++++++++++++++++----------
+ ui/src/components/Form.ts    |   5 +-
+ ui/src/design/theme.ts       |  83 ++++++++++++++++++++++++++----
+ ui/src/features/jobs.ts      |  33 ++++++------
+ ui/src/features/keys.ts      |   7 ++-
+ ui/src/features/mcp-oauth.ts |  16 ++++++
+ ui/src/features/mode.ts      |   2 +-
+ ui/src/tail.ts               |   6 ++-
+ ui/test/fm7-display.test.ts  |   6 +--
+ 10 files changed, 228 insertions(+), 68 deletions(-)
+     500 ui/test/r4-094-tui.test.ts

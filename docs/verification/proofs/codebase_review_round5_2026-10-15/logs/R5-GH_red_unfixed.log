@@ -1,0 +1,632 @@
+F.FFFFFF.                                                                [100%]
+=================================== FAILURES ===================================
+__________________ test_r5_g1_ollama_cache_scoped_by_endpoint __________________
+
+_high_rate_limit = <module 'machina.core.provider.rate_limit' from '/private/tmp/machina-head/machina/core/provider/rate_limit.py'>
+
+    async def test_r5_g1_ollama_cache_scoped_by_endpoint(_high_rate_limit):
+        """Same call, two base_urls within TTL → both servers are contacted."""
+        first = _build_ollama("http://127.0.0.1:11434")
+        second = _build_ollama("http://127.0.0.1:11435")
+        messages = [{"role": "user", "content": "r5-g1-identical-call"}]
+        try:
+            one = await first.complete(messages)
+            two = await second.complete(messages)
+            assert one.content == "server-11434", one.content
+            # RED pre-fix: "server-11434" — the second endpoint is never hit.
+>           assert two.content == "server-11435", two.content
+E           AssertionError: server-11434
+E           assert 'server-11434' == 'server-11435'
+E             
+E             - server-11435
+E             ?            ^
+E             + server-11434
+E             ?            ^
+
+tests/test_r5_011_013_provider_transport.py:99: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 23:10:47,451 [AUDIT] {"timestamp": 1792033847.4518871, "event": "llm_call_start", "provider": "ollama", "model": "llama3.1", "message_count": 1}
+2026-10-14 23:10:47,453 [AUDIT] {"timestamp": 1792033847.453206, "event": "llm_call_complete", "provider": "ollama", "model": "llama3.1", "prompt_tokens": 1, "completion_tokens": 1, "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:216 {"timestamp": 1792033847.4518871, "event": "llm_call_start", "provider": "ollama", "model": "llama3.1", "message_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:216 {"timestamp": 1792033847.453206, "event": "llm_call_complete", "provider": "ollama", "model": "llama3.1", "prompt_tokens": 1, "completion_tokens": 1, "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+________________ test_r5_g2_sse_parser_tolerates_missing_space _________________
+
+    async def test_r5_g2_sse_parser_tolerates_missing_space():
+        """The single shared parser accepts `data:X` and `event:X` forms."""
+>       from machina.core.provider.sse import sse_data, sse_event, sse_field
+E       ModuleNotFoundError: No module named 'machina.core.provider.sse'
+
+tests/test_r5_011_013_provider_transport.py:148: ModuleNotFoundError
+____________________ test_r5_g2_no_duplicated_sse_prefixes _____________________
+
+    def test_r5_g2_no_duplicated_sse_prefixes():
+        """All SSE sites route through the shared parser; narrow literals are gone."""
+        for fname in _SSE_FILES:
+            src = (_PROVIDER_DIR / fname).read_text()
+>           assert 'startswith("data: ")' not in src, fname
+E           AssertionError: direct.py
+E           assert 'startswith("data: ")' not in '"""OpenAI-c...t.aclose()\n'
+E             
+E             'startswith("data: ")' is contained here:
+E                not line.startswith("data: "):
+E                                       continue
+E                                   data = line[6:]
+E                                   if data == "[DONE]":
+E                                       saw_terminal = True...
+E             
+E             ...Full output truncated (90 lines hidden), use '-vv' to show
+
+tests/test_r5_011_013_provider_transport.py:171: AssertionError
+___________________ test_r5_g2_direct_stream_no_space_frames ___________________
+
+_high_rate_limit = <module 'machina.core.provider.rate_limit' from '/private/tmp/machina-head/machina/core/provider/rate_limit.py'>
+
+    async def test_r5_g2_direct_stream_no_space_frames(_high_rate_limit):
+        """DirectProvider consumes `data:{...}` + `data:[DONE]` without spaces."""
+        from machina.core.provider.direct import DirectProvider
+        from machina.core.provider.specs import ProviderSpec
+    
+        spec = ProviderSpec(
+            "r5-gh-sse", "https://r5-gh-sse.invalid/v1", "R5_GH_SSE_KEY", "m", requires_key=False
+        )
+        provider = DirectProvider.__new__(DirectProvider)
+        provider.spec = spec
+        provider.api_key = "k"
+        provider.model = "m"
+        provider._default_effort = ""
+        provider._rate_limiter = AsyncMock()
+        provider._rate_limit_key = spec.name
+        chunk = {"model": "m", "choices": [{"delta": {"content": "Hello"}}]}
+        stop = {"model": "m", "choices": [{"delta": {}, "finish_reason": "stop"}]}
+        provider.client = _streaming_client(
+            f"data:{json.dumps(chunk)}\ndata:{json.dumps(stop)}\ndata:[DONE]\n".encode()
+        )
+>       events = [
+            event async for event in provider.stream_complete([{"role": "user", "content": "hi"}])
+        ]
+
+tests/test_r5_011_013_provider_transport.py:231: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.core.provider.direct.DirectProvider object at 0x10d8bd7f0>
+messages = [{'role': 'user', 'content': 'hi'}], model = 'm', temperature = 0.7
+max_tokens = 4096, tools = None, reasoning_effort = None, session_id = None
+agent_id = None
+
+    async def stream_complete(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Stream completion via SSE — yields text deltas as they arrive."""
+        _validate_messages(messages)
+        _validate_params(temperature, max_tokens)
+        await self._rate_limiter.acquire()
+    
+        model = model or self.model
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+            **self._effort_payload(reasoning_effort),
+        }
+        # stream_options.include_usage is only sent for vendors whose docs
+        # confirm it — others 400 on the param.
+        if self.spec.stream_usage:
+            payload["stream_options"] = {"include_usage": True}
+        if tools:
+            payload["tools"] = _tools_payload(tools)
+    
+        audit_log(
+            "llm_stream_start", provider=self.spec.name, model=model, message_count=len(messages)
+        )
+    
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id, agent_id, self.spec.name, model, messages, tools or [], max_tokens
+            )
+    
+        content_parts: list[str] = []
+        tool_calls_by_index: dict[int, dict[str, str]] = {}
+        stream_usage: dict[str, int] = {}
+        resolved_model = model
+        saw_terminal = False
+        try:
+            async with _stream_with_retry(self.client, "/chat/completions", payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        saw_terminal = True
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(chunk, dict):
+                        continue
+                    if chunk.get("error"):
+                        # Explicit error frame: fail the stream honestly
+                        # instead of reporting a truncated success.
+                        raise ProviderError(_stream_error_message(chunk, resolved_model))
+                    resolved_model = chunk.get("model") or resolved_model
+                    # The usage chunk arrives with an empty choices list.
+                    if chunk.get("usage"):
+                        stream_usage = chunk["usage"]
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    if choices[0].get("finish_reason"):
+                        saw_terminal = True
+                    delta = choices[0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        content_parts.append(content)
+                        yield StreamEvent(type="text", content=content)
+                    for tc_delta in delta.get("tool_calls", []):
+                        idx = tc_delta.get("index", 0)
+                        if idx not in tool_calls_by_index:
+                            tool_calls_by_index[idx] = {"id": "", "name": "", "arguments": ""}
+                        tc = tool_calls_by_index[idx]
+                        if tc_delta.get("id"):
+                            tc["id"] = tc_delta["id"]
+                        func = tc_delta.get("function", {})
+                        if func.get("name"):
+                            tc["name"] = func["name"]
+                        if func.get("arguments"):
+                            frag = func["arguments"]
+                            if isinstance(frag, dict):
+                                frag = json.dumps(frag)
+                            tc["arguments"] += frag
+            if not saw_terminal:
+>               raise _truncated_stream_error(self.spec.name, resolved_model)
+E               machina.core.exceptions.ProviderError: r5-gh-sse stream ended without a terminal frame ([DONE] or finish_reason) for m
+
+machina/core/provider/direct.py:299: ProviderError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 23:10:47,501 [AUDIT] {"timestamp": 1792033847.5018308, "event": "llm_stream_start", "provider": "r5-gh-sse", "model": "m", "message_count": 1}
+2026-10-14 23:10:47,502 [AUDIT] {"timestamp": 1792033847.5020869, "event": "llm_stream_error", "provider": "r5-gh-sse", "model": "m"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:216 {"timestamp": 1792033847.5018308, "event": "llm_stream_start", "provider": "r5-gh-sse", "model": "m", "message_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:216 {"timestamp": 1792033847.5020869, "event": "llm_stream_error", "provider": "r5-gh-sse", "model": "m"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_________________ test_r5_g2_anthropic_stream_no_space_frames __________________
+
+_high_rate_limit = <module 'machina.core.provider.rate_limit' from '/private/tmp/machina-head/machina/core/provider/rate_limit.py'>
+
+    async def test_r5_g2_anthropic_stream_no_space_frames(_high_rate_limit):
+        """AnthropicProvider consumes `event:X` / `data:X` without spaces."""
+        from machina.core.provider.anthropic import AnthropicProvider
+    
+        provider = AnthropicProvider.__new__(AnthropicProvider)
+        provider.api_key = "k"
+        provider.model = "m"
+        provider._default_effort = ""
+        provider._rate_limiter = AsyncMock()
+        provider._rate_limit_key = AnthropicProvider.PROVIDER_NAME
+        lines = [
+            "event:message_start",
+            'data:{"type":"message_start","message":{"model":"m","usage":{"input_tokens":1}}}',
+            "event:content_block_delta",
+            'data:{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+            "event:message_delta",
+            'data:{"type":"message_delta","usage":{"output_tokens":2}}',
+            "event:message_stop",
+            'data:{"type":"message_stop"}',
+        ]
+        provider.client = _streaming_client(("\n".join(lines) + "\n").encode())
+>       events = [
+            event async for event in provider.stream_complete([{"role": "user", "content": "hi"}])
+        ]
+
+tests/test_r5_011_013_provider_transport.py:262: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.core.provider.anthropic.AnthropicProvider object at 0x10d82d550>
+messages = [{'role': 'user', 'content': 'hi'}], model = 'm', temperature = 0.7
+max_tokens = 4096, tools = None, reasoning_effort = None, session_id = None
+agent_id = None
+
+    async def stream_complete(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Stream via Anthropic SSE — yields text deltas as they arrive."""
+        _validate_messages(messages)
+        _validate_params(temperature, max_tokens)
+        await self._rate_limiter.acquire()
+    
+        model = model or self.model
+        payload = self._payload(
+            messages, model, temperature, max_tokens, tools, reasoning_effort, True
+        )
+    
+        audit_log(
+            "llm_stream_start",
+            provider=self.PROVIDER_NAME,
+            model=model,
+            message_count=len(messages),
+        )
+    
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id,
+                agent_id,
+                self.PROVIDER_NAME,
+                model,
+                messages,
+                tools or [],
+                payload["max_tokens"],
+            )
+    
+        text_parts: list[str] = []
+        blocks: dict[int, dict[str, Any]] = {}
+        native_blocks: dict[int, dict[str, Any]] = {}
+        input_tokens = 0
+        output_tokens = 0
+        resolved_model = model
+        saw_terminal = False
+        try:
+            async with _stream_with_retry(self.client, "/v1/messages", payload) as resp:
+                resp.raise_for_status()
+                event_type = ""
+                async for line in resp.aiter_lines():
+                    if line.startswith("event: "):
+                        event_type = line[7:].strip()
+                        if event_type == "message_stop":
+                            saw_terminal = True
+                        continue
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        data = json.loads(line[6:])
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    if event_type == "error" or data.get("type") == "error":
+                        # Anthropic can fail mid-stream via an explicit error
+                        # event; swallowing it would truncate the answer.
+                        error = data.get("error") or {}
+                        detail = error.get("message") if isinstance(error, dict) else str(error)
+                        raise ProviderError(
+                            f"Anthropic stream error for {resolved_model}: {detail or data}"
+                        )
+                    if event_type == "message_start":
+                        msg = data.get("message", {})
+                        resolved_model = msg.get("model") or resolved_model
+                        input_tokens = msg.get("usage", {}).get("input_tokens", input_tokens)
+                    elif event_type == "content_block_start":
+                        idx = data.get("index", 0)
+                        block = data.get("content_block", {})
+                        if not isinstance(block, dict):
+                            continue
+                        block_type = block.get("type")
+                        if block_type == "tool_use":
+                            blocks[idx] = {
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "arguments": "",
+                            }
+                            native_blocks[idx] = {
+                                "type": "tool_use",
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "_arguments": "",
+                            }
+                        elif block_type == "text":
+                            native_blocks[idx] = {"type": "text", "text": block.get("text", "")}
+                        elif block_type == "thinking":
+                            native_blocks[idx] = {
+                                "type": "thinking",
+                                "thinking": block.get("thinking", ""),
+                                "signature": block.get("signature", ""),
+                            }
+                        elif block_type == "redacted_thinking":
+                            native_blocks[idx] = copy.deepcopy(block)
+                    elif event_type == "content_block_delta":
+                        idx = data.get("index", 0)
+                        delta = data.get("delta", {})
+                        if not isinstance(delta, dict):
+                            continue
+                        delta_type = delta.get("type")
+                        native = native_blocks.get(idx)
+                        if delta_type == "text_delta" and delta.get("text"):
+                            text_parts.append(delta["text"])
+                            yield StreamEvent(type="text", content=delta["text"])
+                            if native is not None and native.get("type") == "text":
+                                native["text"] += delta["text"]
+                        elif delta_type == "thinking_delta" and delta.get("thinking"):
+                            if native is not None and native.get("type") == "thinking":
+                                native["thinking"] += delta["thinking"]
+                        elif delta_type == "signature_delta" and delta.get("signature"):
+                            if native is not None and native.get("type") == "thinking":
+                                native["signature"] += delta["signature"]
+                        elif delta_type == "input_json_delta" and delta.get("partial_json"):
+                            blocks.setdefault(idx, {"id": "", "name": "", "arguments": ""})[
+                                "arguments"
+                            ] += delta["partial_json"]
+                            if native is None or native.get("type") != "tool_use":
+                                native = {
+                                    "type": "tool_use",
+                                    "id": "",
+                                    "name": "",
+                                    "_arguments": "",
+                                }
+                                native_blocks[idx] = native
+                            native["_arguments"] += delta["partial_json"]
+                    elif event_type == "message_delta":
+                        output_tokens = data.get("usage", {}).get("output_tokens", output_tokens)
+                    elif event_type == "message_stop" or data.get("type") == "message_stop":
+                        saw_terminal = True
+            if not saw_terminal:
+                # A clean EOF without ``message_stop`` is a truncation: the
+                # partial text must not be reported as a successful answer.
+>               raise ProviderError(
+                    f"Anthropic stream ended without a terminal message_stop event "
+                    f"for {resolved_model}"
+                )
+E               machina.core.exceptions.ProviderError: Anthropic stream ended without a terminal message_stop event for m
+
+machina/core/provider/anthropic.py:510: ProviderError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 23:10:47,510 [AUDIT] {"timestamp": 1792033847.510834, "event": "llm_stream_start", "provider": "anthropic", "model": "m", "message_count": 1}
+2026-10-14 23:10:47,511 [AUDIT] {"timestamp": 1792033847.511075, "event": "llm_stream_error", "provider": "anthropic", "model": "m"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:216 {"timestamp": 1792033847.510834, "event": "llm_stream_start", "provider": "anthropic", "model": "m", "message_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:216 {"timestamp": 1792033847.511075, "event": "llm_stream_error", "provider": "anthropic", "model": "m"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_________________ test_r5_g2_openrouter_stream_no_space_frames _________________
+
+_high_rate_limit = <module 'machina.core.provider.rate_limit' from '/private/tmp/machina-head/machina/core/provider/rate_limit.py'>
+
+    async def test_r5_g2_openrouter_stream_no_space_frames(_high_rate_limit):
+        """OpenRouterProvider consumes spaceless `data:` / `data:[DONE]` frames.
+    
+        A paid model id keeps the free-tier fallback chain out of the path so the
+        assertion isolates the shared SSE parser.
+        """
+        from machina.core.provider.openrouter import OpenRouterProvider
+    
+        provider = OpenRouterProvider.__new__(OpenRouterProvider)
+        provider.api_key = "k"
+        provider.model = "vendor/paid-model"
+        provider._default_effort = ""
+        provider._rate_limiter = AsyncMock()
+        provider._rate_limit_key = "openrouter"
+        chunk = {"model": "vendor/paid-model", "choices": [{"delta": {"content": "Hey"}}]}
+        stop = {"model": "vendor/paid-model", "choices": [{"delta": {}, "finish_reason": "stop"}]}
+        provider.client = _streaming_client(
+            f"data:{json.dumps(chunk)}\ndata:{json.dumps(stop)}\ndata:[DONE]\n".encode()
+        )
+>       events = [
+            event async for event in provider.stream_complete([{"role": "user", "content": "hi"}])
+        ]
+
+tests/test_r5_011_013_provider_transport.py:291: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/core/provider/openrouter.py:563: in stream_complete
+    raise e
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.core.provider.openrouter.OpenRouterProvider object at 0x10d82e3c0>
+messages = [{'role': 'user', 'content': 'hi'}], model = 'vendor/paid-model'
+temperature = 0.7, max_tokens = 4096, tools = None, reasoning_effort = None
+session_id = None, agent_id = None
+
+    async def stream_complete(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Stream completion via SSE — yields text deltas as they arrive."""
+        # Input validation
+        _validate_messages(messages)
+        _validate_params(temperature, max_tokens)
+    
+        # Rate limiting
+        await self._rate_limiter.acquire()
+    
+        model = model or self.model
+        candidates = [model]
+        if _is_free_model(model):
+            payload_max = min(max_tokens, 1024)
+            for fb in _FREE_FALLBACK_MODELS:
+                if fb != model and fb not in candidates:
+                    candidates.append(fb)
+        else:
+            payload_max = max_tokens
+        cache_breakpoints = _prompt_cache_breakpoints_enabled() and _openrouter_anthropic_model(
+            model
+        )
+        wire_messages, system_marked = _openrouter_wire_messages(messages, cache_breakpoints)
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": wire_messages,
+            "temperature": temperature,
+            "max_tokens": payload_max,
+            "stream": True,
+        }
+        # NOTE: openrouter/free does not advertise stream_options in its
+        # capability list — only send include_usage for paid models.
+        if not _is_free_model(model):
+            # Ask for a final usage chunk so streamed turns report real token counts
+            payload["stream_options"] = {"include_usage": True}
+        tools_marked = False
+        if tools:
+            tool_payload = _tools_payload(tools)
+            if cache_breakpoints:
+                tool_payload = _mark_last_tool_breakpoint(tool_payload)
+                tools_marked = True
+            payload["tools"] = tool_payload
+        effort = _resolve_effort(reasoning_effort, self._default_effort)
+        if effort:
+            payload["reasoning"] = {"effort": effort}
+        _log_prompt_cache_breakpoints("openrouter", model, system=system_marked, tools=tools_marked)
+    
+        audit_log(
+            "llm_stream_start", provider="openrouter", model=model, message_count=len(messages)
+        )
+    
+        # Reserve usage if session_id and agent_id are provided
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id,
+                agent_id,
+                "openrouter",
+                model,
+                messages,
+                tools or [],
+                max_tokens,
+            )
+    
+        content_parts: list[str] = []
+        tool_calls_by_index: dict[int, dict[str, str]] = {}
+        stream_usage: dict[str, int] = {}
+        resolved_model = model
+        saw_terminal = False
+    
+        for cand in candidates:
+            payload["model"] = cand
+            resolved_model = cand
+            content_parts = []
+            tool_calls_by_index = {}
+            stream_usage = {}
+            saw_terminal = False
+            try:
+                async with _stream_with_retry(self.client, "/chat/completions", payload) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:]
+                        if data == "[DONE]":
+                            saw_terminal = True
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(chunk, dict):
+                            continue
+                        # An explicit error frame (HTTP 200 + SSE error body)
+                        # must fail the stream, not silently truncate it.
+                        if chunk.get("error"):
+                            raise ProviderError(_stream_error_message(chunk, resolved_model))
+                        resolved_model = chunk.get("model") or resolved_model
+                        # The usage chunk arrives with an empty choices list.
+                        if chunk.get("usage"):
+                            stream_usage = chunk["usage"]
+                        choices = chunk.get("choices", [])
+                        if not choices:
+                            continue
+                        if choices[0].get("finish_reason"):
+                            saw_terminal = True
+                        delta = choices[0].get("delta", {})
+    
+                        # Text content
+                        content = delta.get("content", "")
+                        if content:
+                            content_parts.append(content)
+                            yield StreamEvent(type="text", content=content)
+    
+                        # Tool calls — accumulate deltas by index
+                        tc_deltas = delta.get("tool_calls", [])
+                        for tc_delta in tc_deltas:
+                            idx = tc_delta.get("index", 0)
+                            if idx not in tool_calls_by_index:
+                                tool_calls_by_index[idx] = {"id": "", "name": "", "arguments": ""}
+                            tc = tool_calls_by_index[idx]
+                            if tc_delta.get("id"):
+                                tc["id"] = tc_delta["id"]
+                            func = tc_delta.get("function", {})
+                            if func.get("name"):
+                                tc["name"] = func["name"]
+                            if func.get("arguments"):
+                                frag = func["arguments"]
+                                if isinstance(frag, dict):
+                                    # Some gateways emit structured args; stringify
+                                    # before concatenating the streamed fragments.
+                                    frag = json.dumps(frag)
+                                tc["arguments"] += frag
+                    if not saw_terminal:
+>                       raise _truncated_stream_error("openrouter", resolved_model)
+E                       machina.core.exceptions.ProviderError: openrouter stream ended without a terminal frame ([DONE] or finish_reason) for vendor/paid-model
+
+machina/core/provider/openrouter.py:475: ProviderError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 23:10:47,522 [AUDIT] {"timestamp": 1792033847.5227132, "event": "llm_stream_start", "provider": "openrouter", "model": "vendor/paid-model", "message_count": 1}
+2026-10-14 23:10:47,522 [AUDIT] {"timestamp": 1792033847.522969, "event": "llm_stream_error", "provider": "openrouter", "model": "vendor/paid-model"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:216 {"timestamp": 1792033847.5227132, "event": "llm_stream_start", "provider": "openrouter", "model": "vendor/paid-model", "message_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:216 {"timestamp": 1792033847.522969, "event": "llm_stream_error", "provider": "openrouter", "model": "vendor/paid-model"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+____________________ test_r5_g3_live_provider_tracks_reload ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d846150>
+_high_rate_limit = <module 'machina.core.provider.rate_limit' from '/private/tmp/machina-head/machina/core/provider/rate_limit.py'>
+
+    async def test_r5_g3_live_provider_tracks_reload(monkeypatch, _high_rate_limit):
+        """A constructed provider observes the post-reload budget, not the stale one."""
+        from machina.core.config import config
+        from machina.core.provider import rate_limit as rl
+    
+        key = "r5-gh-g3-live"
+        monkeypatch.setattr(config, "_session_overrides", {"rate_limit_calls_per_minute": 60})
+        rl._RATE_LIMITERS.pop(key, None)
+        provider = _build_direct(key)
+        try:
+            assert provider._rate_limiter.rate == pytest.approx(1.0)
+            assert provider._rate_limiter.capacity == 60
+            monkeypatch.setattr(config, "_session_overrides", {"rate_limit_calls_per_minute": 600})
+            rl.reload_rate_limiters()
+            registry = rl._RATE_LIMITERS[key]
+            assert registry.rate == pytest.approx(10.0)
+            assert registry.capacity == 600
+            live = provider._rate_limiter
+            # RED pre-fix: `live` is the construction-time object (rate 1.0).
+>           assert live is registry
+E           assert <machina.core.provider.rate_limit.AsyncTokenBucket object at 0x10d875810> is <machina.core.provider.rate_limit.AsyncTokenBucket object at 0x10e368510>
+
+tests/test_r5_011_013_provider_transport.py:332: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r5_011_013_provider_transport.py::test_r5_g1_ollama_cache_scoped_by_endpoint
+FAILED tests/test_r5_011_013_provider_transport.py::test_r5_g2_sse_parser_tolerates_missing_space
+FAILED tests/test_r5_011_013_provider_transport.py::test_r5_g2_no_duplicated_sse_prefixes
+FAILED tests/test_r5_011_013_provider_transport.py::test_r5_g2_direct_stream_no_space_frames
+FAILED tests/test_r5_011_013_provider_transport.py::test_r5_g2_anthropic_stream_no_space_frames
+FAILED tests/test_r5_011_013_provider_transport.py::test_r5_g2_openrouter_stream_no_space_frames
+FAILED tests/test_r5_011_013_provider_transport.py::test_r5_g3_live_provider_tracks_reload
+7 failed, 2 passed in 0.38s

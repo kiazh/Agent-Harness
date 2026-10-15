@@ -1,0 +1,37 @@
+### R5-F2 RED: new adjacency suite against HEAD chunker (f53476e)
+
+  |   File "/Users/shadow/machina/.venv/lib/python3.14/site-packages/hypothesis/core.py", line 2294, in wrapped_test
+  |     raise the_error_hypothesis_found
+  | ExceptionGroup: Hypothesis found 2 distinct failures. (2 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/Users/shadow/machina/tests/test_r5f2_chunk_adjacency.py", line 119, in test_property_no_fabricated_chunks_after_overlap
+    |     assert chunk.text in text, f"fabricated chunk {chunk.text!r} from {text!r}"
+    | AssertionError: fabricated chunk 'aa.aa' from 'aaaaaaaaaa.a a'
+    | assert 'aa.aa' in 'aaaaaaaaaa.a a'
+    |  +  where 'aa.aa' = Chunk(text='aa.aa', index=2, metadata={}, token_count=1).text
+    | Failing test case: test_property_no_fabricated_chunks_after_overlap(
+    |     text='aaaaaaaaaa.a a',
+    |     chunk_size=2,
+    |     overlap=1,  # or any other generated value
+    | )
+    +---------------- 2 ----------------
+    | Traceback (most recent call last):
+    |   File "/Users/shadow/machina/tests/test_r5f2_chunk_adjacency.py", line 121, in test_property_no_fabricated_chunks_after_overlap
+    |     tracked = [c for c in chunks if c.start is not None and c.end is not None]
+    |                                     ^^^^^^^
+    | AttributeError: 'Chunk' object has no attribute 'start'
+    | Failing test case: test_property_no_fabricated_chunks_after_overlap(
+    |     # The test always failed when commented parts were varied together.
+    |     text='a',  # or any other generated value
+    |     chunk_size=2,  # or any other generated value
+    |     overlap=1,  # or any other generated value
+    | )
+    +------------------------------------
+=========================== short test summary info ============================
+FAILED tests/test_r5f2_chunk_adjacency.py::test_recursive_split_never_fabricates_source_text
+FAILED tests/test_r5f2_chunk_adjacency.py::test_recursive_boundary_chunks_stay_adjacent_in_source
+FAILED tests/test_r5f2_chunk_adjacency.py::test_custom_separator_recursion_keeps_real_gap
+FAILED tests/test_r5f2_chunk_adjacency.py::test_default_separators_do_not_splice_around_dropped_period_space
+FAILED tests/test_r5f2_chunk_adjacency.py::test_property_no_fabricated_chunks_after_overlap
+5 failed, 1 passed in 1.49s

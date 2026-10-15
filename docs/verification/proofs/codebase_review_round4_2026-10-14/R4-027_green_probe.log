@@ -1,0 +1,22 @@
+probe source: live
+[PASS] sibling machina-old: got=False expected=False
+[PASS] sibling machina2: got=False expected=False
+[PASS] sibling machinaX: got=False expected=False
+[PASS] sibling machina_old: got=False expected=False
+[PASS] sibling machina.bak: got=False expected=False
+[PASS] exact path (bare): got=True expected=True
+[PASS] exact path (quoted exec): got=True expected=True
+[PASS] path inside root: got=True expected=True
+[PASS] containing dir (cd &&): got=True expected=True
+[PASS] case-insensitive pos: got=True expected=True
+[PASS] case-insensitive neg: got=False expected=False
+[PASS] trailing sep root pos: got=True expected=True
+[PASS] trailing sep root neg: got=False expected=False
+[PASS] relative prefix before: got=False expected=False
+[PASS] old existing pin pos: got=True expected=True
+[PASS] old existing pin neg: got=False expected=False
+[PASS] windows path inside root: got=True expected=True
+[PASS] windows sibling neg: got=False expected=False
+[PASS] rejected first, valid later: got=True expected=True
+
+19/19 passed; 0 failed

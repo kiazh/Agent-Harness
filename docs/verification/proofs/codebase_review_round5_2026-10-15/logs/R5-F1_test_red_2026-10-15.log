@@ -1,0 +1,75 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_stale_worker_cannot_regress_durable_cursor ________________
+
+cursor_env = <machina.db.connection.Database object at 0x10971d220>
+
+    @pytest.mark.integration
+    @pytest.mark.db
+    async def test_stale_worker_cannot_regress_durable_cursor(cursor_env):
+        """A worker parked after a stale read must not republish an older cursor.
+    
+        Reproduced N=5 times; the durable watermark is monotonic on every run.
+        """
+        database = cursor_env
+        from machina.memory.consolidator import MemoryConsolidator
+    
+        for _ in range(5):
+            session_id = await database.fetchval(
+                "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
+            )
+            ids = await _seed_chunks(database, session_id, 6)
+    
+            # Prime the oldest page -> durable cursor = ids[1].
+            await _agent(_plain_consolidator())._consolidate_memories(session_id)
+            primed = await _read_cursor(database, session_id)
+            assert primed is not None and primed["id"] == str(ids[1])
+    
+            class _Gated(MemoryConsolidator):
+                """Real consolidator that parks the CALLER just before the lock."""
+    
+                def __init__(self, gate, reached):
+                    super().__init__(llm_provider=object(), store=_plain_consolidator().store)
+                    self._gate = gate
+                    self._reached = reached
+    
+                async def consolidate_session(self, *args, **kwargs):
+                    self._reached.set()
+                    await self._gate.wait()
+                    return await super().consolidate_session(*args, **kwargs)
+    
+            gate = asyncio.Event()
+            reached = asyncio.Event()
+            stale = asyncio.create_task(
+                _agent(_Gated(gate, reached))._consolidate_memories(session_id)
+            )
+            await asyncio.wait_for(reached.wait(), 10)
+            # Confirm the stale worker actually observed the pre-advance cursor.
+            observed = await _read_cursor(database, session_id)
+            assert observed["id"] == str(ids[1]), "stale worker must read before advancing"
+    
+            # Two healthy workers advance the durable cursor ids[1] -> ids[3] -> ids[5].
+            await _agent(_plain_consolidator())._consolidate_memories(session_id)
+            mid = await _read_cursor(database, session_id)
+            await _agent(_plain_consolidator())._consolidate_memories(session_id)
+            advanced = await _read_cursor(database, session_id)
+            assert mid["id"] == str(ids[3])
+            assert advanced["id"] == str(ids[5])
+    
+            # Release the stale worker; it must not move the watermark backwards.
+            gate.set()
+            await asyncio.wait_for(stale, 20)
+            final = await _read_cursor(database, session_id)
+>           assert final["id"] == str(ids[5]), (
+                f"stale cursor regressed the watermark: expected {ids[5]}, got {final['id']}"
+            )
+E           AssertionError: stale cursor regressed the watermark: expected a987a900-947c-4455-8531-3585c0700ba4, got 84e35098-5740-4524-bfe1-c76524fba0bf
+E           assert '84e35098-574...-c76524fba0bf' == 'a987a900-947...-3585c0700ba4'
+E             
+E             - a987a900-947c-4455-8531-3585c0700ba4
+E             + 84e35098-5740-4524-bfe1-c76524fba0bf
+
+tests/test_r5_f1_consolidation_cursor.py:163: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r5_f1_consolidation_cursor.py::test_stale_worker_cannot_regress_durable_cursor
+1 failed in 0.49s

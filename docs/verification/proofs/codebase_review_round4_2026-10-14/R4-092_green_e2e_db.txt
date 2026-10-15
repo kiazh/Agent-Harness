@@ -1,0 +1,6 @@
+iterations: 1
+native: {'meanMs': 3.939, 'p95Ms': 3.939}
+langgraph: {'meanMs': 22.217, 'p95Ms': 22.217}
+graphCheckpointRows: 4
+rows (sessions, trial_runs, trial_effects) before: (0, 0, 0) after: (0, 0, 0)
+OK: real compare completed and left no rows behind

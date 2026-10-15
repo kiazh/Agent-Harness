@@ -1,0 +1,586 @@
+F.FFFFFFFFFFFFFF....                                                     [100%]
+=================================== FAILURES ===================================
+_____ test_install_hub_entry_without_name_raises_value_error_not_key_error _____
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_install_hub_entry_without0')
+
+    def test_install_hub_entry_without_name_raises_value_error_not_key_error(tmp_path):
+        registry = SkillRegistry(tmp_path / "skills")
+        hub = SkillHub(registry, tmp_path / "hub")
+        (tmp_path / "hub" / "nameless.json").write_text(
+            json.dumps({"description": "Broken entry", "content": "Steps"}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="name"):
+>           hub.install("nameless")
+
+tests/test_fm6_registry_hardening.py:91: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.skills.registry.SkillHub object at 0x10bc7d550>
+name = 'nameless'
+
+    def install(self, name: str) -> Skill:
+        """Install a skill from the hub into the local registry."""
+        hub_file = self._hub_file(name)
+        if not hub_file.exists():
+            raise ValueError(f"Skill '{name}' not found in hub")
+    
+        data = json.loads(hub_file.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"Skill '{name}' hub entry is not a JSON object")
+        content = data.get("content")
+        if not isinstance(content, str):
+            raise ValueError(
+                f"Skill '{name}' hub entry has no publishable content; publish it again"
+            )
+        return self.registry.create_skill(
+>           name=data["name"],
+                 ^^^^^^^^^^^^
+            description=data.get("description", ""),
+            content=content,
+            triggers=data.get("triggers", []),
+            source=f"hub:{name}",
+            source_type="hub",
+            version=data.get("version", "1.0.0"),
+        )
+E       KeyError: 'name'
+
+machina/skills/registry.py:1102: KeyError
+_____________ test_list_hub_skips_json_that_is_not_an_entry_object _____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_list_hub_skips_json_that_0')
+
+    def test_list_hub_skips_json_that_is_not_an_entry_object(tmp_path):
+        registry = SkillRegistry(tmp_path / "skills")
+        hub = SkillHub(registry, tmp_path / "hub")
+        (tmp_path / "hub" / "array.json").write_text("[1, 2, 3]", encoding="utf-8")
+        (tmp_path / "hub" / "good.json").write_text(
+            json.dumps(
+                {
+                    "name": "good",
+                    "description": "Fine entry",
+                    "triggers": [],
+                    "content": "Steps",
+                }
+            ),
+            encoding="utf-8",
+        )
+>       assert [entry["name"] for entry in hub.list_hub()] == ["good"]
+                ^^^^^^^^^^^^^
+E       TypeError: list indices must be integers or slices, not str
+
+tests/test_fm6_registry_hardening.py:120: TypeError
+__________________ test_search_skips_type_corrupt_hub_entries __________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_search_skips_type_corrupt0')
+
+    def test_search_skips_type_corrupt_hub_entries(tmp_path):
+        registry = SkillRegistry(tmp_path / "skills")
+        hub = SkillHub(registry, tmp_path / "hub")
+        (tmp_path / "hub" / "fieldy.json").write_text(
+            json.dumps({"name": 3, "description": ["no"], "tags": {"x": 1}}),
+            encoding="utf-8",
+        )
+        (tmp_path / "hub" / "good.json").write_text(
+            json.dumps(
+                {
+                    "name": "good",
+                    "description": "Fine entry",
+                    "tags": ["demo"],
+                    "content": "Steps",
+                }
+            ),
+            encoding="utf-8",
+        )
+>       assert [entry["name"] for entry in hub.search("good")] == ["good"]
+                                           ^^^^^^^^^^^^^^^^^^
+
+tests/test_fm6_registry_hardening.py:141: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.skills.registry.SkillHub object at 0x10bc13950>, query = 'good'
+
+    def search(self, query: str) -> list[dict[str, Any]]:
+        """Search hub skills by name, description, or tags."""
+        query_lower = query.lower()
+        results = []
+        for entry in self.list_hub():
+            if (
+>               query_lower in entry.get("name", "").lower()
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                or query_lower in entry.get("description", "").lower()
+                or any(query_lower in t.lower() for t in entry.get("tags", []))
+            ):
+E           AttributeError: 'int' object has no attribute 'lower'
+
+machina/skills/registry.py:1080: AttributeError
+______ test_parser_checks_file_size_before_reading_a_symlinked_huge_file _______
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_parser_checks_file_size_b0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c600f30>
+
+    def test_parser_checks_file_size_before_reading_a_symlinked_huge_file(tmp_path, monkeypatch):
+        target = tmp_path / "huge.md"
+        with target.open("wb") as handle:
+            handle.truncate(SkillParser.MAX_CONTENT_SIZE + 1)
+        skill_dir = tmp_path / "huge-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").symlink_to(target)
+        reads = []
+        real_read_text = Path.read_text
+    
+        def spy(path, *args, **kwargs):
+            reads.append(path)
+            return real_read_text(path, *args, **kwargs)
+    
+        monkeypatch.setattr(Path, "read_text", spy)
+        with pytest.raises(ValueError, match="maximum size"):
+            SkillParser.parse(skill_dir / "SKILL.md")
+>       assert reads == []
+E       AssertionError: assert [PosixPath('/...ll/SKILL.md')] == []
+E         
+E         Left contains one more item: PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_parser_checks_file_size_b0/huge-skill/SKILL.md')
+E         Use -v to get more diff
+
+tests/test_fm6_registry_hardening.py:164: AssertionError
+________ test_delete_skill_removes_repo_install_and_reinstall_succeeds _________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_delete_skill_removes_repo0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c611b50>
+
+    def test_delete_skill_removes_repo_install_and_reinstall_succeeds(tmp_path, monkeypatch):
+        """Deleting a repo-installed skill must remove its whole manifest-owned tree.
+    
+        A SKILL.md-only unlink leaves the resources and the install manifest
+        behind, so every reinstall refuses as "diverged from its manifest".
+        """
+        from machina.skills.registry import SkillRegistry
+    
+        root = tmp_path / "repo"
+        root.mkdir()
+        revision = make_repo(
+            root,
+            {
+                "skills/alpha/SKILL.md": ALPHA_SKILL,
+                "skills/alpha/scripts/run.py": "print('alpha')\n",
+            },
+        )
+        monkeypatch.setattr(repo_install, "staging_root", lambda: tmp_path / "staging")
+        plan = scan_repo(root, parse_repo_url("https://github.com/o/r"), revision)
+        staged = write_staged_plan(plan, root)
+        detail, _ = load_staged_plan(plan.digest)
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        assert activate_plan(detail, staged, skills_dir) == ["alpha"]
+    
+        registry = SkillRegistry(skills_dir=skills_dir)
+        registry.load_all()
+        assert registry.get("alpha") is not None
+        assert registry.delete_skill("alpha") is True
+>       assert not (skills_dir / "alpha").exists()
+E       AssertionError: assert not True
+E        +  where True = exists()
+E        +    where exists = (PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_delete_skill_removes_repo0/skills') / 'alpha').exists
+
+tests/test_repo_install.py:669: AssertionError
+______________ test_delete_skill_refuses_corrupt_install_manifest ______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_delete_skill_refuses_corr0')
+
+    def test_delete_skill_refuses_corrupt_install_manifest(tmp_path):
+        """A manifest that cannot prove ownership refuses deletion, loudly."""
+        from machina.skills.registry import SkillRegistry
+    
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "alpha"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(ALPHA_SKILL)
+        (skill_dir / ".install-manifest.json").write_text("{not json", encoding="utf-8")
+        registry = SkillRegistry(skills_dir=skills_dir)
+        registry.load_all()
+>       with pytest.raises(RepoInstallError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RepoInstallError
+
+tests/test_repo_install.py:686: Failed
+__________________________ test_url_validation_matrix __________________________
+
+    def test_url_validation_matrix():
+        good = parse_repo_url("https://github.com/affaan-m/ecc")
+        assert (good.owner, good.repo, good.ref) == ("affaan-m", "ecc", "")
+        assert good.url == "https://github.com/affaan-m/ecc"
+        assert parse_repo_url("https://github.com/o/r.git").repo == "r"
+        assert parse_repo_url("https://github.com/o/r/tree/main").ref == "main"
+        assert parse_repo_url("https://github.com/o/r/tree/v2.2.3").ref == "v2.2.3"
+        for bad in [
+            "http://github.com/o/r",
+            "https://gitlab.com/o/r",
+            "https://github.com.evil.com/o/r",
+            "https://user:pass@github.com/o/r",
+            "https://github.com:8443/o/r",
+            "https://github.com:99999/o/r",
+            "https://github.com:abc/o/r",
+            "https://github.com/onlyowner",
+            "https://github.com/o/r/blob/main/README.md",
+            "https://github.com/o/r/tree/../escape",
+            "https://github.com/../x",
+            "not a url",
+            "",
+            "https://github.com/o/" + "r" * 101,
+        ]:
+            with pytest.raises(RepoInstallError):
+>               parse_repo_url(bad)
+
+tests/test_repo_install.py:114: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/skills/repo_install.py:97: in parse_repo_url
+    if parts.username or parts.password or parts.port:
+                                           ^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = ParseResult(scheme='https', netloc='github.com:99999', path='/o/r', params='', query='', fragment='')
+
+    @property
+    def port(self):
+        port = self._hostinfo[1]
+        if port is not None:
+            if port.isdigit() and port.isascii():
+                port = int(port)
+            else:
+                raise ValueError(f"Port could not be cast to integer value as {port!r}")
+            if not (0 <= port <= 65535):
+>               raise ValueError("Port out of range 0-65535")
+E               ValueError: Port out of range 0-65535
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/urllib/parse.py:184: ValueError
+__________ test_windows_activation_degrades_dir_fsync_to_best_effort ___________
+
+path = '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_windows_activation_degrad0/skills'
+flags = 0, args = (), kwargs = {}
+
+    def windows_open(path, flags, *args, **kwargs):
+        if str(path) == str(skills_dir):
+>           raise PermissionError("directories cannot be opened as file descriptors")
+E           PermissionError: directories cannot be opened as file descriptors
+
+tests/test_fm6_repo_install.py:116: PermissionError
+
+The above exception was the direct cause of the following exception:
+
+plan_detail = {'agents': [], 'commands': [], 'digest': '5b5d94030f1f8a475848873f6e962ea171b43dc70543355635286812b2ad3ab0', 'invalid_skills': [], ...}
+staged = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_windows_activation_degrad0/staging/o-r-f29b1016d840ce5dd6dd993bf921f3104a1ce0f0')
+skills_dir = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_windows_activation_degrad0/skills')
+
+    def activate_plan(plan_detail: dict[str, Any], staged: Path, skills_dir: Path) -> list[str]:
+        """Re-verify recorded digests from the staged tree, then install.
+    
+        Only recorded files are ever installed; anything added to staging
+        after review is ignored, and anything removed or modified refuses.
+        """
+        expected = plan_detail.get("digest", "")
+        if not isinstance(plan_detail, dict) or not re.fullmatch(r"[0-9a-f]{64}", expected or ""):
+            raise RepoInstallError("staged plan is malformed; stage again")
+        try:
+            tracked = set(_tracked_files(staged))
+        except RepoInstallError as exc:
+            raise RepoInstallError("staged repository changed since review; stage again") from exc
+        skills: list[dict[str, Any]] = []
+        for skill in plan_detail.get("skills", []):
+            if not isinstance(skill, dict):
+                raise RepoInstallError("staged plan is malformed; stage again")
+            files = {}
+            for relative in skill.get("files", {}):
+                if not isinstance(relative, str) or relative not in tracked:
+                    raise RepoInstallError("staged repository changed since review; stage again")
+                try:
+                    data = _read_bounded(staged / relative)
+                except RepoInstallError as exc:
+                    raise RepoInstallError(
+                        "staged repository changed since review; stage again"
+                    ) from exc
+                files[relative] = hashlib.sha256(data).hexdigest()
+            skills.append(
+                {"name": skill.get("name", ""), "root": skill.get("root", ""), "files": files}
+            )
+        recomputed = hashlib.sha256(
+            _canonical_plan_bytes(
+                plan_detail.get("source", ""), plan_detail.get("revision", ""), skills
+            )
+        ).hexdigest()
+        if recomputed != expected:
+            raise RepoInstallError("staged repository changed since review; stage again")
+        # Phase 1 builds every skill into temp dirs: nothing live is touched
+        # until all skills verify. Phase 2 renames into place with rollback.
+        built: list[tuple[str, Path | None]] = []
+        try:
+            for skill in skills:
+                built.append(_build_skill(staged, plan_detail, skill, skills_dir))
+            installed: list[str] = []
+            committed: list[str] = []
+            try:
+                for name, tmpdir in built:
+                    if tmpdir is None:
+                        installed.append(name)
+                        continue
+                    try:
+                        os.replace(tmpdir, skills_dir / name.lower())
+                    except OSError as exc:
+                        raise RepoInstallError(f"could not install skill '{name}'") from exc
+                    # Track the rename before any durability check so a failed
+                    # directory sync still rolls the installed tree back.
+                    committed.append(name)
+                    try:
+                        _fsync_dir(skills_dir)
+                    except OSError as exc:
+>                       raise RepoInstallError(f"could not install skill '{name}'") from exc
+E                       machina.skills.repo_install.RepoInstallError: could not install skill 'alpha'
+
+machina/skills/repo_install.py:858: RepoInstallError
+
+The above exception was the direct cause of the following exception:
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_windows_activation_degrad0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c666120>
+
+    def test_windows_activation_degrades_dir_fsync_to_best_effort(tmp_path, monkeypatch):
+        """Windows cannot fsync a directory; activation must stay usable there.
+    
+        The strict POSIX contract (a failed directory sync rolls the install
+        back) cannot hold on a platform where ``os.open`` on a directory always
+        raises, so the sync degrades to best-effort at activation on Windows.
+        """
+        detail, staged, skills_dir = _stage(tmp_path, monkeypatch)
+        monkeypatch.setattr(repo_install, "_DIR_FSYNC_SUPPORTED", False, raising=False)
+        real_open = os.open
+    
+        def windows_open(path, flags, *args, **kwargs):
+            if str(path) == str(skills_dir):
+                raise PermissionError("directories cannot be opened as file descriptors")
+            return real_open(path, flags, *args, **kwargs)
+    
+        monkeypatch.setattr(os, "open", windows_open)
+>       assert activate_plan(detail, staged, skills_dir) == ["alpha"]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_fm6_repo_install.py:120: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+plan_detail = {'agents': [], 'commands': [], 'digest': '5b5d94030f1f8a475848873f6e962ea171b43dc70543355635286812b2ad3ab0', 'invalid_skills': [], ...}
+staged = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_windows_activation_degrad0/staging/o-r-f29b1016d840ce5dd6dd993bf921f3104a1ce0f0')
+skills_dir = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_windows_activation_degrad0/skills')
+
+    def activate_plan(plan_detail: dict[str, Any], staged: Path, skills_dir: Path) -> list[str]:
+        """Re-verify recorded digests from the staged tree, then install.
+    
+        Only recorded files are ever installed; anything added to staging
+        after review is ignored, and anything removed or modified refuses.
+        """
+        expected = plan_detail.get("digest", "")
+        if not isinstance(plan_detail, dict) or not re.fullmatch(r"[0-9a-f]{64}", expected or ""):
+            raise RepoInstallError("staged plan is malformed; stage again")
+        try:
+            tracked = set(_tracked_files(staged))
+        except RepoInstallError as exc:
+            raise RepoInstallError("staged repository changed since review; stage again") from exc
+        skills: list[dict[str, Any]] = []
+        for skill in plan_detail.get("skills", []):
+            if not isinstance(skill, dict):
+                raise RepoInstallError("staged plan is malformed; stage again")
+            files = {}
+            for relative in skill.get("files", {}):
+                if not isinstance(relative, str) or relative not in tracked:
+                    raise RepoInstallError("staged repository changed since review; stage again")
+                try:
+                    data = _read_bounded(staged / relative)
+                except RepoInstallError as exc:
+                    raise RepoInstallError(
+                        "staged repository changed since review; stage again"
+                    ) from exc
+                files[relative] = hashlib.sha256(data).hexdigest()
+            skills.append(
+                {"name": skill.get("name", ""), "root": skill.get("root", ""), "files": files}
+            )
+        recomputed = hashlib.sha256(
+            _canonical_plan_bytes(
+                plan_detail.get("source", ""), plan_detail.get("revision", ""), skills
+            )
+        ).hexdigest()
+        if recomputed != expected:
+            raise RepoInstallError("staged repository changed since review; stage again")
+        # Phase 1 builds every skill into temp dirs: nothing live is touched
+        # until all skills verify. Phase 2 renames into place with rollback.
+        built: list[tuple[str, Path | None]] = []
+        try:
+            for skill in skills:
+                built.append(_build_skill(staged, plan_detail, skill, skills_dir))
+            installed: list[str] = []
+            committed: list[str] = []
+            try:
+                for name, tmpdir in built:
+                    if tmpdir is None:
+                        installed.append(name)
+                        continue
+                    try:
+                        os.replace(tmpdir, skills_dir / name.lower())
+                    except OSError as exc:
+                        raise RepoInstallError(f"could not install skill '{name}'") from exc
+                    # Track the rename before any durability check so a failed
+                    # directory sync still rolls the installed tree back.
+                    committed.append(name)
+                    try:
+                        _fsync_dir(skills_dir)
+                    except OSError as exc:
+                        raise RepoInstallError(f"could not install skill '{name}'") from exc
+                    installed.append(name)
+            except RepoInstallError as exc:
+                for done in committed:
+                    target = skills_dir / done.lower()
+                    if (target / ".install-manifest.json").is_file():
+                        shutil.rmtree(target, ignore_errors=True)
+>               raise RepoInstallError(
+                    f"{exc} (installed before failure and rolled back: "
+                    + (", ".join(committed) or "none")
+                    + ")"
+                ) from exc
+E               machina.skills.repo_install.RepoInstallError: could not install skill 'alpha' (installed before failure and rolled back: alpha)
+
+machina/skills/repo_install.py:865: RepoInstallError
+__________ test_symlinked_oversized_package_file_rejected_before_read __________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_symlinked_oversized_packa0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bb96270>
+
+    def test_symlinked_oversized_package_file_rejected_before_read(tmp_path, monkeypatch):
+        _base_package(tmp_path)
+        huge = tmp_path / "HUGE.md"
+        with huge.open("wb") as handle:
+            handle.truncate(256 * 1024 + 1)
+        link = tmp_path / "LINKED.md"
+        link.symlink_to(huge)
+        manifest = json.loads((tmp_path / "soul.json").read_text(encoding="utf-8"))
+        manifest["files"]["linked"] = "LINKED.md"
+        (tmp_path / "soul.json").write_text(json.dumps(manifest), encoding="utf-8")
+        reads = []
+        real_read_bytes = Path.read_bytes
+    
+        def spy(path):
+            reads.append(path)
+            return real_read_bytes(path)
+    
+        monkeypatch.setattr(Path, "read_bytes", spy)
+        with pytest.raises(ValueError, match="size"):
+            SoulSpec.from_package(tmp_path)
+>       assert huge not in reads
+E       AssertionError: assert PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_symlinked_oversized_packa0/HUGE.md') not in [PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_symlinked_overs...var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_symlinked_oversized_packa0/HUGE.md')]
+
+tests/test_fm3_soulspec_import.py:106: AssertionError
+_____________ test_package_with_too_many_referenced_files_rejected _____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_package_with_too_many_ref0')
+
+    def test_package_with_too_many_referenced_files_rejected(tmp_path):
+        _base_package(tmp_path)
+        manifest = json.loads((tmp_path / "soul.json").read_text(encoding="utf-8"))
+        for index in range(65):
+            name = f"doc{index:02d}.md"
+            (tmp_path / name).write_text("ok", encoding="utf-8")
+            manifest["files"][f"doc{index:02d}"] = name
+        (tmp_path / "soul.json").write_text(json.dumps(manifest), encoding="utf-8")
+>       with pytest.raises(ValueError, match="too many"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_fm3_soulspec_import.py:117: Failed
+_ test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[go ahead] _
+
+query = 'go ahead'
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_bare_technology_follow_on0')
+
+    @pytest.mark.parametrize("query", ["go ahead", "go on", "go", "rust", "swift"])
+    def test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline(query, tmp_path):
+        """Bare-tech requests classify as ambiguous; the workflow classifier must
+        not latch onto the coding pipeline from the token alone."""
+        plan = plan_workflow(query, skills=SkillRegistry(tmp_path))
+>       assert plan.kind != "coding"
+E       AssertionError: assert 'coding' != 'coding'
+E        +  where 'coding' = SkillWorkflow(kind='coding', skills=[], stages=[]).kind
+
+tests/test_turn_intent.py:120: AssertionError
+__ test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[go on] __
+
+query = 'go on'
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_bare_technology_follow_on1')
+
+    @pytest.mark.parametrize("query", ["go ahead", "go on", "go", "rust", "swift"])
+    def test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline(query, tmp_path):
+        """Bare-tech requests classify as ambiguous; the workflow classifier must
+        not latch onto the coding pipeline from the token alone."""
+        plan = plan_workflow(query, skills=SkillRegistry(tmp_path))
+>       assert plan.kind != "coding"
+E       AssertionError: assert 'coding' != 'coding'
+E        +  where 'coding' = SkillWorkflow(kind='coding', skills=[], stages=[]).kind
+
+tests/test_turn_intent.py:120: AssertionError
+___ test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[go] ____
+
+query = 'go'
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_bare_technology_follow_on2')
+
+    @pytest.mark.parametrize("query", ["go ahead", "go on", "go", "rust", "swift"])
+    def test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline(query, tmp_path):
+        """Bare-tech requests classify as ambiguous; the workflow classifier must
+        not latch onto the coding pipeline from the token alone."""
+        plan = plan_workflow(query, skills=SkillRegistry(tmp_path))
+>       assert plan.kind != "coding"
+E       AssertionError: assert 'coding' != 'coding'
+E        +  where 'coding' = SkillWorkflow(kind='coding', skills=[], stages=[]).kind
+
+tests/test_turn_intent.py:120: AssertionError
+__ test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[rust] ___
+
+query = 'rust'
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_bare_technology_follow_on3')
+
+    @pytest.mark.parametrize("query", ["go ahead", "go on", "go", "rust", "swift"])
+    def test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline(query, tmp_path):
+        """Bare-tech requests classify as ambiguous; the workflow classifier must
+        not latch onto the coding pipeline from the token alone."""
+        plan = plan_workflow(query, skills=SkillRegistry(tmp_path))
+>       assert plan.kind != "coding"
+E       AssertionError: assert 'coding' != 'coding'
+E        +  where 'coding' = SkillWorkflow(kind='coding', skills=[], stages=[]).kind
+
+tests/test_turn_intent.py:120: AssertionError
+__ test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[swift] __
+
+query = 'swift'
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1674/test_bare_technology_follow_on4')
+
+    @pytest.mark.parametrize("query", ["go ahead", "go on", "go", "rust", "swift"])
+    def test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline(query, tmp_path):
+        """Bare-tech requests classify as ambiguous; the workflow classifier must
+        not latch onto the coding pipeline from the token alone."""
+        plan = plan_workflow(query, skills=SkillRegistry(tmp_path))
+>       assert plan.kind != "coding"
+E       AssertionError: assert 'coding' != 'coding'
+E        +  where 'coding' = SkillWorkflow(kind='coding', skills=[], stages=[]).kind
+
+tests/test_turn_intent.py:120: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_fm6_registry_hardening.py::test_install_hub_entry_without_name_raises_value_error_not_key_error
+FAILED tests/test_fm6_registry_hardening.py::test_list_hub_skips_json_that_is_not_an_entry_object
+FAILED tests/test_fm6_registry_hardening.py::test_search_skips_type_corrupt_hub_entries
+FAILED tests/test_fm6_registry_hardening.py::test_parser_checks_file_size_before_reading_a_symlinked_huge_file
+FAILED tests/test_repo_install.py::test_delete_skill_removes_repo_install_and_reinstall_succeeds
+FAILED tests/test_repo_install.py::test_delete_skill_refuses_corrupt_install_manifest
+FAILED tests/test_repo_install.py::test_url_validation_matrix - ValueError: P...
+FAILED tests/test_fm6_repo_install.py::test_windows_activation_degrades_dir_fsync_to_best_effort
+FAILED tests/test_fm3_soulspec_import.py::test_symlinked_oversized_package_file_rejected_before_read
+FAILED tests/test_fm3_soulspec_import.py::test_package_with_too_many_referenced_files_rejected
+FAILED tests/test_turn_intent.py::test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[go ahead]
+FAILED tests/test_turn_intent.py::test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[go on]
+FAILED tests/test_turn_intent.py::test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[go]
+FAILED tests/test_turn_intent.py::test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[rust]
+FAILED tests/test_turn_intent.py::test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline[swift]
+15 failed, 5 passed in 0.72s

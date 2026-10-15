@@ -1,0 +1,16 @@
+== broken section (malformed locomo dataset) ==
+    why: OpenCode has no LoCoMo-style persistent-memory implementation to run the same questions through, and this benchmark cannot drive another agent harness headlessly. Comparing token counts across different systems without a shared task is not a measurement.
+    fair_axes: ["same-task delivery: tokens/calls/wall-time to produce the same artifact (this benchmark's replay harness is the task definition)", "memory quality: LoCoMo recall@k/MRR of each system's memory engine"]
+    how_to_fill: run the identical replay task and LoCoMo dataset through the other system with its own harness, then compare rows here
+
+JSON written: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/tmp.nTCeda6AXx/out.json
+
+failed sections:
+  - locomo: ValueError: LoCoMo data must be a non-empty JSON array
+EXIT=1
+
+== healthy section (environment) ==
+JSON written: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/tmp.nTCeda6AXx/out2.json
+
+done.
+EXIT=0

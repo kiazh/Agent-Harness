@@ -1,0 +1,24 @@
+Ignoring unreadable config persona_description in /Users/shadow/.machina/config.yaml: ImportError
+ImportError
+/Users/shadow/machina/machina/core/config.py:614 (load)
+/Users/shadow/machina/machina/core/config.py:282 (validate_value)
+/Users/shadow/machina/machina/memory/__init__.py:15 (<module>)
+/Users/shadow/machina/machina/memory/approval.py:23 (<module>)
+2026-10-14 22:42:38,140 [AUDIT] {"timestamp": 1792032158.140511, "event": "rag_index_start", "session_id": "d3ee9b8a-ba35-45c4-b58f-0d47af122bf2", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/document", "doc_type": "text"}
+2026-10-14 22:42:38,175 [AUDIT] {"timestamp": 1792032158.175342, "event": "rag_index_complete", "session_id": "d3ee9b8a-ba35-45c4-b58f-0d47af122bf2", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/document", "chunks_stored": 1}
+2026-10-14 22:42:38,175 [AUDIT] {"timestamp": 1792032158.175618, "event": "rag_index_start", "session_id": "d3ee9b8a-ba35-45c4-b58f-0d47af122bf2", "source": "https://example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "doc_type": "text"}
+2026-10-14 22:42:38,179 [AUDIT] {"timestamp": 1792032158.179111, "event": "rag_index_complete", "session_id": "d3ee9b8a-ba35-45c4-b58f-0d47af122bf2", "source": "https://example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "chunks_stored": 1}
+sanitizer outlet source='https://alice:example-passphrase@example.invalid/document'
+  -> 'https://alice:[REDACTED_URL_PASSWORD]@example.invalid/document' leaked=False
+sanitizer outlet source='https://example.invalid/doc?api_key=short1&x=1'
+  -> 'https://example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1' leaked=False
+audit rows: 4
+  event=rag_index_start userinfo_leak=False query_leak=False
+    {"event": "rag_index_start", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/document", "doc_type": "text", "timestamp": 1792032158.140511, "session_id": "d3ee9b8a-ba35-45c4-b58f-0d47af122bf2"}
+  event=rag_index_complete userinfo_leak=False query_leak=False
+    {"event": "rag_index_complete", "source": "https://alice:[REDACTED_URL_PASSWORD]@example.invalid/document", "timestamp": 1792032158.175342, "session_id": "d3ee9b8a-ba35-45c4-b58f-0d47af122bf2", "chunks_stored": 1}
+  event=rag_index_start userinfo_leak=False query_leak=False
+    {"event": "rag_index_start", "source": "https://example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "doc_type": "text", "timestamp": 1792032158.175618, "session_id": "d3ee9b8a-ba35-45c4-b58f-0d47af122bf2"}
+  event=rag_index_complete userinfo_leak=False query_leak=False
+    {"event": "rag_index_complete", "source": "https://example.invalid/doc?api_key=[REDACTED_CREDENTIAL]&x=1", "timestamp": 1792032158.179111, "session_id": "d3ee9b8a-ba35-45c4-b58f-0d47af122bf2", "chunks_stored": 1}
+NOT REPRODUCED: no credential in audit_events

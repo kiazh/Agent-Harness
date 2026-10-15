@@ -1,0 +1,10 @@
+### R5-F2 GREEN: fixed chunker (working tree)
+
+chunker module: machina/rag/chunker.py
+source: 'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW end'
+  chunk 0: 'WWWWWWWWWWWWWWWW'  -> substring
+  chunk 1: 'WWWWWWWWWWWWWWWW'  -> substring
+  chunk 2: 'WWWWWWWWWWWWWWW '  -> substring
+  chunk 3: ' end'  -> substring
+RESULT: PASS — every chunk is a source substring
+exit=0

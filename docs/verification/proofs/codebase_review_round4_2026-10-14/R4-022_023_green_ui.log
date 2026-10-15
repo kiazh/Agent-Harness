@@ -1,0 +1,15 @@
+✔ R4-022: a streamed denied tool renders the denied state, not the success check (4.660042ms)
+✔ R4-022: typed outcomes keep a consistent mapping (paused, failed, unknown, legacy) (12.147833ms)
+✔ R4-023: Menu sanitizes hostile payloads and splits embedded newlines into rows (1.752875ms)
+✔ R4-023: Picker inherits Menu sanitization for titles, labels and descriptions (0.378083ms)
+✔ R4-023: ToolTurn header splits newline-laden names/args into physical rows (0.306625ms)
+✔ R4-023: ApprovalCard dock title splits newline-laden tool/target fields (0.840875ms)
+✔ R4-023: hostile payloads render clean through the real alt-screen terminal (3.489125ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 270.745458

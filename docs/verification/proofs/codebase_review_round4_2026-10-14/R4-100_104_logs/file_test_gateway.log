@@ -1,0 +1,60 @@
+...............F...........                                              [100%]
+=================================== FAILURES ===================================
+________________ TestTurnTimeout.test_turn_timeout_configurable ________________
+
+self = <tests.test_gateway.TestTurnTimeout object at 0x10ee19e50>
+
+    async def test_turn_timeout_configurable(self):
+        """The turn timeout should be configurable via config."""
+        from machina.core.config import config
+    
+        original = config.get("turn_timeout")
+        try:
+            config.set("turn_timeout", 1)
+            h = Harness()
+            # Create a fake agent that hangs
+            gate = asyncio.Event()
+            h.agent = FakeAgent(scripted_turn(), gate=gate)
+            h.gateway._agent_factory = lambda model, provider: h.agent
+            await h.call("initialize")
+            sid = (await h.call("session.create"))["result"]["session"]["id"]
+            await h.call("prompt.submit", {"sessionId": sid, "text": "go"})
+            # Wait for timeout
+            await asyncio.sleep(2)
+            # The turn should have been cleaned up
+>           assert not h.gateway.turn_running(uuid.UUID(sid))
+E           AssertionError: assert not True
+E            +  where True = turn_running(UUID('93b0c555-9380-41df-86a5-20c3ea52a615'))
+E            +    where turn_running = <machina.gateway.server.Gateway object at 0x10eed3e10>.turn_running
+E            +      where <machina.gateway.server.Gateway object at 0x10eed3e10> = <tests.test_gateway.Harness object at 0x10f068290>.gateway
+E            +    and   UUID('93b0c555-9380-41df-86a5-20c3ea52a615') = <class 'uuid.UUID'>('93b0c555-9380-41df-86a5-20c3ea52a615')
+E            +      where <class 'uuid.UUID'> = uuid.UUID
+
+tests/test_gateway.py:297: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 21:37:32,980 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+2026-10-14 21:37:39,665 [WARNING] Turn f030f5f62a6f exceeded compute timeout
+------------------------------ Captured log call -------------------------------
+WARNING  machina.gateway.server:server.py:230 MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+DEBUG    machina.gateway.server:server.py:339 → initialize (id=1)
+INFO     machina.gateway.server:server.py:486 Gateway initialize: model=openrouter/free provider=openrouter
+DEBUG    machina.gateway.server:server.py:351 ← initialize ok (id=1)
+DEBUG    machina.gateway.server:server.py:339 → session.create (id=2)
+DEBUG    machina.gateway.server:server.py:351 ← session.create ok (id=2)
+DEBUG    machina.gateway.server:server.py:339 → prompt.submit (id=3)
+INFO     machina.gateway.server:server.py:652 Turn f030f5f62a6f started for session 93b0c555-9380-41df-86a5-20c3ea52a615
+DEBUG    machina.gateway.server:server.py:351 ← prompt.submit ok (id=3)
+DEBUG    machina.gateway.server:server.py:282 Turn f030f5f62a6f stage: turn_started
+DEBUG    machina.gateway.server:server.py:282 Turn f030f5f62a6f stage: building_agent
+DEBUG    machina.gateway.server:server.py:282 Turn f030f5f62a6f stage: waiting_for_provider
+WARNING  machina.gateway.server:server.py:1187 Turn f030f5f62a6f exceeded compute timeout
+DEBUG    machina.gateway.server:server.py:282 Turn f030f5f62a6f stage: cleanup_started
+DEBUG    machina.gateway.server:server.py:282 Turn f030f5f62a6f stage: joining_optional_work
+DEBUG    machina.gateway.server:server.py:282 Turn f030f5f62a6f stage: closing_owned_clients
+DEBUG    machina.gateway.server:server.py:282 Turn f030f5f62a6f stage: releasing_ownership
+---------------------------- Captured log teardown -----------------------------
+WARNING  machina.core.turn_engine:turn_engine.py:583 turn release cancelled again; claim falls back to TTL expiry
+DEBUG    machina.gateway.server:server.py:282 Turn f030f5f62a6f stage: answer_complete
+=========================== short test summary info ============================
+FAILED tests/test_gateway.py::TestTurnTimeout::test_turn_timeout_configurable
+1 failed, 26 passed in 37.68s

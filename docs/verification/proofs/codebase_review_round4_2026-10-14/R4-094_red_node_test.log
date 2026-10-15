@@ -1,0 +1,239 @@
+✖ R4-094(a) re-resuming the visible session mid-turn keeps live output and tool completions (25.629875ms)
+✔ R4-094(a2) switching to a different session still rebuilds from fetched history (26.813917ms)
+✖ R4-094(b) a hidden session's turn failure survives completion and replays on switch-back (11.48475ms)
+✖ R4-094(c) the composer window discloses hidden draft rows (1.517584ms)
+✖ R4-094(c2) mouse clicks map through the composer window start (1.641042ms)
+✖ R4-094(d) Ctrl+S saves the text and secret forms under the Kitty protocol (3.314ms)
+✖ R4-094(e) selected rows keep >= 4.5:1 contrast on every skin (cobalt2/solarized included) (1.087791ms)
+✖ R4-094(f) the FULL HOST notice points at /approvals revoke (0.796375ms)
+✖ R4-094(g) the /delegate client timeout outlasts the 120s gateway delegation budget (7.458375ms)
+✖ R4-094(h) /keys suggestions match the gateway's accepted secret allowlist (0.947ms)
+✖ R4-094(i) /jobs prefix resolution is honest about the capped listing (2.297042ms)
+✖ R4-094(j) exhausted transient status failures cancel the pending operation (1004.924042ms)
+✖ R4-094(j2) a failed login-link load cancels the pending operation (1.397584ms)
+✖ R4-094(j3) a start failure cancels the reviewed preview (0.360708ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 1
+ℹ fail 13
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1519.957417
+
+✖ failing tests:
+
+test at test/r4-094-tui.test.ts:149:1
+✖ R4-094(a) re-resuming the visible session mid-turn keeps live output and tool completions (25.629875ms)
+  AssertionError [ERR_ASSERTION]: live streamed text survives the same-id re-resume
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:164:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '>_ Machina                                                                               /tmp · main',
+    expected: /UNIQUE_LIVE_TEXT/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:193:1
+✖ R4-094(b) a hidden session's turn failure survives completion and replays on switch-back (11.48475ms)
+  AssertionError [ERR_ASSERTION]: the failure notice survives completion and switch-back
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:204:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '>_ Machina                                                                               /tmp · main',
+    expected: /UNIQUE_FAILURE_NOTICE/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:209:1
+✖ R4-094(c) the composer window discloses hidden draft rows (1.517584ms)
+  AssertionError [ERR_ASSERTION]: hidden rows above the window are disclosed
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:214:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:219:1
+✖ R4-094(c2) mouse clicks map through the composer window start (1.641042ms)
+  AssertionError [ERR_ASSERTION]: the click lands on the row it was drawn on
+  
+  1 !== 8
+  
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:232:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 8,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:237:1
+✖ R4-094(d) Ctrl+S saves the text and secret forms under the Kitty protocol (3.314ms)
+  AssertionError [ERR_ASSERTION]: Kitty ctrl+s saves
+  + actual - expected
+  
+  + []
+  - [
+  -   'kitty save'
+  - ]
+  
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:246:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'kitty save' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:264:1
+✖ R4-094(e) selected rows keep >= 4.5:1 contrast on every skin (cobalt2/solarized included) (1.087791ms)
+  AssertionError [ERR_ASSERTION]: selectionInk token exists
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:268:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:299:1
+✖ R4-094(f) the FULL HOST notice points at /approvals revoke (0.796375ms)
+  AssertionError [ERR_ASSERTION]: points at the command that revokes grants
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:306:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'FULL HOST active for this session. Sensitive actions (credentials, elevation, destructive system ops) still ask. /mode revoke to leave.',
+    expected: /\/approvals revoke/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:312:1
+✖ R4-094(g) the /delegate client timeout outlasts the 120s gateway delegation budget (7.458375ms)
+  AssertionError [ERR_ASSERTION]: client timeout 120000ms must exceed the orchestrator's DELEGATION_TIMEOUT_SECONDS=120
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:321:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:329:1
+✖ R4-094(h) /keys suggestions match the gateway's accepted secret allowlist (0.947ms)
+  AssertionError [ERR_ASSERTION]: /keys suggests OPENCODE_API_KEY, which secrets.set refuses
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:344:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:353:1
+✖ R4-094(i) /jobs prefix resolution is honest about the capped listing (2.297042ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /newest 500|full job id/i. Input:
+  
+  'Error: No job starts with "deadbeef".'
+  
+      at async TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:359:2)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: No job starts with "deadbeef".
+        at resolvePrefix (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/src/format.ts:59:34)
+        at resolveJobId (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/src/features/jobs.ts:37:9)
+        at async Object.run (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/src/features/jobs.ts:160:16)
+        at async waitForActual (node:assert:615:5)
+        at async strict.rejects (node:assert:738:25)
+        at async TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:359:2)
+        at async Test.run (node:internal/test_runner/test:1409:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:974:7),
+    expected: /newest 500|full job id/i,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:434:1
+✖ R4-094(j) exhausted transient status failures cancel the pending operation (1004.924042ms)
+  AssertionError [ERR_ASSERTION]: the pending operation is cancelled
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:441:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:447:1
+✖ R4-094(j2) a failed login-link load cancels the pending operation (1.397584ms)
+  AssertionError [ERR_ASSERTION]: the pending operation is cancelled after the link fails
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:458:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/r4-094-tui.test.ts:463:1
+✖ R4-094(j3) a start failure cancels the reviewed preview (0.360708ms)
+  AssertionError [ERR_ASSERTION]: the preview is released when start fails
+      at TestContext.<anonymous> (file:///private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/r4-094-red/ui/test/r4-094-tui.test.ts:470:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

@@ -1,0 +1,891 @@
+FFFFFFF.....FFFF.                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_expiry_emits_resolution_frame_memory_store ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109f0d5b0>
+
+    async def test_expiry_emits_resolution_frame_memory_store(monkeypatch):
+        """E2E without a DB: real gateway turn, real broker, memory-store fallback."""
+        from machina import services
+        from machina.core.config import config
+        from machina.core.models import Session
+        from machina.core.session import session_manager
+        from machina.gateway.server import Gateway
+        from machina.permissions import store as st
+    
+        async def no_db():
+            return None
+    
+        monkeypatch.setattr(st, "_db", no_db)
+        st._mem.approvals.clear()
+        monkeypatch.setattr(config, "approval_timeout", 0.2)
+        monkeypatch.setattr(services, "maybe_auto_compact", AsyncMock())
+        session = Session(id=uuid.uuid4(), agent_id="r4-approval")
+        monkeypatch.setattr(session_manager, "get_fresh", AsyncMock(return_value=session))
+    
+        frames: list[dict] = []
+        agent_holder: dict[str, _PausedAgent] = {}
+    
+        def factory(_model: str, _provider: str) -> _PausedAgent:
+            agent_holder["agent"] = _PausedAgent(str(session.id))
+            return agent_holder["agent"]
+    
+        gateway = Gateway(lambda frame: frames.append(frame), agent_factory=factory, owns_db=False)
+        await _drive_expiry(gateway, session, "r4-065-memory")
+        agent = agent_holder["agent"]
+        assert agent.allowed is False
+        assert agent.pauses and agent.pauses[0]["status"] == "expired"
+>       _assert_expiry_contract(frames)
+
+tests/test_r4_approvals_deadline.py:193: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+frames = [{'jsonrpc': '2.0', 'method': 'event', 'params': {'type': 'message.start', 'sessionId': 'f7e8d7a2-dbc1-4b89-9468-0c1fe...age.complete', 'sessionId': 'f7e8d7a2-dbc1-4b89-9468-0c1fe1653a98', 'turnId': 'r4-065-memory', 'text': 'paused', ...}}]
+
+    def _assert_expiry_contract(frames: list[dict]) -> None:
+        events = _events(frames)
+        cards = [
+            event for event in events if event["type"] in ("needs_approval", "permission.required")
+        ]
+        assert cards, f"the approval card must reach the transport: {events}"
+        request_id = cards[-1]["requestId"]
+        resolved = [
+            event
+            for event in events
+            if event["type"] in ("approval.resolved", "permission.resolved")
+        ]
+>       assert resolved, (
+            "R4-065: the broker-recorded expiry must be emitted on the decision "
+            f"channel; frames were: {[(e['type'], e.get('status')) for e in events]}"
+        )
+E       AssertionError: R4-065: the broker-recorded expiry must be emitted on the decision channel; frames were: [('message.start', None), ('permission.required', 'pending'), ('message.complete', None)]
+E       assert []
+
+tests/test_r4_approvals_deadline.py:150: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:27:52,054 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+2026-10-14 19:27:52,084 [AUDIT] {"timestamp": 1792020472.084237, "event": "permission_pending", "request_id": "a70f0d30a01c4bd286e1a0379972b637", "session_id": "f7e8d7a2-dbc1-4b89-9468-0c1fe1653a98", "turn_id": "r4-065-memory", "agent_id": "r4-approval", "operation": "process.exec", "tool": "", "mode": "ask", "digest_prefix": "6b44bcf504494ac9", "reason": "sensitive capability requires explicit approval: destructive_system"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.gateway.server:server.py:119 Gateway logging initialized: /Users/shadow/.machina/logs/gateway.log
+WARNING  machina.gateway.server:server.py:228 MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-memory stage: turn_started
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-memory stage: building_agent
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-memory stage: waiting_for_provider
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020472.084237, "event": "permission_pending", "request_id": "a70f0d30a01c4bd286e1a0379972b637", "session_id": "f7e8d7a2-dbc1-4b89-9468-0c1fe1653a98", "turn_id": "r4-065-memory", "agent_id": "r4-approval", "operation": "process.exec", "tool": "", "mode": "ask", "digest_prefix": "6b44bcf504494ac9", "reason": "sensitive capability requires explicit approval: destructive_system"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-memory stage: cleanup_started
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-memory stage: joining_optional_work
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-memory stage: closing_owned_clients
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-memory stage: releasing_ownership
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-memory stage: answer_complete
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-memory stage: compaction_maintenance
+_______________ test_expiry_emits_resolution_frame_durable_store _______________
+
+isolated_db = <machina.db.connection.Database object at 0x108cb8410>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a8c71d0>
+
+    @needs_test_db
+    async def test_expiry_emits_resolution_frame_durable_store(isolated_db, monkeypatch):
+        """E2E on the real store: the durable row is expired before the frame lands."""
+        from machina import services
+        from machina.core.config import config
+        from machina.gateway.server import Gateway
+        from machina.permissions import store as st
+    
+        monkeypatch.setattr(config, "approval_timeout", 0.2)
+        monkeypatch.setattr(services, "maybe_auto_compact", AsyncMock())
+        session = await _session(title="r4-approval-expiry-e2e")
+    
+        frames: list[dict] = []
+        agent_holder: dict[str, _PausedAgent] = {}
+    
+        def factory(_model: str, _provider: str) -> _PausedAgent:
+            agent_holder["agent"] = _PausedAgent(str(session.id))
+            return agent_holder["agent"]
+    
+        gateway = Gateway(lambda frame: frames.append(frame), agent_factory=factory, owns_db=False)
+        await _drive_expiry(gateway, session, "r4-065-durable")
+        agent = agent_holder["agent"]
+        assert agent.allowed is False
+>       _assert_expiry_contract(frames)
+
+tests/test_r4_approvals_deadline.py:223: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+frames = [{'jsonrpc': '2.0', 'method': 'event', 'params': {'type': 'message.start', 'sessionId': '3151151c-a783-4d49-bf79-bb759...ge.complete', 'sessionId': '3151151c-a783-4d49-bf79-bb759d0cdc4e', 'turnId': 'r4-065-durable', 'text': 'paused', ...}}]
+
+    def _assert_expiry_contract(frames: list[dict]) -> None:
+        events = _events(frames)
+        cards = [
+            event for event in events if event["type"] in ("needs_approval", "permission.required")
+        ]
+        assert cards, f"the approval card must reach the transport: {events}"
+        request_id = cards[-1]["requestId"]
+        resolved = [
+            event
+            for event in events
+            if event["type"] in ("approval.resolved", "permission.resolved")
+        ]
+>       assert resolved, (
+            "R4-065: the broker-recorded expiry must be emitted on the decision "
+            f"channel; frames were: {[(e['type'], e.get('status')) for e in events]}"
+        )
+E       AssertionError: R4-065: the broker-recorded expiry must be emitted on the decision channel; frames were: [('message.start', None), ('permission.required', 'pending'), ('message.complete', None)]
+E       assert []
+
+tests/test_r4_approvals_deadline.py:150: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:27:52,425 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+2026-10-14 19:27:52,428 [AUDIT] {"timestamp": 1792020472.428705, "event": "permission_pending", "request_id": "df9757518ee5499fa0c0f8bd77a33800", "session_id": "3151151c-a783-4d49-bf79-bb759d0cdc4e", "turn_id": "r4-065-durable", "agent_id": "r4-approval", "operation": "process.exec", "tool": "", "mode": "ask", "digest_prefix": "6b44bcf504494ac9", "reason": "sensitive capability requires explicit approval: destructive_system"}
+------------------------------ Captured log call -------------------------------
+WARNING  machina.gateway.server:server.py:228 MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-durable stage: turn_started
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-durable stage: building_agent
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-durable stage: waiting_for_provider
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020472.428705, "event": "permission_pending", "request_id": "df9757518ee5499fa0c0f8bd77a33800", "session_id": "3151151c-a783-4d49-bf79-bb759d0cdc4e", "turn_id": "r4-065-durable", "agent_id": "r4-approval", "operation": "process.exec", "tool": "", "mode": "ask", "digest_prefix": "6b44bcf504494ac9", "reason": "sensitive capability requires explicit approval: destructive_system"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-durable stage: cleanup_started
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-durable stage: joining_optional_work
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-durable stage: closing_owned_clients
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-durable stage: releasing_ownership
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-durable stage: answer_complete
+DEBUG    machina.gateway.server:server.py:280 Turn r4-065-durable stage: compaction_maintenance
+___________ test_resolve_before_deadline_is_honoured_exactly_once[0] ___________
+
+isolated_db = <machina.db.connection.Database object at 0x10a99df30>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a9c1150>
+round_index = 0
+
+    @needs_test_db
+    @pytest.mark.parametrize("round_index", range(5))
+    async def test_resolve_before_deadline_is_honoured_exactly_once(
+        isolated_db, monkeypatch, round_index
+    ):
+        """Adversarial: the decision lands durably, the transport stalls past the
+        deadline, wait_for cancels it. Durable truth is "approved" — the broker
+        must claim and execute it exactly once, never report "expired", and a
+        retry of the same request must not replay the approval.
+        """
+        from machina.core.config import config
+        from machina.permissions import broker as brokermod
+        from machina.permissions import store as st
+        from machina.permissions.broker import ApprovalDenied
+    
+        session = await _session(title=f"r4-approval-race-{round_index}")
+        req = _req(session_id=str(session.id), content=f"race-{round_index}")
+        monkeypatch.setattr(config, "approval_timeout", 0.05 + 0.02 * round_index)
+        calls: list[str] = []
+    
+        async def decision_then_stall(card):
+            calls.append(card["request_id"])
+            # The human decision commits to the durable row first ...
+            assert await st.resolve_decision(card["request_id"], "approved", principal="tui")
+            # ... and the transport has not returned when the deadline fires.
+            await asyncio.sleep(30)
+            return "approved"
+    
+        brokermod.set_approval_handler(
+            decision_then_stall, principal="tui", turn_id=f"race-{round_index}"
+        )
+        try:
+>           out = await brokermod.permission_broker.guard(req)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_approvals_deadline.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/permissions/broker.py:181: in guard
+    return await self._guard_interactive(req, handler, principal)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.permissions.broker.PermissionBroker object at 0x10a7897f0>
+req = ActionRequest(request_id='3e3d01b86fe74fdf8d6295b6e03b8eec', session_id='37b6bd1b-b79f-4805-83ae-42ba10b04f5f', turn_i...h=6, approval_id='', workspace_root='/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red')
+handler = <function test_resolve_before_deadline_is_honoured_exactly_once.<locals>.decision_then_stall at 0x10a97f3d0>
+principal = 'tui'
+
+    async def _guard_interactive(
+        self, req: ActionRequest, handler: ApprovalHandler, principal: str
+    ) -> ActionRequest:
+        # Same request_id replayed (retries, duplicate submits, double cards):
+        # route by the live record instead of creating a duplicate row.
+        # Pending → wait on it; approved-but-unclaimed → claim and resume;
+        # terminal → already executed: deny replay (a fresh action needs a new
+        # request, which gets its own approval).
+        current = await _store.get_approval(req.request_id)
+        if current is not None:
+            state = current.get("status")
+            if state == "pending":
+                raise NeedsApproval(current) from None
+            if state == "approved":
+                # AH-AUDIT-005: legacy approvals without a reviewable
+                # proposal never resume — the user never saw the full
+                # action. Fail closed with explicit re-approval.
+                if not current.get("proposal_complete", bool(current.get("proposal"))):
+                    audit_permission_verdict(
+                        "denied", req, reason="legacy approval lacks a reviewable proposal"
+                    )
+                    raise ApprovalDenied(
+                        "legacy approval lacks a reviewable proposal; re-approval required"
+                    ) from None
+                if await _store.claim_execution(
+                    req.request_id, digest=req.digest, session_id=req.session_id
+                ):
+                    req.approval_id = req.request_id
+                    _stamp_execution(req)
+                    audit_permission_verdict("allowed", req, reason="approval resumed")
+                    return req
+                current = await _store.get_approval(req.request_id)
+                raise NeedsApproval(current or {"request_id": req.request_id}) from None
+            audit_permission_verdict("denied", req, reason=f"approval already {state}")
+            raise ApprovalDenied(f"approval already {state}") from None
+        existing = await _store.find_pending(req.session_id, req.digest)
+        if existing is not None:
+            # Queue/combine: no concurrent card flood for the same action.
+            raise NeedsApproval(existing)
+        approval = await _store.create_approval(req, principal=principal)
+        try:
+            from machina.core.config import config
+    
+            timeout = float(config.get("approval_timeout") or 300)
+        except Exception:
+            timeout = 300.0
+        try:
+            verdict = await asyncio.wait_for(
+                handler(_approval_view(req, approval)), timeout=timeout
+            )
+        except TimeoutError:
+            await _store.resolve_decision(req.request_id, "expired", principal)
+>           raise NeedsApproval({**approval, "status": "expired"}) from None
+E           machina.permissions.broker.NeedsApproval: needs_approval:3e3d01b86fe74fdf8d6295b6e03b8eec
+
+machina/permissions/broker.py:256: NeedsApproval
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:27:52,711 [AUDIT] {"timestamp": 1792020472.711863, "event": "permission_pending", "request_id": "3e3d01b86fe74fdf8d6295b6e03b8eec", "session_id": "37b6bd1b-b79f-4805-83ae-42ba10b04f5f", "turn_id": "race-0", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "a3a94a4789977ba6", "reason": "write/exec or out-of-scope access requires approval"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020472.711863, "event": "permission_pending", "request_id": "3e3d01b86fe74fdf8d6295b6e03b8eec", "session_id": "37b6bd1b-b79f-4805-83ae-42ba10b04f5f", "turn_id": "race-0", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "a3a94a4789977ba6", "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+___________ test_resolve_before_deadline_is_honoured_exactly_once[1] ___________
+
+isolated_db = <machina.db.connection.Database object at 0x10a99e2c0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a9b0d70>
+round_index = 1
+
+    @needs_test_db
+    @pytest.mark.parametrize("round_index", range(5))
+    async def test_resolve_before_deadline_is_honoured_exactly_once(
+        isolated_db, monkeypatch, round_index
+    ):
+        """Adversarial: the decision lands durably, the transport stalls past the
+        deadline, wait_for cancels it. Durable truth is "approved" — the broker
+        must claim and execute it exactly once, never report "expired", and a
+        retry of the same request must not replay the approval.
+        """
+        from machina.core.config import config
+        from machina.permissions import broker as brokermod
+        from machina.permissions import store as st
+        from machina.permissions.broker import ApprovalDenied
+    
+        session = await _session(title=f"r4-approval-race-{round_index}")
+        req = _req(session_id=str(session.id), content=f"race-{round_index}")
+        monkeypatch.setattr(config, "approval_timeout", 0.05 + 0.02 * round_index)
+        calls: list[str] = []
+    
+        async def decision_then_stall(card):
+            calls.append(card["request_id"])
+            # The human decision commits to the durable row first ...
+            assert await st.resolve_decision(card["request_id"], "approved", principal="tui")
+            # ... and the transport has not returned when the deadline fires.
+            await asyncio.sleep(30)
+            return "approved"
+    
+        brokermod.set_approval_handler(
+            decision_then_stall, principal="tui", turn_id=f"race-{round_index}"
+        )
+        try:
+>           out = await brokermod.permission_broker.guard(req)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_approvals_deadline.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/permissions/broker.py:181: in guard
+    return await self._guard_interactive(req, handler, principal)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.permissions.broker.PermissionBroker object at 0x10a7897f0>
+req = ActionRequest(request_id='230e3c669e434253b6cca9655bfd647e', session_id='d39fce9a-0381-443d-bafc-274a263cc0ae', turn_i...h=6, approval_id='', workspace_root='/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red')
+handler = <function test_resolve_before_deadline_is_honoured_exactly_once.<locals>.decision_then_stall at 0x10a9b7270>
+principal = 'tui'
+
+    async def _guard_interactive(
+        self, req: ActionRequest, handler: ApprovalHandler, principal: str
+    ) -> ActionRequest:
+        # Same request_id replayed (retries, duplicate submits, double cards):
+        # route by the live record instead of creating a duplicate row.
+        # Pending → wait on it; approved-but-unclaimed → claim and resume;
+        # terminal → already executed: deny replay (a fresh action needs a new
+        # request, which gets its own approval).
+        current = await _store.get_approval(req.request_id)
+        if current is not None:
+            state = current.get("status")
+            if state == "pending":
+                raise NeedsApproval(current) from None
+            if state == "approved":
+                # AH-AUDIT-005: legacy approvals without a reviewable
+                # proposal never resume — the user never saw the full
+                # action. Fail closed with explicit re-approval.
+                if not current.get("proposal_complete", bool(current.get("proposal"))):
+                    audit_permission_verdict(
+                        "denied", req, reason="legacy approval lacks a reviewable proposal"
+                    )
+                    raise ApprovalDenied(
+                        "legacy approval lacks a reviewable proposal; re-approval required"
+                    ) from None
+                if await _store.claim_execution(
+                    req.request_id, digest=req.digest, session_id=req.session_id
+                ):
+                    req.approval_id = req.request_id
+                    _stamp_execution(req)
+                    audit_permission_verdict("allowed", req, reason="approval resumed")
+                    return req
+                current = await _store.get_approval(req.request_id)
+                raise NeedsApproval(current or {"request_id": req.request_id}) from None
+            audit_permission_verdict("denied", req, reason=f"approval already {state}")
+            raise ApprovalDenied(f"approval already {state}") from None
+        existing = await _store.find_pending(req.session_id, req.digest)
+        if existing is not None:
+            # Queue/combine: no concurrent card flood for the same action.
+            raise NeedsApproval(existing)
+        approval = await _store.create_approval(req, principal=principal)
+        try:
+            from machina.core.config import config
+    
+            timeout = float(config.get("approval_timeout") or 300)
+        except Exception:
+            timeout = 300.0
+        try:
+            verdict = await asyncio.wait_for(
+                handler(_approval_view(req, approval)), timeout=timeout
+            )
+        except TimeoutError:
+            await _store.resolve_decision(req.request_id, "expired", principal)
+>           raise NeedsApproval({**approval, "status": "expired"}) from None
+E           machina.permissions.broker.NeedsApproval: needs_approval:230e3c669e434253b6cca9655bfd647e
+
+machina/permissions/broker.py:256: NeedsApproval
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:27:52,844 [AUDIT] {"timestamp": 1792020472.84493, "event": "permission_pending", "request_id": "230e3c669e434253b6cca9655bfd647e", "session_id": "d39fce9a-0381-443d-bafc-274a263cc0ae", "turn_id": "race-1", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "19bf91d692835274", "reason": "write/exec or out-of-scope access requires approval"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020472.84493, "event": "permission_pending", "request_id": "230e3c669e434253b6cca9655bfd647e", "session_id": "d39fce9a-0381-443d-bafc-274a263cc0ae", "turn_id": "race-1", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "19bf91d692835274", "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+___________ test_resolve_before_deadline_is_honoured_exactly_once[2] ___________
+
+isolated_db = <machina.db.connection.Database object at 0x10a90ee70>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10aa5cd50>
+round_index = 2
+
+    @needs_test_db
+    @pytest.mark.parametrize("round_index", range(5))
+    async def test_resolve_before_deadline_is_honoured_exactly_once(
+        isolated_db, monkeypatch, round_index
+    ):
+        """Adversarial: the decision lands durably, the transport stalls past the
+        deadline, wait_for cancels it. Durable truth is "approved" — the broker
+        must claim and execute it exactly once, never report "expired", and a
+        retry of the same request must not replay the approval.
+        """
+        from machina.core.config import config
+        from machina.permissions import broker as brokermod
+        from machina.permissions import store as st
+        from machina.permissions.broker import ApprovalDenied
+    
+        session = await _session(title=f"r4-approval-race-{round_index}")
+        req = _req(session_id=str(session.id), content=f"race-{round_index}")
+        monkeypatch.setattr(config, "approval_timeout", 0.05 + 0.02 * round_index)
+        calls: list[str] = []
+    
+        async def decision_then_stall(card):
+            calls.append(card["request_id"])
+            # The human decision commits to the durable row first ...
+            assert await st.resolve_decision(card["request_id"], "approved", principal="tui")
+            # ... and the transport has not returned when the deadline fires.
+            await asyncio.sleep(30)
+            return "approved"
+    
+        brokermod.set_approval_handler(
+            decision_then_stall, principal="tui", turn_id=f"race-{round_index}"
+        )
+        try:
+>           out = await brokermod.permission_broker.guard(req)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_approvals_deadline.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/permissions/broker.py:181: in guard
+    return await self._guard_interactive(req, handler, principal)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.permissions.broker.PermissionBroker object at 0x10a7897f0>
+req = ActionRequest(request_id='359aee0dc7e04d5b9dfe5a22fde1a10c', session_id='f2d3d94f-ceb8-4fed-b1c1-c09d4a857e30', turn_i...h=6, approval_id='', workspace_root='/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red')
+handler = <function test_resolve_before_deadline_is_honoured_exactly_once.<locals>.decision_then_stall at 0x10a9b75e0>
+principal = 'tui'
+
+    async def _guard_interactive(
+        self, req: ActionRequest, handler: ApprovalHandler, principal: str
+    ) -> ActionRequest:
+        # Same request_id replayed (retries, duplicate submits, double cards):
+        # route by the live record instead of creating a duplicate row.
+        # Pending → wait on it; approved-but-unclaimed → claim and resume;
+        # terminal → already executed: deny replay (a fresh action needs a new
+        # request, which gets its own approval).
+        current = await _store.get_approval(req.request_id)
+        if current is not None:
+            state = current.get("status")
+            if state == "pending":
+                raise NeedsApproval(current) from None
+            if state == "approved":
+                # AH-AUDIT-005: legacy approvals without a reviewable
+                # proposal never resume — the user never saw the full
+                # action. Fail closed with explicit re-approval.
+                if not current.get("proposal_complete", bool(current.get("proposal"))):
+                    audit_permission_verdict(
+                        "denied", req, reason="legacy approval lacks a reviewable proposal"
+                    )
+                    raise ApprovalDenied(
+                        "legacy approval lacks a reviewable proposal; re-approval required"
+                    ) from None
+                if await _store.claim_execution(
+                    req.request_id, digest=req.digest, session_id=req.session_id
+                ):
+                    req.approval_id = req.request_id
+                    _stamp_execution(req)
+                    audit_permission_verdict("allowed", req, reason="approval resumed")
+                    return req
+                current = await _store.get_approval(req.request_id)
+                raise NeedsApproval(current or {"request_id": req.request_id}) from None
+            audit_permission_verdict("denied", req, reason=f"approval already {state}")
+            raise ApprovalDenied(f"approval already {state}") from None
+        existing = await _store.find_pending(req.session_id, req.digest)
+        if existing is not None:
+            # Queue/combine: no concurrent card flood for the same action.
+            raise NeedsApproval(existing)
+        approval = await _store.create_approval(req, principal=principal)
+        try:
+            from machina.core.config import config
+    
+            timeout = float(config.get("approval_timeout") or 300)
+        except Exception:
+            timeout = 300.0
+        try:
+            verdict = await asyncio.wait_for(
+                handler(_approval_view(req, approval)), timeout=timeout
+            )
+        except TimeoutError:
+            await _store.resolve_decision(req.request_id, "expired", principal)
+>           raise NeedsApproval({**approval, "status": "expired"}) from None
+E           machina.permissions.broker.NeedsApproval: needs_approval:359aee0dc7e04d5b9dfe5a22fde1a10c
+
+machina/permissions/broker.py:256: NeedsApproval
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:27:53,005 [AUDIT] {"timestamp": 1792020473.005248, "event": "permission_pending", "request_id": "359aee0dc7e04d5b9dfe5a22fde1a10c", "session_id": "f2d3d94f-ceb8-4fed-b1c1-c09d4a857e30", "turn_id": "race-2", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "1b7ec414d33c1021", "reason": "write/exec or out-of-scope access requires approval"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020473.005248, "event": "permission_pending", "request_id": "359aee0dc7e04d5b9dfe5a22fde1a10c", "session_id": "f2d3d94f-ceb8-4fed-b1c1-c09d4a857e30", "turn_id": "race-2", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "1b7ec414d33c1021", "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+___________ test_resolve_before_deadline_is_honoured_exactly_once[3] ___________
+
+isolated_db = <machina.db.connection.Database object at 0x10a887240>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a9b7a10>
+round_index = 3
+
+    @needs_test_db
+    @pytest.mark.parametrize("round_index", range(5))
+    async def test_resolve_before_deadline_is_honoured_exactly_once(
+        isolated_db, monkeypatch, round_index
+    ):
+        """Adversarial: the decision lands durably, the transport stalls past the
+        deadline, wait_for cancels it. Durable truth is "approved" — the broker
+        must claim and execute it exactly once, never report "expired", and a
+        retry of the same request must not replay the approval.
+        """
+        from machina.core.config import config
+        from machina.permissions import broker as brokermod
+        from machina.permissions import store as st
+        from machina.permissions.broker import ApprovalDenied
+    
+        session = await _session(title=f"r4-approval-race-{round_index}")
+        req = _req(session_id=str(session.id), content=f"race-{round_index}")
+        monkeypatch.setattr(config, "approval_timeout", 0.05 + 0.02 * round_index)
+        calls: list[str] = []
+    
+        async def decision_then_stall(card):
+            calls.append(card["request_id"])
+            # The human decision commits to the durable row first ...
+            assert await st.resolve_decision(card["request_id"], "approved", principal="tui")
+            # ... and the transport has not returned when the deadline fires.
+            await asyncio.sleep(30)
+            return "approved"
+    
+        brokermod.set_approval_handler(
+            decision_then_stall, principal="tui", turn_id=f"race-{round_index}"
+        )
+        try:
+>           out = await brokermod.permission_broker.guard(req)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_approvals_deadline.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/permissions/broker.py:181: in guard
+    return await self._guard_interactive(req, handler, principal)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.permissions.broker.PermissionBroker object at 0x10a7897f0>
+req = ActionRequest(request_id='c5cca03472584156b36aaa9943ae493a', session_id='b1d86f22-6b7b-4867-b83a-96edcbe71113', turn_i...h=6, approval_id='', workspace_root='/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red')
+handler = <function test_resolve_before_deadline_is_honoured_exactly_once.<locals>.decision_then_stall at 0x10a9b7d70>
+principal = 'tui'
+
+    async def _guard_interactive(
+        self, req: ActionRequest, handler: ApprovalHandler, principal: str
+    ) -> ActionRequest:
+        # Same request_id replayed (retries, duplicate submits, double cards):
+        # route by the live record instead of creating a duplicate row.
+        # Pending → wait on it; approved-but-unclaimed → claim and resume;
+        # terminal → already executed: deny replay (a fresh action needs a new
+        # request, which gets its own approval).
+        current = await _store.get_approval(req.request_id)
+        if current is not None:
+            state = current.get("status")
+            if state == "pending":
+                raise NeedsApproval(current) from None
+            if state == "approved":
+                # AH-AUDIT-005: legacy approvals without a reviewable
+                # proposal never resume — the user never saw the full
+                # action. Fail closed with explicit re-approval.
+                if not current.get("proposal_complete", bool(current.get("proposal"))):
+                    audit_permission_verdict(
+                        "denied", req, reason="legacy approval lacks a reviewable proposal"
+                    )
+                    raise ApprovalDenied(
+                        "legacy approval lacks a reviewable proposal; re-approval required"
+                    ) from None
+                if await _store.claim_execution(
+                    req.request_id, digest=req.digest, session_id=req.session_id
+                ):
+                    req.approval_id = req.request_id
+                    _stamp_execution(req)
+                    audit_permission_verdict("allowed", req, reason="approval resumed")
+                    return req
+                current = await _store.get_approval(req.request_id)
+                raise NeedsApproval(current or {"request_id": req.request_id}) from None
+            audit_permission_verdict("denied", req, reason=f"approval already {state}")
+            raise ApprovalDenied(f"approval already {state}") from None
+        existing = await _store.find_pending(req.session_id, req.digest)
+        if existing is not None:
+            # Queue/combine: no concurrent card flood for the same action.
+            raise NeedsApproval(existing)
+        approval = await _store.create_approval(req, principal=principal)
+        try:
+            from machina.core.config import config
+    
+            timeout = float(config.get("approval_timeout") or 300)
+        except Exception:
+            timeout = 300.0
+        try:
+            verdict = await asyncio.wait_for(
+                handler(_approval_view(req, approval)), timeout=timeout
+            )
+        except TimeoutError:
+            await _store.resolve_decision(req.request_id, "expired", principal)
+>           raise NeedsApproval({**approval, "status": "expired"}) from None
+E           machina.permissions.broker.NeedsApproval: needs_approval:c5cca03472584156b36aaa9943ae493a
+
+machina/permissions/broker.py:256: NeedsApproval
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:27:53,192 [AUDIT] {"timestamp": 1792020473.192919, "event": "permission_pending", "request_id": "c5cca03472584156b36aaa9943ae493a", "session_id": "b1d86f22-6b7b-4867-b83a-96edcbe71113", "turn_id": "race-3", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "1b9f61b42be1043f", "reason": "write/exec or out-of-scope access requires approval"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020473.192919, "event": "permission_pending", "request_id": "c5cca03472584156b36aaa9943ae493a", "session_id": "b1d86f22-6b7b-4867-b83a-96edcbe71113", "turn_id": "race-3", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "1b9f61b42be1043f", "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+___________ test_resolve_before_deadline_is_honoured_exactly_once[4] ___________
+
+isolated_db = <machina.db.connection.Database object at 0x10a887350>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a92adf0>
+round_index = 4
+
+    @needs_test_db
+    @pytest.mark.parametrize("round_index", range(5))
+    async def test_resolve_before_deadline_is_honoured_exactly_once(
+        isolated_db, monkeypatch, round_index
+    ):
+        """Adversarial: the decision lands durably, the transport stalls past the
+        deadline, wait_for cancels it. Durable truth is "approved" — the broker
+        must claim and execute it exactly once, never report "expired", and a
+        retry of the same request must not replay the approval.
+        """
+        from machina.core.config import config
+        from machina.permissions import broker as brokermod
+        from machina.permissions import store as st
+        from machina.permissions.broker import ApprovalDenied
+    
+        session = await _session(title=f"r4-approval-race-{round_index}")
+        req = _req(session_id=str(session.id), content=f"race-{round_index}")
+        monkeypatch.setattr(config, "approval_timeout", 0.05 + 0.02 * round_index)
+        calls: list[str] = []
+    
+        async def decision_then_stall(card):
+            calls.append(card["request_id"])
+            # The human decision commits to the durable row first ...
+            assert await st.resolve_decision(card["request_id"], "approved", principal="tui")
+            # ... and the transport has not returned when the deadline fires.
+            await asyncio.sleep(30)
+            return "approved"
+    
+        brokermod.set_approval_handler(
+            decision_then_stall, principal="tui", turn_id=f"race-{round_index}"
+        )
+        try:
+>           out = await brokermod.permission_broker.guard(req)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_approvals_deadline.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/permissions/broker.py:181: in guard
+    return await self._guard_interactive(req, handler, principal)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.permissions.broker.PermissionBroker object at 0x10a7897f0>
+req = ActionRequest(request_id='a78b0d7ed6814787b40b59fbf7d98c7d', session_id='346f55d4-732c-42bf-b465-615740d20ec3', turn_i...h=6, approval_id='', workspace_root='/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red')
+handler = <function test_resolve_before_deadline_is_honoured_exactly_once.<locals>.decision_then_stall at 0x10a92f110>
+principal = 'tui'
+
+    async def _guard_interactive(
+        self, req: ActionRequest, handler: ApprovalHandler, principal: str
+    ) -> ActionRequest:
+        # Same request_id replayed (retries, duplicate submits, double cards):
+        # route by the live record instead of creating a duplicate row.
+        # Pending → wait on it; approved-but-unclaimed → claim and resume;
+        # terminal → already executed: deny replay (a fresh action needs a new
+        # request, which gets its own approval).
+        current = await _store.get_approval(req.request_id)
+        if current is not None:
+            state = current.get("status")
+            if state == "pending":
+                raise NeedsApproval(current) from None
+            if state == "approved":
+                # AH-AUDIT-005: legacy approvals without a reviewable
+                # proposal never resume — the user never saw the full
+                # action. Fail closed with explicit re-approval.
+                if not current.get("proposal_complete", bool(current.get("proposal"))):
+                    audit_permission_verdict(
+                        "denied", req, reason="legacy approval lacks a reviewable proposal"
+                    )
+                    raise ApprovalDenied(
+                        "legacy approval lacks a reviewable proposal; re-approval required"
+                    ) from None
+                if await _store.claim_execution(
+                    req.request_id, digest=req.digest, session_id=req.session_id
+                ):
+                    req.approval_id = req.request_id
+                    _stamp_execution(req)
+                    audit_permission_verdict("allowed", req, reason="approval resumed")
+                    return req
+                current = await _store.get_approval(req.request_id)
+                raise NeedsApproval(current or {"request_id": req.request_id}) from None
+            audit_permission_verdict("denied", req, reason=f"approval already {state}")
+            raise ApprovalDenied(f"approval already {state}") from None
+        existing = await _store.find_pending(req.session_id, req.digest)
+        if existing is not None:
+            # Queue/combine: no concurrent card flood for the same action.
+            raise NeedsApproval(existing)
+        approval = await _store.create_approval(req, principal=principal)
+        try:
+            from machina.core.config import config
+    
+            timeout = float(config.get("approval_timeout") or 300)
+        except Exception:
+            timeout = 300.0
+        try:
+            verdict = await asyncio.wait_for(
+                handler(_approval_view(req, approval)), timeout=timeout
+            )
+        except TimeoutError:
+            await _store.resolve_decision(req.request_id, "expired", principal)
+>           raise NeedsApproval({**approval, "status": "expired"}) from None
+E           machina.permissions.broker.NeedsApproval: needs_approval:a78b0d7ed6814787b40b59fbf7d98c7d
+
+machina/permissions/broker.py:256: NeedsApproval
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:27:53,404 [AUDIT] {"timestamp": 1792020473.404866, "event": "permission_pending", "request_id": "a78b0d7ed6814787b40b59fbf7d98c7d", "session_id": "346f55d4-732c-42bf-b465-615740d20ec3", "turn_id": "race-4", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "6da5706e54800f02", "reason": "write/exec or out-of-scope access requires approval"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020473.404866, "event": "permission_pending", "request_id": "a78b0d7ed6814787b40b59fbf7d98c7d", "session_id": "346f55d4-732c-42bf-b465-615740d20ec3", "turn_id": "race-4", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "6da5706e54800f02", "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_______ test_routine_allowed_rows_carry_bounded_redacted_target_context ________
+
+audit_entries = [{'timestamp': 1792020474.105494, 'event': 'permission_allowed', 'request_id': 'dffa222f69d845bca548315429331f94', 'session_id': '9f9ad340-8e42-477b-b02e-05a76d4e7299', ...}]
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a967380>
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1592/test_routine_allowed_rows_carr0')
+
+    async def test_routine_allowed_rows_carry_bounded_redacted_target_context(
+        audit_entries, monkeypatch, tmp_path
+    ):
+        from machina.core.config import config
+        from machina.permissions import store as st
+        from machina.permissions.broker import permission_broker
+    
+        async def no_db():
+            return None
+    
+        monkeypatch.setattr(st, "_db", no_db)
+        st._mem.grants.clear()
+        st.clear_grant_cache()
+        monkeypatch.setattr(config, "workspace_root", str(tmp_path))
+        monkeypatch.setattr(config, "execution_mode", "ask")
+        session_id = str(uuid.uuid4())
+    
+        # Routine workspace write with a benign path: the target must be present.
+        benign = tmp_path / "note.txt"
+        benign_req = _req_with(session_id, operation="file.write", targets=[str(benign)], content="hi")
+        await permission_broker.guard(benign_req)
+        benign_row = _row(audit_entries, benign_req.request_id)
+>       assert benign_row["targets"] == [str(benign)]
+               ^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'targets'
+
+tests/test_r4_approvals_deadline.py:364: KeyError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:27:54,105 [AUDIT] {"timestamp": 1792020474.105494, "event": "permission_allowed", "request_id": "dffa222f69d845bca548315429331f94", "session_id": "9f9ad340-8e42-477b-b02e-05a76d4e7299", "turn_id": "", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "085ddbdfe4ff794d", "reason": "routine project file operation"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020474.105494, "event": "permission_allowed", "request_id": "dffa222f69d845bca548315429331f94", "session_id": "9f9ad340-8e42-477b-b02e-05a76d4e7299", "turn_id": "", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "085ddbdfe4ff794d", "reason": "routine project file operation"}
+_____________ test_create_approval_insert_failure_leaves_no_orphan _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109e8d400>
+
+    async def test_create_approval_insert_failure_leaves_no_orphan(monkeypatch):
+        """Failure injection: a failed durable INSERT must not leave a pending
+        in-memory record nothing can resolve."""
+        from machina.permissions import broker as brokermod
+        from machina.permissions import store as st
+    
+        async def broken_db():
+            return _BrokenInsertDB()
+    
+        monkeypatch.setattr(st, "_db", broken_db)
+        st._mem.approvals.clear()
+    
+        async def handler(card):  # never reached: creation fails first
+            return "approved"
+    
+        req = _req(session_id=str(uuid.uuid4()), content="insert-failure")
+        brokermod.set_approval_handler(handler, principal="tui", turn_id="r4-068-insert")
+        try:
+            with pytest.raises(RuntimeError, match="injected insert failure"):
+                await brokermod.permission_broker.guard(req)
+        finally:
+            brokermod.set_approval_handler(None)
+>       assert req.request_id not in st._mem.approvals, "no orphaned pending record"
+E       AssertionError: no orphaned pending record
+E       assert '2b555f45c23540d680c86ffd856401cd' not in {'2b555f45c23540d680c86ffd856401cd': {'id': '6e9f2649-0f61-40d1-853a-6cabf344e34d', 'request_id': '2b555f45c23540d680c86ffd856401cd', 'session_id': '6e9fc611-c603-4dea-af75-987f22161f0e', 'turn_id': 'r4-068-insert', ...}}
+E        +  where '2b555f45c23540d680c86ffd856401cd' = ActionRequest(request_id='2b555f45c23540d680c86ffd856401cd', session_id='6e9fc611-c603-4dea-af75-987f22161f0e', turn_i...=14, approval_id='', workspace_root='/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red').request_id
+E        +  and   {'2b555f45c23540d680c86ffd856401cd': {'id': '6e9f2649-0f61-40d1-853a-6cabf344e34d', 'request_id': '2b555f45c23540d680c86ffd856401cd', 'session_id': '6e9fc611-c603-4dea-af75-987f22161f0e', 'turn_id': 'r4-068-insert', ...}} = <machina.permissions.store._MemoryStore object at 0x10a788980>.approvals
+E        +    where <machina.permissions.store._MemoryStore object at 0x10a788980> = <module 'machina.permissions.store' from '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red/machina/permissions/store.py'>._mem
+
+tests/test_r4_approvals_deadline.py:492: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:27:54,116 [AUDIT] {"timestamp": 1792020474.116589, "event": "permission_pending", "request_id": "2b555f45c23540d680c86ffd856401cd", "session_id": "6e9fc611-c603-4dea-af75-987f22161f0e", "turn_id": "r4-068-insert", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "9f2061f31c1dec8c", "reason": "write/exec or out-of-scope access requires approval"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792020474.116589, "event": "permission_pending", "request_id": "2b555f45c23540d680c86ffd856401cd", "session_id": "6e9fc611-c603-4dea-af75-987f22161f0e", "turn_id": "r4-068-insert", "agent_id": "harness", "operation": "file.write", "tool": "", "mode": "ask", "digest_prefix": "9f2061f31c1dec8c", "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.permissions.store:store.py:522 durable approval create failed
+RuntimeError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red/machina/permissions/store.py:506 (create_approval)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red/tests/test_r4_approvals_deadline.py:458 (execute)
+_____________ test_complete_execution_durable_first_under_failure ______________
+
+isolated_db = <machina.db.connection.Database object at 0x10a913cb0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a9bbee0>
+
+    @needs_test_db
+    async def test_complete_execution_durable_first_under_failure(isolated_db, monkeypatch):
+        """Failure injection: when the durable completion fails, the memory mirror
+        must NOT report a terminal state the durable row never saw."""
+        from machina.permissions import store as st
+    
+        session = await _session(title="r4-approval-complete")
+        req = _req(session_id=str(session.id), content="complete-failure")
+        await st.create_approval(req, principal="tui")
+        assert await st.resolve_decision(req.request_id, "approved", principal="tui")
+        assert await st.claim_execution(req.request_id, digest=req.digest, session_id=str(session.id))
+        assert st._mem.approvals[req.request_id]["status"] == "claimed"
+    
+        real_db = await st._db()
+    
+        class _FailingAcquire:
+            async def fetchrow(self, *args, **kwargs):
+                return await real_db.fetchrow(*args, **kwargs)
+    
+            async def fetch(self, *args, **kwargs):
+                return await real_db.fetch(*args, **kwargs)
+    
+            def acquire(self):
+                raise RuntimeError("injected durable completion failure")
+    
+        async def failing():
+            return _FailingAcquire()
+    
+        monkeypatch.setattr(st, "_db", failing)
+        with pytest.raises(RuntimeError, match="injected durable completion failure"):
+            await st.complete_execution(req.request_id, "completed")
+>       assert st._mem.approvals[req.request_id]["status"] == "claimed", (
+            "memory advanced before durable confirmation (R4-068)"
+        )
+E       AssertionError: memory advanced before durable confirmation (R4-068)
+E       assert 'completed' == 'claimed'
+E         
+E         - claimed
+E         + completed
+
+tests/test_r4_approvals_deadline.py:527: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    machina.permissions.store:store.py:715 durable execution completion failed
+RuntimeError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red/machina/permissions/store.py:705 (complete_execution)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4-red/tests/test_r4_approvals_deadline.py:519 (acquire)
+__________ test_complete_execution_refuses_durable_record_without_db ___________
+
+isolated_db = <machina.db.connection.Database object at 0x10aa4bad0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a9673f0>
+
+    @needs_test_db
+    async def test_complete_execution_refuses_durable_record_without_db(isolated_db, monkeypatch):
+        """A durable-origin approval must not be completed from the memory mirror
+        while the durable authority is unreachable."""
+        from machina.permissions import store as st
+    
+        session = await _session(title="r4-approval-offline")
+        req = _req(session_id=str(session.id), content="offline-complete")
+        await st.create_approval(req, principal="tui")
+        assert await st.resolve_decision(req.request_id, "approved", principal="tui")
+        assert await st.claim_execution(req.request_id, digest=req.digest, session_id=str(session.id))
+    
+        async def no_db():
+            return None
+    
+        monkeypatch.setattr(st, "_db", no_db)
+>       assert await st.complete_execution(req.request_id, "completed") is False
+E       assert True is False
+
+tests/test_r4_approvals_deadline.py:558: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r4_approvals_deadline.py::test_expiry_emits_resolution_frame_memory_store
+FAILED tests/test_r4_approvals_deadline.py::test_expiry_emits_resolution_frame_durable_store
+FAILED tests/test_r4_approvals_deadline.py::test_resolve_before_deadline_is_honoured_exactly_once[0]
+FAILED tests/test_r4_approvals_deadline.py::test_resolve_before_deadline_is_honoured_exactly_once[1]
+FAILED tests/test_r4_approvals_deadline.py::test_resolve_before_deadline_is_honoured_exactly_once[2]
+FAILED tests/test_r4_approvals_deadline.py::test_resolve_before_deadline_is_honoured_exactly_once[3]
+FAILED tests/test_r4_approvals_deadline.py::test_resolve_before_deadline_is_honoured_exactly_once[4]
+FAILED tests/test_r4_approvals_deadline.py::test_routine_allowed_rows_carry_bounded_redacted_target_context
+FAILED tests/test_r4_approvals_deadline.py::test_create_approval_insert_failure_leaves_no_orphan
+FAILED tests/test_r4_approvals_deadline.py::test_complete_execution_durable_first_under_failure
+FAILED tests/test_r4_approvals_deadline.py::test_complete_execution_refuses_durable_record_without_db
+11 failed, 6 passed in 2.91s

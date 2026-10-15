@@ -1,0 +1,45 @@
+✖ R5-D1a bare /mode passes the active session ID on mode.get (2.676875ms)
+✖ R5-D1b switching sessions refreshes the footer to the new session's authority (18.549792ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 310.223458
+
+✖ failing tests:
+
+test at test/r5-mode-indicator.test.ts:139:1
+✖ R5-D1a bare /mode passes the active session ID on mode.get (2.676875ms)
+  AssertionError [ERR_ASSERTION]: status requests carry the active session so the gateway resolves session authority, not the global default
+  + actual - expected
+  
+  + undefined
+  - '11111111-1111-4111-8111-111111111111'
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-mode-indicator.test.ts:144:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: '11111111-1111-4111-8111-111111111111',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/r5-mode-indicator.test.ts:153:1
+✖ R5-D1b switching sessions refreshes the footer to the new session's authority (18.549792ms)
+  AssertionError [ERR_ASSERTION]: session switch re-queries mode.get for the newly visible session
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-mode-indicator.test.ts:166:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

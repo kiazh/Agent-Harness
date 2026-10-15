@@ -1,0 +1,10 @@
+rows=8 distinct_created_at=1
+expected newest-first: ['e7', 'e6', 'e5', 'e4', 'e3', 'e2', 'e1', 'e0']
+get_recent_context   : ['e4', 'e5', 'e2', 'e7', 'e6', 'e3', 'e1', 'e0']
+get_chunks           : ['e4', 'e5', 'e2', 'e7', 'e6', 'e3', 'e1', 'e0']
+expected oldest-first: ['e0', 'e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7']
+get_chunks_since     : ['e0', 'e1', 'e3', 'e6', 'e7', 'e2', 'e5', 'e4']
+raw UUID DESC (proxy): ['e4', 'e5', 'e2', 'e7', 'e6', 'e3', 'e1', 'e0']
+VERDICT: SCRAMBLED (get_recent_context)
+VERDICT: SCRAMBLED (get_chunks)
+VERDICT: SCRAMBLED (get_chunks_since)

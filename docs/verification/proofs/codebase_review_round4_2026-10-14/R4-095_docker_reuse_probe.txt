@@ -1,0 +1,65 @@
+== probe 1: running container, password matches DATABASE_URL ==
+
+--- reuse_match (container=running)
+LOG: machina-db running; DATABASE_URL matches its credentials, reusing it
+rc=0 | DATABASE_URL now: DATABASE_URL=postgresql://postgres:abc123@127.0.0.1:5432/machina
+PASS reuse_match rc                             = 0
+PASS reuse_match env untouched                  = DATABASE_URL=postgresql://postgres:abc123@127.0.0.1:5432/machina
+PASS reuse_match no run/start                   = 0
+
+== probe 2: running container, installer-default URL -> reconciled ==
+
+--- reconcile_default (container=running)
+LOG: Wrote generated Postgres credentials to DATABASE_URL in /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-docker-probe.gwbF7c/reconcile_default.env (mode 0600)
+LOG: machina-db running; reusing it and reconciling DATABASE_URL to its credentials
+rc=0 | DATABASE_URL now: DATABASE_URL=postgresql://postgres:containerpass@127.0.0.1:5432/machina
+PASS reconcile_default rc                       = 0
+PASS reconcile_default env rewritten            = DATABASE_URL=postgresql://postgres:containerpass@127.0.0.1:5432/machina
+
+== probe 3: running container, custom URL mismatch -> rc 2, no writes ==
+
+--- conflict_custom (container=running)
+WARN: machina-db is running but its password differs from DATABASE_URL in /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-docker-probe.gwbF7c/conflict_custom.env.
+WARN: Refusing to reuse it: init would retry for 60s and Homebrew cannot repair a custom DATABASE_URL.
+WARN:   fix A: docker rm -f machina-db, then re-run this installer (fresh container + URL)
+WARN:   fix B: set DATABASE_URL in /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-docker-probe.gwbF7c/conflict_custom.env to the container's POSTGRES_PASSWORD (docker inspect machina-db)
+rc=2 | DATABASE_URL now: DATABASE_URL=postgresql://postgres:otherpass@127.0.0.1:5432/machina
+PASS conflict_custom rc                         = 2
+PASS conflict_custom env untouched              = DATABASE_URL=postgresql://postgres:otherpass@127.0.0.1:5432/machina
+PASS conflict_custom no run/start               = 0
+PASS conflict_custom guidance names both fixes  = 2
+PASS conflict_custom does not echo password     = 0
+
+== probe 4: container credentials unreadable -> rc 2 ==
+
+--- unreadable (container=running)
+WARN: machina-db is running but its credentials could not be read (docker inspect failed or POSTGRES_PASSWORD is unset).
+WARN:   fix: docker rm -f machina-db, then re-run this installer
+rc=2 | DATABASE_URL now: DATABASE_URL=postgresql://postgres:anything@127.0.0.1:5432/machina
+PASS unreadable rc                              = 2
+PASS unreadable env untouched                   = DATABASE_URL=postgresql://postgres:anything@127.0.0.1:5432/machina
+
+== probe 5: stopped container, matching password -> started ==
+
+--- stopped_match (container=stopped)
+LOG: machina-db stopped; DATABASE_URL matches its credentials, reusing it
+LOG: Starting existing stopped machina-db container
+rc=0 | DATABASE_URL now: DATABASE_URL=postgresql://postgres:abc123@127.0.0.1:5432/machina
+PASS stopped_match rc                           = 0
+PASS stopped_match docker start called          = 1
+
+== probe 6: fresh create uses the pinned digest ==
+
+--- fresh_create (container=absent)
+LOG: Starting local Postgres (pgvector/pgvector:pg16 on 127.0.0.1:5432)
+LOG: Wrote generated Postgres credentials to DATABASE_URL in /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-docker-probe.gwbF7c/fresh_create.env (mode 0600)
+rc=0 | DATABASE_URL now: DATABASE_URL=postgresql://postgres:deadbeefdeadbeefdeadbeefdeadbeef@127.0.0.1:5432/machina
+PASS fresh_create rc                            = 0
+PASS fresh_create docker run used pinned image  = 1
+
+== install.sh rc=2 contract (static) ==
+PASS install.sh has rc=2 arm                    = yes
+PASS rc=2 arm precedes brew fallback            = yes
+PASS rc=2 arm documents skipped brew            = 1
+
+== result: ALL PROBES PASS

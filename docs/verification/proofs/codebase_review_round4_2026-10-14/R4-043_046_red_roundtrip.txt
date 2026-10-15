@@ -1,0 +1,166 @@
+.............F.F...FF.........FF.........                                [100%]
+=================================== FAILURES ===================================
+_________ test_env_roundtrip_escaped_values[he said "hi" and C:\\tmp] __________
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1515/test_env_roundtrip_escaped_val0/.env')
+value = 'he said "hi" and C:\\tmp'
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            'he said "hi" and C:\\tmp',  # the original strict-xfail value
+            "C:\\Users\\me\\file.txt",  # backslash only
+            'say "hello"',  # quote only
+            "trailing spaces   ",  # trailing whitespace must survive
+            "  leading spaces",  # leading whitespace must survive
+            "unicode: ключ-密钥-🔑",  # non-ASCII passthrough
+            'backslash before quote: \\"',  # adjacent escape forms
+        ],
+    )
+    def test_env_roundtrip_escaped_values(env_file: Path, value: str) -> None:
+        from machina.security.env_file import read_env_values, set_env_values
+    
+        set_env_values({"TEST_MENU_KEY": value}, env_file)
+>       assert read_env_values(env_file)["TEST_MENU_KEY"] == value
+E       assert 'he said \\"h...and C:\\\\tmp' == 'he said "hi" and C:\\tmp'
+E         
+E         - he said "hi" and C:\tmp
+E         + he said \"hi\" and C:\\tmp
+E         ?         +   +        +
+
+tests/test_fm7_cli.py:337: AssertionError
+________________ test_env_roundtrip_escaped_values[say "hello"] ________________
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1515/test_env_roundtrip_escaped_val2/.env')
+value = 'say "hello"'
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            'he said "hi" and C:\\tmp',  # the original strict-xfail value
+            "C:\\Users\\me\\file.txt",  # backslash only
+            'say "hello"',  # quote only
+            "trailing spaces   ",  # trailing whitespace must survive
+            "  leading spaces",  # leading whitespace must survive
+            "unicode: ключ-密钥-🔑",  # non-ASCII passthrough
+            'backslash before quote: \\"',  # adjacent escape forms
+        ],
+    )
+    def test_env_roundtrip_escaped_values(env_file: Path, value: str) -> None:
+        from machina.security.env_file import read_env_values, set_env_values
+    
+        set_env_values({"TEST_MENU_KEY": value}, env_file)
+>       assert read_env_values(env_file)["TEST_MENU_KEY"] == value
+E       assert 'say \\"hello\\"' == 'say "hello"'
+E         
+E         - say "hello"
+E         + say \"hello\"
+E         ?     +      +
+
+tests/test_fm7_cli.py:337: AssertionError
+________ test_env_roundtrip_escaped_values[backslash before quote: \\"] ________
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1515/test_env_roundtrip_escaped_val6/.env')
+value = 'backslash before quote: \\"'
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            'he said "hi" and C:\\tmp',  # the original strict-xfail value
+            "C:\\Users\\me\\file.txt",  # backslash only
+            'say "hello"',  # quote only
+            "trailing spaces   ",  # trailing whitespace must survive
+            "  leading spaces",  # leading whitespace must survive
+            "unicode: ключ-密钥-🔑",  # non-ASCII passthrough
+            'backslash before quote: \\"',  # adjacent escape forms
+        ],
+    )
+    def test_env_roundtrip_escaped_values(env_file: Path, value: str) -> None:
+        from machina.security.env_file import read_env_values, set_env_values
+    
+        set_env_values({"TEST_MENU_KEY": value}, env_file)
+>       assert read_env_values(env_file)["TEST_MENU_KEY"] == value
+E       assert 'backslash be...uote: \\\\\\"' == 'backslash before quote: \\"'
+E         
+E         - backslash before quote: \"
+E         + backslash before quote: \\\"
+E         ?                         ++
+
+tests/test_fm7_cli.py:337: AssertionError
+__________________ test_env_roundtrip_stable_across_rewrites ___________________
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1515/test_env_roundtrip_stable_acro0/.env')
+
+    def test_env_roundtrip_stable_across_rewrites(env_file: Path) -> None:
+        from machina.security.env_file import read_env_values, set_env_values
+    
+        value = 'he said "hi" and C:\\tmp'
+        set_env_values({"TEST_MENU_KEY": value}, env_file)
+        first = env_file.read_text(encoding="utf-8")
+        set_env_values({"TEST_MENU_KEY": read_env_values(env_file)["TEST_MENU_KEY"]}, env_file)
+>       assert env_file.read_text(encoding="utf-8") == first, "escapes must not compound"
+E       AssertionError: escapes must not compound
+E       assert 'TEST_MENU_KE...\\\\\\\tmp"\n' == 'TEST_MENU_KE... C:\\\\tmp"\n'
+E         
+E         - TEST_MENU_KEY="he said \"hi\" and C:\\tmp"
+E         + TEST_MENU_KEY="he said \\\"hi\\\" and C:\\\\tmp"
+E         ?                        ++     ++        ++
+
+tests/test_fm7_cli.py:347: AssertionError
+______________ test_secrets_set_roundtrips_quotes_and_backslashes ______________
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1515/test_secrets_set_roundtrips_qu0/.env')
+
+    async def test_secrets_set_roundtrips_quotes_and_backslashes(env_file: Path) -> None:
+        """E2E (R4-043): gateway-set values with quotes/backslashes read back intact."""
+        from dotenv import dotenv_values
+    
+        from machina.gateway.features.secrets import secrets_set
+        from machina.security.env_file import read_env_values
+    
+        value = 'he said "hi" and C:\\tmp'
+        result = await secrets_set(  # type: ignore[arg-type]
+            FakeGW(), {"key": "OPENROUTER_API_KEY", "value": value, "persist": True}
+        )
+        assert result["persisted"] is True
+        assert os.environ["OPENROUTER_API_KEY"] == value
+>       assert read_env_values(env_file)["OPENROUTER_API_KEY"] == value
+E       assert 'he said \\"h...and C:\\\\tmp' == 'he said "hi" and C:\\tmp'
+E         
+E         - he said "hi" and C:\tmp
+E         + he said \"hi\" and C:\\tmp
+E         ?         +   +        +
+
+tests/test_setup_secrets.py:61: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     machina.gateway.features.secrets:secrets.py:118 secrets.set: OPENROUTER_API_KEY updated (persist=True)
+_______________ test_secrets_set_updates_lowercase_line_in_place _______________
+
+env_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1515/test_secrets_set_updates_lower0/.env')
+
+    async def test_secrets_set_updates_lowercase_line_in_place(env_file: Path) -> None:
+        """E2E (R4-046): a pre-existing lowercase line is updated, never duplicated."""
+        from machina.gateway.features.secrets import secrets_set
+    
+        env_file.write_text("openrouter_api_key=stale\n", encoding="utf-8")
+        await secrets_set(  # type: ignore[arg-type]
+            FakeGW(), {"key": "OPENROUTER_API_KEY", "value": "sk-fresh", "persist": True}
+        )
+>       assert env_file.read_text(encoding="utf-8").splitlines() == ["OPENROUTER_API_KEY=sk-fresh"]
+E       AssertionError: assert ['openrouter_...KEY=sk-fresh'] == ['OPENROUTER_...KEY=sk-fresh']
+E         
+E         At index 0 diff: 'openrouter_api_key=stale' != 'OPENROUTER_API_KEY=sk-fresh'
+E         Left contains 2 more items, first extra item: ''
+E         Use -v to get more diff
+
+tests/test_setup_secrets.py:74: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     machina.gateway.features.secrets:secrets.py:118 secrets.set: OPENROUTER_API_KEY updated (persist=True)
+=========================== short test summary info ============================
+FAILED tests/test_fm7_cli.py::test_env_roundtrip_escaped_values[he said "hi" and C:\\tmp]
+FAILED tests/test_fm7_cli.py::test_env_roundtrip_escaped_values[say "hello"]
+FAILED tests/test_fm7_cli.py::test_env_roundtrip_escaped_values[backslash before quote: \\"]
+FAILED tests/test_fm7_cli.py::test_env_roundtrip_stable_across_rewrites - Ass...
+FAILED tests/test_setup_secrets.py::test_secrets_set_roundtrips_quotes_and_backslashes
+FAILED tests/test_setup_secrets.py::test_secrets_set_updates_lowercase_line_in_place
+6 failed, 35 passed in 3.30s

@@ -1,0 +1,342 @@
+
+$ git status --short
+ M .github/dependabot.yml
+ M .github/workflows/ci.yml
+ M .github/workflows/workflow-trial.yml
+ M Dockerfile
+ M Dockerfile.sandbox
+ M SECURITY.md
+ M docker-compose.yml
+ M install.sh
+ M machina/api/routes/streaming.py
+ M machina/cli/__init__.py
+ M machina/connectors/models.py
+ M machina/connectors/oauth.py
+ M machina/connectors/oauth_callback.py
+ M machina/connectors/policy.py
+ M machina/core/__init__.py
+ M machina/core/child_process.py
+ M machina/core/config.py
+M  machina/core/orchestrator.py
+ M machina/core/provider/reasoning.py
+ M machina/db/connection.py
+M  machina/db/delegation_schema.sql
+M  machina/db/schema.sql
+ M machina/gateway/__main__.py
+ M machina/gateway/features/providers_feature.py
+ M machina/gateway/server.py
+ M machina/mcp_server/__init__.py
+ M machina/memory/approval.py
+ M machina/memory/consolidator.py
+ M machina/memory/redaction.py
+ M machina/memory/shared_bus.py
+ M machina/memory/store.py
+ M machina/skills/registry.py
+ M machina/skills/repo_install.py
+ M machina/skills/workflow.py
+ M machina/soulspec/schema.py
+ M machina/tools/base.py
+ M machina/tools/builtins.py
+ M machina/tools/file.py
+ M machina/tools/harness.py
+ M machina/tools/skills.py
+ M pyproject.toml
+ M tests/conftest.py
+ M tests/test_api.py
+ M tests/test_bug9_bug15_fixes.py
+ M tests/test_chaos_extended.py
+ M tests/test_code_review_fixes.py
+ M tests/test_connectors_oauth_callback.py
+ M tests/test_connectors_oauth_refresh.py
+ M tests/test_connectors_policy.py
+ M tests/test_controller_triage.py
+M  tests/test_delegation_contracts.py
+M  tests/test_failed_delegation_usage.py
+ M tests/test_fm3_soulspec_import.py
+ M tests/test_fm6_registry_hardening.py
+ M tests/test_fm6_repo_install.py
+ M tests/test_gateway.py
+ M tests/test_gateway_providers.py
+ M tests/test_integration_permissions.py
+ M tests/test_mcp_manage_tool.py
+ M tests/test_mcp_server.py
+ M tests/test_memory.py
+ M tests/test_memory_approval.py
+ M tests/test_memory_bug_fixes.py
+ M tests/test_repo_install.py
+ M tests/test_repomap.py
+ M tests/test_review_round2_fixes.py
+ M tests/test_scheduler_coverage.py
+ M tests/test_shared_memory_bus.py
+ M tests/test_sse_stream_adversarial.py
+ M tests/test_turn_intent.py
+ M tests/test_turns_ownership.py
+ M tools/check_release_artifacts.py
+ M tools/e2e_gate.py
+ M tools/install-helpers.sh
+ M tools/vendor_ecc.py
+ M ui/src/app.ts
+ M ui/src/components.ts
+ M ui/src/components/Form.ts
+ M ui/src/design/theme.ts
+ M ui/src/features/mode.ts
+ M ui/src/tail.ts
+?? docs/verification/CODEBASE_REVIEW_2026-10-13.md
+?? docs/verification/CODEBASE_REVIEW_2026-10-14.md
+?? docs/verification/CODEBASE_REVIEW_ROUND3_2026-10-14.md
+?? docs/verification/CODEBASE_REVIEW_ROUND4_2026-10-14.md
+?? docs/verification/FIX_PLAN_ROUND4_2026-10-14.md
+?? docs/verification/FIX_PLAN_ROUND4_TASKS.md
+?? docs/verification/proofs/codebase_review_round3_2026-10-14/
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-010_diffstat.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-010_sse.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-011_compaction.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-012_anthropic.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-012_capture_probe.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-012_green_payloads.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-012_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-012_red_payloads.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-012_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-013_auth_fencing.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-013_logs/
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_before_after_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_bench.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_bench_probe.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_full_suite_failures.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_green_architecture.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_green_corpus.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_green_full_suite.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_green_full_suite_excl_inflight.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_green_redaction_adjacent_sweep.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_green_required_suites.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_probe.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_red_reconstructed_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_redaction.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_redaction_before.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_ruff_check.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-016_ruff_format.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-017_018_cli.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-017_018_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-017_018_probe.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-017_018_probe_green.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-017_018_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-017_stdlib_probe.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-019_green_90s_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-019_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-019_red_60s_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-019_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-019_timeouts.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-020_checks.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-020_grader.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-020_green_fixed.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-020_red_unfixed.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-020_replay_real_fixtures.json
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-020_replay_real_fixtures.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-021_green_batch_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-021_green_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-021_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-021_probe.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-021_red_batch_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-021_red_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-021_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-021_zero_vector.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-022_023_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-022_023_green_ui.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-022_023_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-022_023_red_ui.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-022_023_ui_honesty.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-024_check_green.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-024_green.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-024_provider_pin.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-024_red.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-026_checks.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-026_diffstat.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-026_green.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-026_red.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-026_resolver.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_checks.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_e2e_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_e2e_sibling_shim.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_green_probe.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_probe_shim_matching.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_red_probe.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_red_shim_plugin.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_region_diff.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_shim.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-027_unfixed_shim.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-028_029_delegation.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-028_029_green_focused.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-028_029_green_related.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-028_029_green_ruff.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-028_029_pre_existing_flake.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-028_029_red.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-040_041_049_chatgpt.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-040_041_049_chatgpt_green.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-040_041_049_chatgpt_red.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-040_041_049_chatgpt_stability.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_046_red_roundtrip.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_048_env_file.diff
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_048_env_file.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_048_green_architecture.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_048_green_focused.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_048_green_related.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_048_green_required.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_048_red_adversarial.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_048_red_final.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-043_048_ruff.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_architecture.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_checks_suites.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_connectors_oauth.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_green_verbose.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_lock_probe.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_lock_probe_green.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_providers.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-045_047_049_ruff.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-060_062_attack.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-060_062_attack_output.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-060_062_attack_red.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-060_062_green_architecture.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-060_062_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-060_062_green_supplemental.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-060_062_policy.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-060_062_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-060_062_red_revision.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-063_064_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-063_064_green_span_harness_x3.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-063_064_observability.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-063_064_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-063_064_red_span.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-063_064_sse_span_attempt.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-065_068_approvals.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-065_068_checks.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-065_068_green_backend.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-065_068_green_ui.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-065_068_red_backend.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-065_068_red_ui.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-065_068_ui_check.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-081_084_red_mcp.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-081_084_red_sse.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_green_adjacent_sweep.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_green_focused.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_green_required_suites.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_probe_d_redual.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_probe_e_diag.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_rag.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_red_bce.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_red_d_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_red_d_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-088_red_f_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-090_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-091_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_green_cli.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_green_e2e_db.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_green_normalize_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_green_probe_optimized.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_green_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_normalize_probe_caught_bug.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_probe_optimized.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_red_probe_optimized.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_red_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_research.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-092_ruff.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_artifacts_check.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_checks.sh
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_checks.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_docker_reuse_probe.sh
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_docker_reuse_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_e2e_db_guard_probe.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_e2e_db_guard_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_focused_pytest.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_install_env_guard_probe.sh
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_install_env_guard_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_vendor_ecc_probe.py
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_vendor_ecc_probe.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_wheel_telemetry.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_wheel_telemetry_probe.sh
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-101_bug15_controller_green.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-101_bug15_red.txt
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-GEMINI_CLAUDE_KIMI.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4-GEMINI_CLAUDE_KIMI_logs/
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4_STAGE1_LEDGER.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/R4_STAGE2_LEDGER.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/baseline_backend.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/baseline_triage.md
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/baseline_ui.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/baseline_ui_rerun.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/stage1_closeout_backend.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/stage1_closeout_ui.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/stage1_final_backend.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/stage1_final_ui.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/stage1_final_ui_rerun.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/stage1_full_backend.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/stage2_gate_backend.log
+?? docs/verification/proofs/codebase_review_round4_2026-10-14/stage2_gate_ui.log
+?? tests/test_connectors_oauth_hardening.py
+?? tests/test_r4_080_boot_config.py
+?? tests/test_r4_082_gateway_providers.py
+?? tests/test_r4_083_gateway_standalone.py
+?? tests/test_r4_090_tools.py
+?? tests/test_r4_105_advisory_lock_pool.py
+?? tests/test_r4_105_approval_view_secrets.py
+?? tests/test_r4_105_caller_scope_real_run.py
+?? tests/test_r4_105_same_session_load_race.py
+?? tests/test_r4_105_store_fence_flock.py
+?? tests/test_redaction_adversarial.py
+?? ui/test/r4-094-tui.test.ts
+
+$ bash -n install.sh tools/install-helpers.sh
+install.sh: syntax OK
+install-helpers.sh: syntax OK
+
+$ python -c yaml/toml parse (workflows, dependabot, compose, pyproject)
+YAML OK: .github/workflows/ci.yml
+YAML OK: .github/workflows/workflow-trial.yml
+YAML OK: .github/dependabot.yml
+YAML OK: docker-compose.yml
+TOML OK: pyproject.toml
+
+$ actionlint availability
+actionlint: not installed on this machine (YAML parse above is the substitute)
+
+$ uv lock --check --offline (local, read-only; CI runs the online form)
+Resolved 130 packages in 35ms
+uv.lock unchanged
+
+$ focused pytest (tests/test_release_artifacts* absent -> skipped per task)
+tests/test_release_artifacts*: absent
+.......................................................                  [100%]
+55 passed in 19.56s
+
+$ windows-only test reports expected skip (on Linux CI the step greps '1 skipped')
+s                                                                        [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_integration_permissions.py:560: Windows path semantics
+1 skipped in 0.61s
+
+$ related config/vendor tests
+....                                                                     [100%]
+4 passed in 1.29s
+
+$ ruff check / format on tools/
+All checks passed!
+5 files already formatted
+
+$ probe scripts (captured outputs live next to this transcript)
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_artifacts_check.txt
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_checks.sh
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_checks.txt
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_docker_reuse_probe.sh
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_docker_reuse_probe.txt
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_e2e_db_guard_probe.py
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_e2e_db_guard_probe.txt
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_focused_pytest.txt
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_install_env_guard_probe.sh
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_install_env_guard_probe.txt
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_vendor_ecc_probe.py
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_vendor_ecc_probe.txt
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_wheel_telemetry_probe.sh
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_wheel_telemetry.txt

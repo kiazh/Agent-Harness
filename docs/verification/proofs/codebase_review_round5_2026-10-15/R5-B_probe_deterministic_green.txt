@@ -1,0 +1,4 @@
+write returned: Successfully wrote 8 characters to sub/victim.txt
+swapped=True outside/victim.txt='ORIGINAL'
+outside_files=['victim.txt']
+VERDICT: CONTAINED

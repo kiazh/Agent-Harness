@@ -1,0 +1,4 @@
+
+### R5-F2 fuzz (fixed chunker)
+trials=15000 seed=2026 failures=0
+exit=0

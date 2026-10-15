@@ -1,0 +1,21 @@
+2026-10-14 18:20:36,878 [AUDIT] {"timestamp": 1792016436.8786209, "event": "rag_embed_start", "model": "text-embedding-3-small", "count": 1, "provider": "openai"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 18:20:36,879 [AUDIT] {"timestamp": 1792016436.879621, "event": "rag_embed_error", "model": "text-embedding-3-small"}
+Audit event dropped before the writer started; event was not persisted
+Embedding API response unusable: ProviderError
+2026-10-14 18:20:36,879 [AUDIT] {"timestamp": 1792016436.879914, "event": "rag_embed_start", "model": "text-embedding-3-small", "count": 1, "provider": "openai"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 18:20:36,880 [AUDIT] {"timestamp": 1792016436.880204, "event": "rag_embed_error", "model": "text-embedding-3-small"}
+Audit event dropped before the writer started; event was not persisted
+Embedding API response unusable: ProviderError
+boundary failed: embeddings.embed_query error_type=ProviderError
+2026-10-14 18:20:36,880 [AUDIT] {"timestamp": 1792016436.8805, "event": "rag_embed_start", "model": "text-embedding-3-small", "count": 1, "provider": "openai"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 18:20:36,880 [AUDIT] {"timestamp": 1792016436.880756, "event": "rag_embed_error", "model": "text-embedding-3-small"}
+Audit event dropped before the writer started; event was not persisted
+Embedding API response unusable: ProviderError
+embed() raised ProviderError: Embedding API response has 0 usable vector(s) for 1 input(s)
+cache_size after embed(): 0
+embed_query() -> None (honest keyword-only fallback)
+embed() second call raised ProviderError: Embedding API response has 0 usable vector(s) for 1 input(s)
+cache_size final: 0

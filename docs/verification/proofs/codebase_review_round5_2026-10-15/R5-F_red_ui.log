@@ -1,0 +1,84 @@
+✖ R5-010: clicking the second physical row of a two-line entry checks that entry (29.343833ms)
+✖ R5-010: the row budget counts physical rows, not items (0.508166ms)
+✖ R5-010: hit-testing accounts for multi-line titles (0.309833ms)
+✖ R5-010: a description newline belongs to its own entry (0.331125ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 328.267292
+
+✖ failing tests:
+
+test at test/r5-010-menu-rows.test.ts:37:1
+✖ R5-010: clicking the second physical row of a two-line entry checks that entry (29.343833ms)
+  AssertionError [ERR_ASSERTION]: click on "second-line" must not select the next session (moved to ["22222222-aaaa-bbbb-cccc-222222222222"])
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-010-menu-rows.test.ts:54:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/r5-010-menu-rows.test.ts:61:1
+✖ R5-010: the row budget counts physical rows, not items (0.508166ms)
+  AssertionError [ERR_ASSERTION]: no room left: the next item is outside the budget
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-010-menu-rows.test.ts:69:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'T (3/3 · 0 checked)\nType to filter\n❯ [ ] a1                                                                        \na2                                                                              \n  [ ] b                                                                         \n↑↓ move · space check · enter review · esc cancel',
+    expected: /\bb\b/,
+    operator: 'doesNotMatch',
+    diff: 'simple'
+  }
+
+test at test/r5-010-menu-rows.test.ts:72:1
+✖ R5-010: hit-testing accounts for multi-line titles (0.309833ms)
+  AssertionError [ERR_ASSERTION]: click on "Xray" must not select "Yankee" (moved to ["y"])
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-010-menu-rows.test.ts:86:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/r5-010-menu-rows.test.ts:92:1
+✖ R5-010: a description newline belongs to its own entry (0.331125ms)
+  AssertionError [ERR_ASSERTION]: click on "d2" must not select the next entry (moved to ["b"])
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r5-010-menu-rows.test.ts:105:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

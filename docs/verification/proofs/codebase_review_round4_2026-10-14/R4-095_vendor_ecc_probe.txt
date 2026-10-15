@@ -1,0 +1,12 @@
+PASS RED pre-fix error type                                   = 'IndexError'
+PASS fixed error type                                         = 'ValueError'
+PASS fixed error names the file and cause                     = True
+PASS missing-description error type                           = 'ValueError'
+PASS missing-description message                              = True
+Vendored 1 skills and 2 files at d148891d226b6333492615892fa8cb48c022b4a5
+Manifest SHA256: 851b60be39a39111ed58ce36979cf917e3ccc234a50b8dfdc64ac4f6d2312cfd
+PASS valid fixture importer error                             = None
+PASS valid fixture manifest written                           = True
+
+== result: ALL PROBES PASS
+probe exit: 0

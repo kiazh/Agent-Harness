@@ -1,0 +1,20 @@
+E        +    where <built-in method get of dict object at 0x10e262440> = {}.get
+
+tests/test_r5_016_017_credential_races.py:175: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_resurrect_after_logout[0]
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_resurrect_after_logout[1]
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_resurrect_after_logout[2]
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_resurrect_after_logout[3]
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_resurrect_after_logout[4]
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_overwrite_device_login[0]
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_overwrite_device_login[1]
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_overwrite_device_login[2]
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_overwrite_device_login[3]
+FAILED tests/test_r5_016_017_credential_races.py::test_l1_stale_import_must_not_overwrite_device_login[4]
+FAILED tests/test_r5_016_017_credential_races.py::test_l2_remove_must_not_delete_replacement_credential[0]
+FAILED tests/test_r5_016_017_credential_races.py::test_l2_remove_must_not_delete_replacement_credential[1]
+FAILED tests/test_r5_016_017_credential_races.py::test_l2_remove_must_not_delete_replacement_credential[2]
+FAILED tests/test_r5_016_017_credential_races.py::test_l2_remove_must_not_delete_replacement_credential[3]
+FAILED tests/test_r5_016_017_credential_races.py::test_l2_remove_must_not_delete_replacement_credential[4]
+15 failed in 3.11s

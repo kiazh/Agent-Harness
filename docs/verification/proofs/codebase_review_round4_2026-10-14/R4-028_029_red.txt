@@ -1,0 +1,476 @@
+...F..............FF......FFFF                                           [100%]
+=================================== FAILURES ===================================
+____________________ test_artifact_missing_errors_honestly _____________________
+
+delegation = namespace(child=Session(id=UUID('091f9b90-fba2-4722-a8f1-33fba8441365'), title=None, agent_id='coder', status='active'...private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1632/test_artifact_missing_errors_h0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ce7e350>
+
+    async def test_artifact_missing_errors_honestly(delegation, monkeypatch):
+        """R4-028 (delete): missing artifact -> error, no phantom backtrack.
+    
+        The deleted code called ``should_write_first(0, True)`` and discarded the
+        return, forcing no write at all while the comment claimed a "forced
+        synthesize/write attempt". This pins the real behavior: status "error",
+        the reason naming the path, a terminal error row, and no backtrack claim
+        (the helper must never be called again).
+        """
+        import machina.core.progress as progress
+    
+        spy = MagicMock(return_value=True)
+        monkeypatch.setattr(progress, "should_write_first", spy)
+        orch = delegation.build(_ok_child(delegation))
+        result = await orch.delegate("coder", "work", expected_artifact_path="missing.md")
+        assert result.status == "error"
+        assert "missing.md" in result.response
+        assert "backtrack" not in result.response.lower()
+        assert delegation.recorded[-1]["status"] == "error"
+        assert "missing.md" in delegation.recorded[-1]["response"]
+>       spy.assert_not_called()
+
+tests/test_delegation_contracts.py:147: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <MagicMock id='4510039552'>
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+>           raise AssertionError(msg)
+E           AssertionError: Expected 'mock' to not have been called. Called 1 times.
+E           Calls: [call(0, True)].
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:947: AssertionError
+_______ test_unavailable_production_accounting_never_reports_zero[raise] _______
+
+delegation = namespace(child=Session(id=UUID('cfc4229c-1c08-4eca-93fc-785f777d5ce7'), title=None, agent_id='coder', status='active'...D('cfc4229c-1c08-4eca-93fc-785f777d5ce7'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d49ada0>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d3d5940>
+outcome = 'raise'
+
+    @pytest.mark.parametrize("outcome", ["raise", "success"])
+    async def test_unavailable_production_accounting_never_reports_zero(
+        delegation, monkeypatch, outcome
+    ):
+        """R4-029: a failed ledger read closes the row with NULL (unknown) tokens.
+    
+        The old contract left the delegation row non-terminal and recorded
+        nothing. The new contract records exactly one terminal ``error`` row
+        whose ``tokens`` is NULL — explicitly unknown, never a phantom zero —
+        and still raises the typed error so the parent stops spending.
+        """
+        from machina.core.exceptions import DatabaseError
+        from machina.core.usage import db, usage_store
+    
+        monkeypatch.setattr(db, "_pool", object())
+        monkeypatch.setattr(
+            usage_store, "summary", AsyncMock(side_effect=DatabaseError("ledger read failed"))
+        )
+    
+        class Child:
+            async def run(self, session_id, *_args, **_kwargs):
+                delegation.charges[session_id] = 13
+                if outcome == "raise":
+                    raise RuntimeError("failed after provider work")
+                return AgentResponse(content="done", tokens_used=7)
+    
+        with pytest.raises(DatabaseError, match="delegation usage accounting unavailable"):
+            await delegation.build(Child()).delegate("coder", "work")
+>       assert len(delegation.recorded) == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = len([])
+E        +    where [] = namespace(child=Session(id=UUID('cfc4229c-1c08-4eca-93fc-785f777d5ce7'), title=None, agent_id='coder', status='active'...D('cfc4229c-1c08-4eca-93fc-785f777d5ce7'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d49ada0>).recorded
+
+tests/test_failed_delegation_usage.py:144: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    machina.core.orchestrator:orchestrator.py:349 Delegation to coder failed
+RuntimeError
+/Users/shadow/machina/machina/core/orchestrator.py:334 (delegate)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:488 (wait_for)
+/Users/shadow/machina/tests/test_failed_delegation_usage.py:139 (run)
+______ test_unavailable_production_accounting_never_reports_zero[success] ______
+
+delegation = namespace(child=Session(id=UUID('46e71654-2693-4f2e-861a-e83b9b04fddd'), title=None, agent_id='coder', status='active'...D('46e71654-2693-4f2e-861a-e83b9b04fddd'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d49b110>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10cea7d90>
+outcome = 'success'
+
+    @pytest.mark.parametrize("outcome", ["raise", "success"])
+    async def test_unavailable_production_accounting_never_reports_zero(
+        delegation, monkeypatch, outcome
+    ):
+        """R4-029: a failed ledger read closes the row with NULL (unknown) tokens.
+    
+        The old contract left the delegation row non-terminal and recorded
+        nothing. The new contract records exactly one terminal ``error`` row
+        whose ``tokens`` is NULL — explicitly unknown, never a phantom zero —
+        and still raises the typed error so the parent stops spending.
+        """
+        from machina.core.exceptions import DatabaseError
+        from machina.core.usage import db, usage_store
+    
+        monkeypatch.setattr(db, "_pool", object())
+        monkeypatch.setattr(
+            usage_store, "summary", AsyncMock(side_effect=DatabaseError("ledger read failed"))
+        )
+    
+        class Child:
+            async def run(self, session_id, *_args, **_kwargs):
+                delegation.charges[session_id] = 13
+                if outcome == "raise":
+                    raise RuntimeError("failed after provider work")
+                return AgentResponse(content="done", tokens_used=7)
+    
+        with pytest.raises(DatabaseError, match="delegation usage accounting unavailable"):
+            await delegation.build(Child()).delegate("coder", "work")
+>       assert len(delegation.recorded) == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = len([])
+E        +    where [] = namespace(child=Session(id=UUID('46e71654-2693-4f2e-861a-e83b9b04fddd'), title=None, agent_id='coder', status='active'...D('46e71654-2693-4f2e-861a-e83b9b04fddd'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d49b110>).recorded
+
+tests/test_failed_delegation_usage.py:144: AssertionError
+_ test_failed_child_spend_is_accounted_without_implicit_turn_cutoff[ledger_unavailable-False] _
+
+delegation = namespace(child=Session(id=UUID('1a7e108f-e3ac-47f6-9968-b64344fd0a85'), title=None, agent_id='coder', status='active'...D('1a7e108f-e3ac-47f6-9968-b64344fd0a85'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d49a090>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10cea7d20>
+streaming = False, outcome = 'ledger_unavailable'
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.parametrize("outcome", ["raise", "timeout", "ledger_unavailable"])
+    async def test_failed_child_spend_is_accounted_without_implicit_turn_cutoff(
+        delegation, monkeypatch, streaming, outcome
+    ):
+        from machina.core import orchestrator as module
+        from machina.core.agent import registry
+        from machina.permissions.broker import permission_broker
+        from machina.tools.agents import delegate
+    
+        parent = Session(id=uuid4())
+        agent = ReActAgent(provider=SimpleNamespace(model="fake"), allowed_tools=["delegate"])
+        orch = delegation.build(spending_child(delegation, outcome))
+        monkeypatch.setattr(orch, "DELEGATION_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(module, "orchestrator", orch)
+        monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
+        monkeypatch.setattr(agent, "_prepare_context", AsyncMock(return_value=(parent, [])))
+        monkeypatch.setattr(agent, "_flush_pending_chunks", AsyncMock())
+        monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
+        monkeypatch.setattr(agent, "_schedule_memory_consolidation", lambda *_: None)
+        monkeypatch.setattr(agent, "_schedule_learning_review", lambda *_: None)
+        monkeypatch.setattr(permission_broker, "guard", AsyncMock())
+        monkeypatch.setattr(
+            "machina.core.execution_context.resolve_execution_context",
+            AsyncMock(return_value=ExecutionContext("ask", "host", Path("/tmp"))),
+        )
+    
+        async def execute(name, **kwargs):
+            assert name == "delegate"
+            return await delegate(**kwargs)
+    
+        monkeypatch.setattr(registry, "execute", execute)
+        if outcome == "ledger_unavailable":
+            from machina.core.exceptions import DatabaseError
+            from machina.core.usage import db, usage_store
+    
+            monkeypatch.setattr(db, "_pool", object())
+            monkeypatch.setattr(
+                usage_store, "summary", AsyncMock(side_effect=DatabaseError("ledger read failed"))
+            )
+        calls = []
+    
+        async def complete(**kwargs):
+            calls.append(kwargs)
+            if len(calls) > 1:
+                return LLMResponse(content="continued", model="fake", usage={"total_tokens": 1})
+            return LLMResponse(
+                content="",
+                model="fake",
+                usage={"total_tokens": 1},
+                tool_calls=[
+                    {
+                        "id": "call",
+                        "type": "function",
+                        "function": {
+                            "name": "delegate",
+                            "arguments": '{"agent":"coder","task":"work"}',
+                        },
+                    }
+                ],
+            )
+    
+        async def stream(**kwargs):
+            yield StreamEvent(type="done", response=await complete(**kwargs))
+    
+        monkeypatch.setattr(agent, "_call_llm_with_retry", complete)
+        monkeypatch.setattr(agent, "_stream_llm_with_retry", stream)
+        token = module.delegation_deadline.set(asyncio.get_running_loop().time() + 0.02)
+        try:
+            expectation = (
+                pytest.raises(DatabaseError, match="delegation usage accounting unavailable")
+                if outcome == "ledger_unavailable"
+                else nullcontext()
+            )
+            with expectation:
+                if streaming:
+                    events = [
+                        event
+                        async for event in ReActAgent.run_stream.__wrapped__(
+                            agent, parent.id, "work", False
+                        )
+                    ]
+                    response = events[-1].response
+                else:
+                    response = await ReActAgent.run.__wrapped__(agent, parent.id, "work", False)
+        finally:
+            module.delegation_deadline.reset(token)
+    
+        if outcome == "ledger_unavailable":
+            assert len(calls) == 1
+            assert delegation.charges[delegation.child.id] == 13
+            # R4-029: the failed ledger read still closes the row (unknown tokens)
+            # before the typed error stops the parent loop.
+>           assert len(delegation.recorded) == 1
+E           AssertionError: assert 0 == 1
+E            +  where 0 = len([])
+E            +    where [] = namespace(child=Session(id=UUID('1a7e108f-e3ac-47f6-9968-b64344fd0a85'), title=None, agent_id='coder', status='active'...D('1a7e108f-e3ac-47f6-9968-b64344fd0a85'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d49a090>).recorded
+
+tests/test_failed_delegation_usage.py:298: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 20:15:21,331 [AUDIT] {"timestamp": 1792023321.331221, "event": "agent_run_start", "session_id": "4b48209b-cb79-4a26-a1d1-2255d9f6637d", "agent_id": "harness"}
+2026-10-14 20:15:21,333 [AUDIT] {"timestamp": 1792023321.3336089, "event": "tool_call_start", "session_id": "4b48209b-cb79-4a26-a1d1-2255d9f6637d", "tool_name": "delegate"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023321.331221, "event": "agent_run_start", "session_id": "4b48209b-cb79-4a26-a1d1-2255d9f6637d", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023321.3336089, "event": "tool_call_start", "session_id": "4b48209b-cb79-4a26-a1d1-2255d9f6637d", "tool_name": "delegate"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.orchestrator:orchestrator.py:349 Delegation to coder failed
+RuntimeError
+/Users/shadow/machina/machina/core/orchestrator.py:334 (delegate)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:488 (wait_for)
+/Users/shadow/machina/tests/test_failed_delegation_usage.py:68 (run)
+_ test_failed_child_spend_is_accounted_without_implicit_turn_cutoff[ledger_unavailable-True] _
+
+delegation = namespace(child=Session(id=UUID('998d5500-ad91-4b27-9c6c-7a2cf72ec033'), title=None, agent_id='coder', status='active'...D('998d5500-ad91-4b27-9c6c-7a2cf72ec033'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d01c3b0>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10cea7e70>
+streaming = True, outcome = 'ledger_unavailable'
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.parametrize("outcome", ["raise", "timeout", "ledger_unavailable"])
+    async def test_failed_child_spend_is_accounted_without_implicit_turn_cutoff(
+        delegation, monkeypatch, streaming, outcome
+    ):
+        from machina.core import orchestrator as module
+        from machina.core.agent import registry
+        from machina.permissions.broker import permission_broker
+        from machina.tools.agents import delegate
+    
+        parent = Session(id=uuid4())
+        agent = ReActAgent(provider=SimpleNamespace(model="fake"), allowed_tools=["delegate"])
+        orch = delegation.build(spending_child(delegation, outcome))
+        monkeypatch.setattr(orch, "DELEGATION_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(module, "orchestrator", orch)
+        monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
+        monkeypatch.setattr(agent, "_prepare_context", AsyncMock(return_value=(parent, [])))
+        monkeypatch.setattr(agent, "_flush_pending_chunks", AsyncMock())
+        monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
+        monkeypatch.setattr(agent, "_schedule_memory_consolidation", lambda *_: None)
+        monkeypatch.setattr(agent, "_schedule_learning_review", lambda *_: None)
+        monkeypatch.setattr(permission_broker, "guard", AsyncMock())
+        monkeypatch.setattr(
+            "machina.core.execution_context.resolve_execution_context",
+            AsyncMock(return_value=ExecutionContext("ask", "host", Path("/tmp"))),
+        )
+    
+        async def execute(name, **kwargs):
+            assert name == "delegate"
+            return await delegate(**kwargs)
+    
+        monkeypatch.setattr(registry, "execute", execute)
+        if outcome == "ledger_unavailable":
+            from machina.core.exceptions import DatabaseError
+            from machina.core.usage import db, usage_store
+    
+            monkeypatch.setattr(db, "_pool", object())
+            monkeypatch.setattr(
+                usage_store, "summary", AsyncMock(side_effect=DatabaseError("ledger read failed"))
+            )
+        calls = []
+    
+        async def complete(**kwargs):
+            calls.append(kwargs)
+            if len(calls) > 1:
+                return LLMResponse(content="continued", model="fake", usage={"total_tokens": 1})
+            return LLMResponse(
+                content="",
+                model="fake",
+                usage={"total_tokens": 1},
+                tool_calls=[
+                    {
+                        "id": "call",
+                        "type": "function",
+                        "function": {
+                            "name": "delegate",
+                            "arguments": '{"agent":"coder","task":"work"}',
+                        },
+                    }
+                ],
+            )
+    
+        async def stream(**kwargs):
+            yield StreamEvent(type="done", response=await complete(**kwargs))
+    
+        monkeypatch.setattr(agent, "_call_llm_with_retry", complete)
+        monkeypatch.setattr(agent, "_stream_llm_with_retry", stream)
+        token = module.delegation_deadline.set(asyncio.get_running_loop().time() + 0.02)
+        try:
+            expectation = (
+                pytest.raises(DatabaseError, match="delegation usage accounting unavailable")
+                if outcome == "ledger_unavailable"
+                else nullcontext()
+            )
+            with expectation:
+                if streaming:
+                    events = [
+                        event
+                        async for event in ReActAgent.run_stream.__wrapped__(
+                            agent, parent.id, "work", False
+                        )
+                    ]
+                    response = events[-1].response
+                else:
+                    response = await ReActAgent.run.__wrapped__(agent, parent.id, "work", False)
+        finally:
+            module.delegation_deadline.reset(token)
+    
+        if outcome == "ledger_unavailable":
+            assert len(calls) == 1
+            assert delegation.charges[delegation.child.id] == 13
+            # R4-029: the failed ledger read still closes the row (unknown tokens)
+            # before the typed error stops the parent loop.
+>           assert len(delegation.recorded) == 1
+E           AssertionError: assert 0 == 1
+E            +  where 0 = len([])
+E            +    where [] = namespace(child=Session(id=UUID('998d5500-ad91-4b27-9c6c-7a2cf72ec033'), title=None, agent_id='coder', status='active'...D('998d5500-ad91-4b27-9c6c-7a2cf72ec033'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d01c3b0>).recorded
+
+tests/test_failed_delegation_usage.py:298: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 20:15:21,430 [AUDIT] {"timestamp": 1792023321.430043, "event": "agent_run_stream_start", "session_id": "12088377-5d14-4024-87a3-a6ae7dde2ca7", "agent_id": "harness"}
+2026-10-14 20:15:21,432 [AUDIT] {"timestamp": 1792023321.432089, "event": "tool_call_start", "session_id": "12088377-5d14-4024-87a3-a6ae7dde2ca7", "tool_name": "delegate"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023321.430043, "event": "agent_run_stream_start", "session_id": "12088377-5d14-4024-87a3-a6ae7dde2ca7", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792023321.432089, "event": "tool_call_start", "session_id": "12088377-5d14-4024-87a3-a6ae7dde2ca7", "tool_name": "delegate"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.orchestrator:orchestrator.py:349 Delegation to coder failed
+RuntimeError
+/Users/shadow/machina/machina/core/orchestrator.py:334 (delegate)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:488 (wait_for)
+/Users/shadow/machina/tests/test_failed_delegation_usage.py:68 (run)
+_________ test_ledger_failure_closes_cancelled_row_with_unknown_tokens _________
+
+delegation = namespace(child=Session(id=UUID('21fd3f24-30b0-4cef-bc5b-90fceb2cc28b'), title=None, agent_id='coder', status='active'...D('21fd3f24-30b0-4cef-bc5b-90fceb2cc28b'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d01c040>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d3d5940>
+
+    async def test_ledger_failure_closes_cancelled_row_with_unknown_tokens(delegation, monkeypatch):
+        """R4-029: cancellation plus a failed ledger read still closes the row."""
+        from machina.core.exceptions import DatabaseError
+        from machina.core.usage import db, usage_store
+    
+        monkeypatch.setattr(db, "_pool", object())
+        monkeypatch.setattr(
+            usage_store, "summary", AsyncMock(side_effect=DatabaseError("ledger read failed"))
+        )
+        entered = asyncio.Event()
+    
+        class Child:
+            async def run(self, session_id, *_args, **_kwargs):
+                delegation.charges[session_id] = 13
+                entered.set()
+                await asyncio.Event().wait()
+    
+        task = asyncio.create_task(delegation.build(Child()).delegate("coder", "work"))
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+>       assert len(delegation.recorded) == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = len([])
+E        +    where [] = namespace(child=Session(id=UUID('21fd3f24-30b0-4cef-bc5b-90fceb2cc28b'), title=None, agent_id='coder', status='active'...D('21fd3f24-30b0-4cef-bc5b-90fceb2cc28b'): 13}, recorded=[], build=<function delegation.<locals>.build at 0x10d01c040>).recorded
+
+tests/test_failed_delegation_usage.py:329: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.observability.diagnostics:diagnostics.py:25 boundary failed: orchestrator.delegate error_type=DelegationAccountingError
+___________ test_ledger_failure_closes_real_row_with_unknown_tokens ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ce67c40>
+db_pool = <machina.db.connection.Database object at 0x10d436850>
+
+    async def test_ledger_failure_closes_real_row_with_unknown_tokens(monkeypatch, db_pool):
+        """R4-029 E2E: the recovery write reaches the real schema.
+    
+        The row is created by the production INSERT and closed by the production
+        UPDATE with NULL tokens after the injected ledger failure; it is read back
+        from Postgres to prove no row is left ``pending`` and no zero is recorded.
+        """
+        from machina.core import orchestrator as module
+        from machina.core.exceptions import DatabaseError
+        from machina.core.usage import usage_store
+    
+        monkeypatch.setattr(module, "db", db_pool)
+        monkeypatch.setattr("machina.core.usage.db", db_pool)
+        monkeypatch.setattr(
+            usage_store, "summary", AsyncMock(side_effect=DatabaseError("ledger read failed"))
+        )
+        monkeypatch.setattr(
+            module.agent_registry, "get", AsyncMock(return_value=AgentDef(name="coder"))
+        )
+        monkeypatch.setattr(
+            module.session_manager,
+            "create",
+            AsyncMock(return_value=Session(id=uuid4(), agent_id="coder")),
+        )
+        monkeypatch.setattr(
+            "machina.core.session_mode.resolve_effective_mode", AsyncMock(return_value="ask")
+        )
+    
+        class Child:
+            async def run(self, session_id, *_args, **_kwargs):
+                return AgentResponse(content="done", tokens_used=7)
+    
+        orch = Orchestrator(agent_factory=lambda _: Child())
+        monkeypatch.setattr(orch, "_parent_context", AsyncMock(return_value=""))
+        captured = {}
+        real_start = orch._record_start
+    
+        async def capture_start(*args, **kwargs):
+            message_id = await real_start(*args, **kwargs)
+            captured["id"] = message_id
+            return message_id
+    
+        monkeypatch.setattr(orch, "_record_start", capture_start)
+    
+        with pytest.raises(DatabaseError, match="delegation usage accounting unavailable"):
+            await orch.delegate("coder", "work")
+    
+        row = await db_pool.fetchrow(
+            "SELECT status, tokens_used, response FROM agent_messages WHERE id = $1",
+            captured["id"],
+        )
+>       assert row["status"] == "error"
+E       AssertionError: assert 'pending' == 'error'
+E         
+E         - error
+E         + pending
+
+tests/test_failed_delegation_usage.py:385: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_delegation_contracts.py::test_artifact_missing_errors_honestly
+FAILED tests/test_failed_delegation_usage.py::test_unavailable_production_accounting_never_reports_zero[raise]
+FAILED tests/test_failed_delegation_usage.py::test_unavailable_production_accounting_never_reports_zero[success]
+FAILED tests/test_failed_delegation_usage.py::test_failed_child_spend_is_accounted_without_implicit_turn_cutoff[ledger_unavailable-False]
+FAILED tests/test_failed_delegation_usage.py::test_failed_child_spend_is_accounted_without_implicit_turn_cutoff[ledger_unavailable-True]
+FAILED tests/test_failed_delegation_usage.py::test_ledger_failure_closes_cancelled_row_with_unknown_tokens
+FAILED tests/test_failed_delegation_usage.py::test_ledger_failure_closes_real_row_with_unknown_tokens
+7 failed, 23 passed in 6.14s

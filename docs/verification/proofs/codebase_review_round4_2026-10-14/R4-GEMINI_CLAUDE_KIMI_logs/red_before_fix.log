@@ -1,0 +1,534 @@
+FFFFFFFFFFFFFFFFFFFFF                                                    [100%]
+=================================== FAILURES ===================================
+___ test_removed_providers_answer_the_generic_unknown_provider_error[claude] ___
+
+provider = 'claude'
+
+    @pytest.mark.parametrize("provider", REMOVED_PROVIDERS)
+    def test_removed_providers_answer_the_generic_unknown_provider_error(provider: str) -> None:
+>       with pytest.raises(ValidationError) as excinfo:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValidationError
+
+tests/test_subscription_removals.py:65: Failed
+___ test_removed_providers_answer_the_generic_unknown_provider_error[gemini] ___
+
+provider = 'gemini'
+
+    @pytest.mark.parametrize("provider", REMOVED_PROVIDERS)
+    def test_removed_providers_answer_the_generic_unknown_provider_error(provider: str) -> None:
+>       with pytest.raises(ValidationError) as excinfo:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValidationError
+
+tests/test_subscription_removals.py:65: Failed
+_________ test_removed_auth_subcommands_are_gone_from_the_cli[claude] __________
+
+provider = 'claude'
+
+    @pytest.mark.parametrize("provider", REMOVED_PROVIDERS)
+    def test_removed_auth_subcommands_are_gone_from_the_cli(provider: str) -> None:
+        runner = CliRunner()
+        result = runner.invoke(auth_cli.app, [provider])
+        assert result.exit_code == 2, result.output
+>       assert f"No such command '{provider}'" in result.output, result.output
+E       AssertionError:                                                                                 
+E          Usage: auth claude [OPTIONS] COMMAND [ARGS]...                                 
+E                                                                                         
+E          Sign in to your Claude Pro/Max subscription for the claude provider.           
+E                                                                                         
+E         ╭─ Options ────────────────────────────────────────────────────────────────────╮
+E         │ --help          Show this message and exit.                                  │
+E         ╰──────────────────────────────────────────────────────────────────────────────╯
+E         ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+E         │ login   Sign in with your Claude Pro/Max subscription (Claude Code OAuth     │
+E         │         flow).                                                               │
+E         │ status  Show Claude sign-in status; exit 0 when signed in, 1 otherwise.      │
+E         │ logout  Remove Machina's Claude token store (never Claude Code's             │
+E         │         credentials).                                                        │
+E         ╰──────────────────────────────────────────────────────────────────────────────╯
+E         
+E       assert "No such command 'claude'" in '                                                                                \n Usage: auth claude [OPTIONS] COMMA...                                 │\n╰──────────────────────────────────────────────────────────────────────────────╯\n'
+E        +  where '                                                                                \n Usage: auth claude [OPTIONS] COMMA...                                 │\n╰──────────────────────────────────────────────────────────────────────────────╯\n' = <Result SystemExit(2)>.output
+
+tests/test_subscription_removals.py:80: AssertionError
+_________ test_removed_auth_subcommands_are_gone_from_the_cli[gemini] __________
+
+provider = 'gemini'
+
+    @pytest.mark.parametrize("provider", REMOVED_PROVIDERS)
+    def test_removed_auth_subcommands_are_gone_from_the_cli(provider: str) -> None:
+        runner = CliRunner()
+        result = runner.invoke(auth_cli.app, [provider])
+        assert result.exit_code == 2, result.output
+>       assert f"No such command '{provider}'" in result.output, result.output
+E       AssertionError:                                                                                 
+E          Usage: auth gemini [OPTIONS] COMMAND [ARGS]...                                 
+E                                                                                         
+E          Sign in to your Gemini Code Assist license for the gemini provider.            
+E                                                                                         
+E         ╭─ Options ────────────────────────────────────────────────────────────────────╮
+E         │ --help          Show this message and exit.                                  │
+E         ╰──────────────────────────────────────────────────────────────────────────────╯
+E         ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+E         │ login   Sign in with your Google account (gemini-cli Cloud Code Assist       │
+E         │         flow).                                                               │
+E         │ status  Show Gemini sign-in status; exit 0 when signed in, 1 otherwise.      │
+E         │ logout  Remove Machina's Gemini token store (never gemini-cli's              │
+E         │         credentials).                                                        │
+E         ╰──────────────────────────────────────────────────────────────────────────────╯
+E         
+E       assert "No such command 'gemini'" in '                                                                                \n Usage: auth gemini [OPTIONS] COMMA...                                 │\n╰──────────────────────────────────────────────────────────────────────────────╯\n'
+E        +  where '                                                                                \n Usage: auth gemini [OPTIONS] COMMA...                                 │\n╰──────────────────────────────────────────────────────────────────────────────╯\n' = <Result SystemExit(2)>.output
+
+tests/test_subscription_removals.py:80: AssertionError
+________ test_auth_help_keeps_only_the_remaining_subscription_providers ________
+
+    def test_auth_help_keeps_only_the_remaining_subscription_providers() -> None:
+        result = CliRunner().invoke(auth_cli.app, ["--help"])
+        assert result.exit_code == 0, result.output
+        assert "chatgpt" in result.output
+        assert "copilot" in result.output
+        for removed in REMOVED_PROVIDERS:
+>           assert removed not in result.output, result.output
+E           AssertionError:                                                                                 
+E              Usage: auth [OPTIONS] COMMAND [ARGS]...                                        
+E                                                                                             
+E              Sign in to subscription LLM providers (chatgpt, claude, copilot, gemini).      
+E                                                                                             
+E             ╭─ Options ────────────────────────────────────────────────────────────────────╮
+E             │ --install-completion          Install completion for the current shell.      │
+E             │ --show-completion             Show completion for the current shell, to copy │
+E             │                               it or customize the installation.              │
+E             │ --help                        Show this message and exit.                    │
+E             ╰──────────────────────────────────────────────────────────────────────────────╯
+E             ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+E             │ login    Sign in with your ChatGPT account (browser PKCE flow).              │
+E             │ status   Show ChatGPT sign-in status; exit 0 when signed in, 1 otherwise.    │
+E             │ logout   Remove Machina's ChatGPT token store (never ~/.codex/auth.json).    │
+E             │ chatgpt  Sign in to your ChatGPT account for the chatgpt provider.           │
+E             │ claude   Sign in to your Claude Pro/Max subscription for the claude          │
+E             │          provider.                                                           │
+E             │ copilot  Sign in to your GitHub Copilot seat for the copilot provider.       │
+E             │ gemini   Sign in to your Gemini Code Assist license for the gemini provider. │
+E             ╰──────────────────────────────────────────────────────────────────────────────╯
+E             
+E             
+E           assert 'claude' not in '           ...───────╯\n\n'
+E             
+E             'claude' is contained here:
+E               (chatgpt, claude, copilot, gemini).      
+E             ?           ++++++
+E                                                                                               
+E               ╭─ Options ────────────────────────────────────────────────────────────────────╮
+E               │ --install-completion          Install completion for the current shell.      │...
+E             
+E             ...Full output truncated (15 lines hidden), use '-vv' to show
+
+tests/test_subscription_removals.py:90: AssertionError
+____ test_removed_modules_are_not_importable[machina.security.claude_auth] _____
+
+module = 'machina.security.claude_auth'
+
+    @pytest.mark.parametrize("module", REMOVED_MODULES)
+    def test_removed_modules_are_not_importable(module: str) -> None:
+        probe = subprocess.run(
+            [sys.executable, "-c", f"import importlib; importlib.import_module({module!r})"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+>       assert probe.returncode != 0, f"{module} is still importable"
+E       AssertionError: machina.security.claude_auth is still importable
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['/Users/shadow/machina/.venv/bin/python', '-c', "import importlib; importlib.import_module('machina.security.claude_auth')"], returncode=0, stdout='', stderr='environment file could not be resolved\n').returncode
+
+tests/test_subscription_removals.py:101: AssertionError
+____ test_removed_modules_are_not_importable[machina.security.gemini_auth] _____
+
+module = 'machina.security.gemini_auth'
+
+    @pytest.mark.parametrize("module", REMOVED_MODULES)
+    def test_removed_modules_are_not_importable(module: str) -> None:
+        probe = subprocess.run(
+            [sys.executable, "-c", f"import importlib; importlib.import_module({module!r})"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+>       assert probe.returncode != 0, f"{module} is still importable"
+E       AssertionError: machina.security.gemini_auth is still importable
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['/Users/shadow/machina/.venv/bin/python', '-c', "import importlib; importlib.import_module('machina.security.gemini_auth')"], returncode=0, stdout='', stderr='environment file could not be resolved\n').returncode
+
+tests/test_subscription_removals.py:101: AssertionError
+____ test_removed_modules_are_not_importable[machina.core.provider.claude] _____
+
+module = 'machina.core.provider.claude'
+
+    @pytest.mark.parametrize("module", REMOVED_MODULES)
+    def test_removed_modules_are_not_importable(module: str) -> None:
+        probe = subprocess.run(
+            [sys.executable, "-c", f"import importlib; importlib.import_module({module!r})"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+>       assert probe.returncode != 0, f"{module} is still importable"
+E       AssertionError: machina.core.provider.claude is still importable
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['/Users/shadow/machina/.venv/bin/python', '-c', "import importlib; importlib.import_module('machina.core.provider.claude')"], returncode=0, stdout='', stderr='environment file could not be resolved\n').returncode
+
+tests/test_subscription_removals.py:101: AssertionError
+____ test_removed_modules_are_not_importable[machina.core.provider.gemini] _____
+
+module = 'machina.core.provider.gemini'
+
+    @pytest.mark.parametrize("module", REMOVED_MODULES)
+    def test_removed_modules_are_not_importable(module: str) -> None:
+        probe = subprocess.run(
+            [sys.executable, "-c", f"import importlib; importlib.import_module({module!r})"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+>       assert probe.returncode != 0, f"{module} is still importable"
+E       AssertionError: machina.core.provider.gemini is still importable
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['/Users/shadow/machina/.venv/bin/python', '-c', "import importlib; importlib.import_module('machina.core.provider.gemini')"], returncode=0, stdout='', stderr='environment file could not be resolved\n').returncode
+
+tests/test_subscription_removals.py:101: AssertionError
+__ test_provider_facade_no_longer_exports_removed_transports[ClaudeProvider] ___
+
+attribute = 'ClaudeProvider'
+
+    @pytest.mark.parametrize("attribute", ["ClaudeProvider", "GeminiProvider"])
+    def test_provider_facade_no_longer_exports_removed_transports(attribute: str) -> None:
+        import machina.core.provider as provider_package
+    
+>       assert not hasattr(provider_package, attribute)
+E       AssertionError: assert not True
+E        +  where True = hasattr(<module 'machina.core.provider' from '/Users/shadow/machina/machina/core/provider/__init__.py'>, 'ClaudeProvider')
+
+tests/test_subscription_removals.py:109: AssertionError
+__ test_provider_facade_no_longer_exports_removed_transports[GeminiProvider] ___
+
+attribute = 'GeminiProvider'
+
+    @pytest.mark.parametrize("attribute", ["ClaudeProvider", "GeminiProvider"])
+    def test_provider_facade_no_longer_exports_removed_transports(attribute: str) -> None:
+        import machina.core.provider as provider_package
+    
+>       assert not hasattr(provider_package, attribute)
+E       AssertionError: assert not True
+E        +  where True = hasattr(<module 'machina.core.provider' from '/Users/shadow/machina/machina/core/provider/__init__.py'>, 'GeminiProvider')
+
+tests/test_subscription_removals.py:109: AssertionError
+________________ test_no_machina_source_mentions_a_removed_flow ________________
+
+    def test_no_machina_source_mentions_a_removed_flow() -> None:
+        offenders: list[str] = []
+        for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for token in FORBIDDEN_SOURCE_TOKENS:
+                if token in text:
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}: {token}")
+>       assert not offenders, offenders
+E       AssertionError: ['machina/cli/auth.py: claude_auth', 'machina/cli/auth.py: gemini_auth', 'machina/cli/auth.py: auth claude', 'machina/...gemini', 'machina/core/provider/__init__.py: ClaudeProvider', 'machina/core/provider/__init__.py: GeminiProvider', ...]
+E       assert not ['machina/cli/auth.py: claude_auth', 'machina/cli/auth.py: gemini_auth', 'machina/cli/auth.py: auth claude', 'machina/...gemini', 'machina/core/provider/__init__.py: ClaudeProvider', 'machina/core/provider/__init__.py: GeminiProvider', ...]
+
+tests/test_subscription_removals.py:121: AssertionError
+______________ test_kimi_spec_pins_endpoint_key_and_default_model ______________
+
+    def test_kimi_spec_pins_endpoint_key_and_default_model() -> None:
+>       spec = PROVIDER_SPECS["kimi"]
+               ^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'kimi'
+
+tests/test_kimi_provider.py:38: KeyError
+________________ test_kimi_key_is_registered_in_config_plumbing ________________
+
+    def test_kimi_key_is_registered_in_config_plumbing() -> None:
+>       assert DEFAULTS["kimi_api_key"] == ""
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'kimi_api_key'
+
+tests/test_kimi_provider.py:51: KeyError
+___________ test_kimi_context_windows_match_the_documented_model_ids ___________
+
+    def test_kimi_context_windows_match_the_documented_model_ids() -> None:
+>       assert context_window_for("k3") == 1_048_576
+E       AssertionError: assert 32000 == 1048576
+E        +  where 32000 = context_window_for('k3')
+
+tests/test_kimi_provider.py:61: AssertionError
+_________ test_kimi_resolves_through_the_factory_to_a_direct_provider __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d466ba0>
+
+    async def test_kimi_resolves_through_the_factory_to_a_direct_provider(monkeypatch) -> None:
+        monkeypatch.setenv("KIMI_API_KEY", "kimi-test-key")
+>       provider = get_provider("kimi")
+                   ^^^^^^^^^^^^^^^^^^^^
+
+tests/test_kimi_provider.py:69: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+provider = 'kimi', model = None, reasoning_effort = None
+
+    def get_provider(
+        provider: str = "openrouter",
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> LLMProvider:
+        """Factory: return the configured provider.
+    
+        ``reasoning_effort`` (low|medium|high) optionally pins the reasoning depth;
+        otherwise each provider falls back to the ``reasoning_effort`` config key.
+        """
+        if provider == "openrouter":
+            return OpenRouterProvider(
+                model=model or "openrouter/free", reasoning_effort=reasoning_effort
+            )
+        elif provider == "anthropic":
+            return AnthropicProvider(
+                model=model or AnthropicProvider.DEFAULT_MODEL, reasoning_effort=reasoning_effort
+            )
+        elif provider == "chatgpt":
+            # ChatGPT subscription tokens (Codex protocol); no API key involved.
+            return ChatGPTProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "claude":
+            # Claude Pro/Max subscription tokens (Claude Code OAuth); no API key.
+            return ClaudeProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "copilot":
+            # GitHub Copilot seat (GitHub token); no API key.
+            return CopilotProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "gemini":
+            # Gemini Code Assist license (gemini-cli Cloud Code Assist OAuth).
+            return GeminiProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "custom":
+            return _custom_provider(model, reasoning_effort)
+        elif provider == "ollama":
+            return OllamaProvider(model=model or "llama3.1", reasoning_effort=reasoning_effort)
+        spec = PROVIDER_SPECS.get(provider)
+        if spec is not None:
+            if provider == "opencode":
+                spec = _opencode_spec()
+            return DirectProvider(
+                spec, model=model or spec.default_model, reasoning_effort=reasoning_effort
+            )
+        named = _named_provider(provider, model, reasoning_effort)
+        if named is not None:
+            return named
+>       raise ValidationError(
+            f"Unknown provider: {provider}. Choose one of: {', '.join(provider_names())}"
+        )
+E       machina.core.exceptions.ValidationError: Unknown provider: kimi. Choose one of: openrouter, openai, deepseek, xai, groq, together, mistral, google, opencode, anthropic, chatgpt, claude, copilot, gemini, custom, ollama
+
+machina/core/provider/factory.py:144: ValidationError
+________________________ test_kimi_requires_the_api_key ________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d3dbe30>
+
+    def test_kimi_requires_the_api_key(monkeypatch) -> None:
+        monkeypatch.delenv("KIMI_API_KEY", raising=False)
+>       with pytest.raises(ValidationError, match="KIMI_API_KEY"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'KIMI_API_KEY'
+E         Actual message: 'Unknown provider: kimi. Choose one of: openrouter, openai, deepseek, xai, groq, together, mistral, google, opencode, anthropic, chatgpt, claude, copilot, gemini, custom, ollama'
+
+tests/test_kimi_provider.py:82: AssertionError
+____________________ test_kimi_chat_completions_wire_shape _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d2d62a0>
+
+    async def test_kimi_chat_completions_wire_shape(monkeypatch) -> None:
+        """E2E payload shape through the real transport with a mocked network."""
+        monkeypatch.setenv("KIMI_API_KEY", "kimi-test-key")
+        captured: list[httpx.Request] = []
+    
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "model": KIMI_MODEL,
+                    "choices": [{"message": {"content": "OK", "tool_calls": []}}],
+                    "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+                },
+            )
+    
+>       provider = get_provider("kimi")
+                   ^^^^^^^^^^^^^^^^^^^^
+
+tests/test_kimi_provider.py:102: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+provider = 'kimi', model = None, reasoning_effort = None
+
+    def get_provider(
+        provider: str = "openrouter",
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> LLMProvider:
+        """Factory: return the configured provider.
+    
+        ``reasoning_effort`` (low|medium|high) optionally pins the reasoning depth;
+        otherwise each provider falls back to the ``reasoning_effort`` config key.
+        """
+        if provider == "openrouter":
+            return OpenRouterProvider(
+                model=model or "openrouter/free", reasoning_effort=reasoning_effort
+            )
+        elif provider == "anthropic":
+            return AnthropicProvider(
+                model=model or AnthropicProvider.DEFAULT_MODEL, reasoning_effort=reasoning_effort
+            )
+        elif provider == "chatgpt":
+            # ChatGPT subscription tokens (Codex protocol); no API key involved.
+            return ChatGPTProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "claude":
+            # Claude Pro/Max subscription tokens (Claude Code OAuth); no API key.
+            return ClaudeProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "copilot":
+            # GitHub Copilot seat (GitHub token); no API key.
+            return CopilotProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "gemini":
+            # Gemini Code Assist license (gemini-cli Cloud Code Assist OAuth).
+            return GeminiProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "custom":
+            return _custom_provider(model, reasoning_effort)
+        elif provider == "ollama":
+            return OllamaProvider(model=model or "llama3.1", reasoning_effort=reasoning_effort)
+        spec = PROVIDER_SPECS.get(provider)
+        if spec is not None:
+            if provider == "opencode":
+                spec = _opencode_spec()
+            return DirectProvider(
+                spec, model=model or spec.default_model, reasoning_effort=reasoning_effort
+            )
+        named = _named_provider(provider, model, reasoning_effort)
+        if named is not None:
+            return named
+>       raise ValidationError(
+            f"Unknown provider: {provider}. Choose one of: {', '.join(provider_names())}"
+        )
+E       machina.core.exceptions.ValidationError: Unknown provider: kimi. Choose one of: openrouter, openai, deepseek, xai, groq, together, mistral, google, opencode, anthropic, chatgpt, claude, copilot, gemini, custom, ollama
+
+machina/core/provider/factory.py:144: ValidationError
+________ test_kimi_reasoning_effort_uses_the_documented_top_level_param ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d2e6850>
+
+    async def test_kimi_reasoning_effort_uses_the_documented_top_level_param(monkeypatch) -> None:
+        monkeypatch.setenv("KIMI_API_KEY", "kimi-test-key")
+>       provider = get_provider("kimi", reasoning_effort="high")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_kimi_provider.py:131: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+provider = 'kimi', model = None, reasoning_effort = 'high'
+
+    def get_provider(
+        provider: str = "openrouter",
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> LLMProvider:
+        """Factory: return the configured provider.
+    
+        ``reasoning_effort`` (low|medium|high) optionally pins the reasoning depth;
+        otherwise each provider falls back to the ``reasoning_effort`` config key.
+        """
+        if provider == "openrouter":
+            return OpenRouterProvider(
+                model=model or "openrouter/free", reasoning_effort=reasoning_effort
+            )
+        elif provider == "anthropic":
+            return AnthropicProvider(
+                model=model or AnthropicProvider.DEFAULT_MODEL, reasoning_effort=reasoning_effort
+            )
+        elif provider == "chatgpt":
+            # ChatGPT subscription tokens (Codex protocol); no API key involved.
+            return ChatGPTProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "claude":
+            # Claude Pro/Max subscription tokens (Claude Code OAuth); no API key.
+            return ClaudeProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "copilot":
+            # GitHub Copilot seat (GitHub token); no API key.
+            return CopilotProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "gemini":
+            # Gemini Code Assist license (gemini-cli Cloud Code Assist OAuth).
+            return GeminiProvider(model=model, reasoning_effort=reasoning_effort)
+        elif provider == "custom":
+            return _custom_provider(model, reasoning_effort)
+        elif provider == "ollama":
+            return OllamaProvider(model=model or "llama3.1", reasoning_effort=reasoning_effort)
+        spec = PROVIDER_SPECS.get(provider)
+        if spec is not None:
+            if provider == "opencode":
+                spec = _opencode_spec()
+            return DirectProvider(
+                spec, model=model or spec.default_model, reasoning_effort=reasoning_effort
+            )
+        named = _named_provider(provider, model, reasoning_effort)
+        if named is not None:
+            return named
+>       raise ValidationError(
+            f"Unknown provider: {provider}. Choose one of: {', '.join(provider_names())}"
+        )
+E       machina.core.exceptions.ValidationError: Unknown provider: kimi. Choose one of: openrouter, openai, deepseek, xai, groq, together, mistral, google, opencode, anthropic, chatgpt, claude, copilot, gemini, custom, ollama
+
+machina/core/provider/factory.py:144: ValidationError
+________________ test_kimi_runtime_readiness_reports_key_state _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d4f4fa0>
+
+    def test_kimi_runtime_readiness_reports_key_state(monkeypatch) -> None:
+        from machina.core import runtime as runtime_mod
+    
+        monkeypatch.setattr(config, "_session_overrides", {"provider": "kimi"})
+        monkeypatch.setenv("KIMI_API_KEY", "kimi-test-key")
+        report = runtime_mod._detect_providers()
+>       assert report["chat_provider"] == "ready"
+E       AssertionError: assert 'unavailable' == 'ready'
+E         
+E         - ready
+E         + unavailable
+
+tests/test_kimi_provider.py:144: AssertionError
+______________ test_kimi_is_reserved_against_user_added_shadowing ______________
+
+    def test_kimi_is_reserved_against_user_added_shadowing() -> None:
+        from machina.security.providers import RESERVED_NAMES
+    
+>       assert "kimi" in RESERVED_NAMES
+E       AssertionError: assert 'kimi' in frozenset({'anthropic', 'chatgpt', 'claude', 'copilot', 'custom', 'deepseek', ...})
+
+tests/test_kimi_provider.py:157: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_subscription_removals.py::test_removed_providers_answer_the_generic_unknown_provider_error[claude]
+FAILED tests/test_subscription_removals.py::test_removed_providers_answer_the_generic_unknown_provider_error[gemini]
+FAILED tests/test_subscription_removals.py::test_removed_auth_subcommands_are_gone_from_the_cli[claude]
+FAILED tests/test_subscription_removals.py::test_removed_auth_subcommands_are_gone_from_the_cli[gemini]
+FAILED tests/test_subscription_removals.py::test_auth_help_keeps_only_the_remaining_subscription_providers
+FAILED tests/test_subscription_removals.py::test_removed_modules_are_not_importable[machina.security.claude_auth]
+FAILED tests/test_subscription_removals.py::test_removed_modules_are_not_importable[machina.security.gemini_auth]
+FAILED tests/test_subscription_removals.py::test_removed_modules_are_not_importable[machina.core.provider.claude]
+FAILED tests/test_subscription_removals.py::test_removed_modules_are_not_importable[machina.core.provider.gemini]
+FAILED tests/test_subscription_removals.py::test_provider_facade_no_longer_exports_removed_transports[ClaudeProvider]
+FAILED tests/test_subscription_removals.py::test_provider_facade_no_longer_exports_removed_transports[GeminiProvider]
+FAILED tests/test_subscription_removals.py::test_no_machina_source_mentions_a_removed_flow
+FAILED tests/test_kimi_provider.py::test_kimi_spec_pins_endpoint_key_and_default_model
+FAILED tests/test_kimi_provider.py::test_kimi_key_is_registered_in_config_plumbing
+FAILED tests/test_kimi_provider.py::test_kimi_context_windows_match_the_documented_model_ids
+FAILED tests/test_kimi_provider.py::test_kimi_resolves_through_the_factory_to_a_direct_provider
+FAILED tests/test_kimi_provider.py::test_kimi_requires_the_api_key - Assertio...
+FAILED tests/test_kimi_provider.py::test_kimi_chat_completions_wire_shape - m...
+FAILED tests/test_kimi_provider.py::test_kimi_reasoning_effort_uses_the_documented_top_level_param
+FAILED tests/test_kimi_provider.py::test_kimi_runtime_readiness_reports_key_state
+FAILED tests/test_kimi_provider.py::test_kimi_is_reserved_against_user_added_shadowing
+21 failed in 1.80s

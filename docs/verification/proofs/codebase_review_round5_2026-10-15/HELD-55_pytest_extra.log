@@ -1,0 +1,8 @@
+    async with db.acquire() as conn:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_integration.py::TestSessionContextIntegration::test_context_crud_with_mock_db
+1 failed, 155 passed, 1 warning in 12.39s

@@ -1,0 +1,4 @@
+== ruff format --check ==
+3 files already formatted
+== ruff check ==
+All checks passed!

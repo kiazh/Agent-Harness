@@ -1,0 +1,781 @@
+........................................................................ [ 43%]
+........................................FFFFFFFFFFFFF......FFFFF..FFFFFF [ 86%]
+FFFF.FFFFFFF......F.FF                                                   [100%]
+=================================== FAILURES ===================================
+_ test_git_grep_walks_require_review[git grep --untracked --no-exclude-standard REVIEW_TOKEN] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re0/Users/shadow/project')
+command = 'git grep --untracked --no-exclude-standard REVIEW_TOKEN'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep --untracked --no-exclude-standard REVIEW_TOKEN', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+_ test_git_grep_walks_require_review[git grep --no-exclude-standard REVIEW_TOKEN] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re1/Users/shadow/project')
+command = 'git grep --no-exclude-standard REVIEW_TOKEN'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep --no-exclude-standard REVIEW_TOKEN', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+__________ test_git_grep_walks_require_review[git grep REVIEW_TOKEN] ___________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re2/Users/shadow/project')
+command = 'git grep REVIEW_TOKEN'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep REVIEW_TOKEN', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+_________ test_git_grep_walks_require_review[git grep REVIEW_TOKEN .] __________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re3/Users/shadow/project')
+command = 'git grep REVIEW_TOKEN .'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep REVIEW_TOKEN .', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+________ test_git_grep_walks_require_review[git grep REVIEW_TOKEN src] _________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re4/Users/shadow/project')
+command = 'git grep REVIEW_TOKEN src'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep REVIEW_TOKEN src', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+_________ test_git_grep_walks_require_review[git grep -e REVIEW_TOKEN] _________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re5/Users/shadow/project')
+command = 'git grep -e REVIEW_TOKEN'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep -e REVIEW_TOKEN', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+______ test_git_grep_walks_require_review[git grep --regexp=REVIEW_TOKEN] ______
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re6/Users/shadow/project')
+command = 'git grep --regexp=REVIEW_TOKEN'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep --regexp=REVIEW_TOKEN', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+_ test_git_grep_walks_require_review[git grep --untracked REVIEW_TOKEN '*.env'] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re7/Users/shadow/project')
+command = "git grep --untracked REVIEW_TOKEN '*.env'"
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+        assert decision.verdict == "pending", (command, decision.reason)
+>       assert "opaque_execution_review" in decision.reason
+E       AssertionError: assert 'opaque_execution_review' in 'sensitive capability requires explicit approval: credential_access'
+E        +  where 'sensitive capability requires explicit approval: credential_access' = Decision(verdict='pending', reason='sensitive capability requires explicit approval: credential_access', request=Actio...k/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re7/Users/shadow/project')).reason
+
+tests/test_permission_risk_policy.py:599: AssertionError
+_________ test_git_grep_walks_require_review[git grep -f patterns.txt] _________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re8/Users/shadow/project')
+command = 'git grep -f patterns.txt'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+        assert decision.verdict == "pending", (command, decision.reason)
+>       assert "opaque_execution_review" in decision.reason
+E       AssertionError: assert 'opaque_execution_review' in 'write/exec or out-of-scope access requires approval'
+E        +  where 'write/exec or out-of-scope access requires approval' = Decision(verdict='pending', reason='write/exec or out-of-scope access requires approval', request=ActionRequest(reques...k/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re8/Users/shadow/project')).reason
+
+tests/test_permission_risk_policy.py:599: AssertionError
+___ test_git_grep_walks_require_review[git grep -Osh REVIEW_TOKEN README.md] ___
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re9/Users/shadow/project')
+command = 'git grep -Osh REVIEW_TOKEN README.md'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep -Osh REVIEW_TOKEN README.md', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+__ test_git_grep_walks_require_review[git grep -nOsh REVIEW_TOKEN README.md] ___
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re10/Users/shadow/project')
+command = 'git grep -nOsh REVIEW_TOKEN README.md'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep -nOsh REVIEW_TOKEN README.md', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+_ test_git_grep_walks_require_review[git grep --open-files-in-pager=sh REVIEW_TOKEN README.md] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re11/Users/shadow/project')
+command = 'git grep --open-files-in-pager=sh REVIEW_TOKEN README.md'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git grep --open-files-in-pager=sh REVIEW_TOKEN README.md', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+_ test_git_grep_walks_require_review[uv run git grep --untracked REVIEW_TOKEN] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_grep_walks_require_re12/Users/shadow/project')
+command = 'uv run git grep --untracked REVIEW_TOKEN'
+
+    @pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+    def test_git_grep_walks_require_review(workspace, command):
+        (workspace / "src").mkdir()
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('uv run git grep --untracked REVIEW_TOKEN', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:598: AssertionError
+_ test_git_revspec_credential_operands_require_credential_access[git show HEAD:credentials] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_revspec_credential_op0/Users/shadow/project')
+command = 'git show HEAD:credentials'
+
+    @pytest.mark.parametrize("command", GIT_REVSPEC_CREDENTIAL_COMMANDS)
+    def test_git_revspec_credential_operands_require_credential_access(workspace, command):
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git show HEAD:credentials', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:643: AssertionError
+_ test_git_revspec_credential_operands_require_credential_access[git show HEAD:.netrc] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_revspec_credential_op1/Users/shadow/project')
+command = 'git show HEAD:.netrc'
+
+    @pytest.mark.parametrize("command", GIT_REVSPEC_CREDENTIAL_COMMANDS)
+    def test_git_revspec_credential_operands_require_credential_access(workspace, command):
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git show HEAD:.netrc', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:643: AssertionError
+_ test_git_revspec_credential_operands_require_credential_access[git show HEAD:id_rsa] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_revspec_credential_op2/Users/shadow/project')
+command = 'git show HEAD:id_rsa'
+
+    @pytest.mark.parametrize("command", GIT_REVSPEC_CREDENTIAL_COMMANDS)
+    def test_git_revspec_credential_operands_require_credential_access(workspace, command):
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git show HEAD:id_rsa', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:643: AssertionError
+_ test_git_revspec_credential_operands_require_credential_access[git show HEAD:credentials.bak] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_revspec_credential_op3/Users/shadow/project')
+command = 'git show HEAD:credentials.bak'
+
+    @pytest.mark.parametrize("command", GIT_REVSPEC_CREDENTIAL_COMMANDS)
+    def test_git_revspec_credential_operands_require_credential_access(workspace, command):
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git show HEAD:credentials.bak', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:643: AssertionError
+_ test_git_revspec_credential_operands_require_credential_access[git show HEAD:.env-backup] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_git_revspec_credential_op4/Users/shadow/project')
+command = 'git show HEAD:.env-backup'
+
+    @pytest.mark.parametrize("command", GIT_REVSPEC_CREDENTIAL_COMMANDS)
+    def test_git_revspec_credential_operands_require_credential_access(workspace, command):
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('git show HEAD:.env-backup', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:643: AssertionError
+______________ test_credential_backup_names_require_review[.env~] ______________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_credential_backup_names_r0/Users/shadow/project')
+path = '.env~'
+
+    @pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+    def test_credential_backup_names_require_review(workspace, path):
+        decision = decide(build_request(operation="file.read", targets=[path]))
+>       assert decision.verdict == "pending", (path, decision.reason)
+E       AssertionError: ('.env~', 'trusted project read')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:676: AssertionError
+___________ test_credential_backup_names_require_review[.env-backup] ___________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_credential_backup_names_r1/Users/shadow/project')
+path = '.env-backup'
+
+    @pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+    def test_credential_backup_names_require_review(workspace, path):
+        decision = decide(build_request(operation="file.read", targets=[path]))
+>       assert decision.verdict == "pending", (path, decision.reason)
+E       AssertionError: ('.env-backup', 'trusted project read')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:676: AssertionError
+__________ test_credential_backup_names_require_review[credentials~] ___________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_credential_backup_names_r2/Users/shadow/project')
+path = 'credentials~'
+
+    @pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+    def test_credential_backup_names_require_review(workspace, path):
+        decision = decide(build_request(operation="file.read", targets=[path]))
+>       assert decision.verdict == "pending", (path, decision.reason)
+E       AssertionError: ('credentials~', 'trusted project read')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:676: AssertionError
+_________ test_credential_backup_names_require_review[credentials.bak] _________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_credential_backup_names_r3/Users/shadow/project')
+path = 'credentials.bak'
+
+    @pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+    def test_credential_backup_names_require_review(workspace, path):
+        decision = decide(build_request(operation="file.read", targets=[path]))
+>       assert decision.verdict == "pending", (path, decision.reason)
+E       AssertionError: ('credentials.bak', 'trusted project read')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:676: AssertionError
+__________ test_credential_backup_names_require_review[credentials.1] __________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_credential_backup_names_r4/Users/shadow/project')
+path = 'credentials.1'
+
+    @pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+    def test_credential_backup_names_require_review(workspace, path):
+        decision = decide(build_request(operation="file.read", targets=[path]))
+>       assert decision.verdict == "pending", (path, decision.reason)
+E       AssertionError: ('credentials.1', 'trusted project read')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:676: AssertionError
+_____ test_credential_backup_names_require_review[deploy/production.env~] ______
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_credential_backup_names_r5/Users/shadow/project')
+path = 'deploy/production.env~'
+
+    @pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+    def test_credential_backup_names_require_review(workspace, path):
+        decision = decide(build_request(operation="file.read", targets=[path]))
+>       assert decision.verdict == "pending", (path, decision.reason)
+E       AssertionError: ('deploy/production.env~', 'trusted project read')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:676: AssertionError
+___________ test_credential_backup_names_require_review[.netrc.bak] ____________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_credential_backup_names_r6/Users/shadow/project')
+path = '.netrc.bak'
+
+    @pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+    def test_credential_backup_names_require_review(workspace, path):
+        decision = decide(build_request(operation="file.read", targets=[path]))
+>       assert decision.verdict == "pending", (path, decision.reason)
+E       AssertionError: ('.netrc.bak', 'trusted project read')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:676: AssertionError
+__________ test_credential_backup_names_require_review[.netrc_backup] __________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_credential_backup_names_r7/Users/shadow/project')
+path = '.netrc_backup'
+
+    @pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+    def test_credential_backup_names_require_review(workspace, path):
+        decision = decide(build_request(operation="file.read", targets=[path]))
+>       assert decision.verdict == "pending", (path, decision.reason)
+E       AssertionError: ('.netrc_backup', 'trusted project read')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:676: AssertionError
+___________ test_credential_backup_names_require_review[id_rsa.bak] ____________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_credential_backup_names_r8/Users/shadow/project')
+path = 'id_rsa.bak'
+
+    @pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+    def test_credential_backup_names_require_review(workspace, path):
+        decision = decide(build_request(operation="file.read", targets=[path]))
+>       assert decision.verdict == "pending", (path, decision.reason)
+E       AssertionError: ('id_rsa.bak', 'trusted project read')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:676: AssertionError
+_________ test_terminal_read_of_backup_credential_name_requires_review _________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_terminal_read_of_backup_c0/Users/shadow/project')
+
+    def test_terminal_read_of_backup_credential_name_requires_review(workspace):
+        decision = decide(_terminal_request("cat credentials.bak"))
+>       assert decision.verdict == "pending"
+E       AssertionError: assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:682: AssertionError
+___________ test_calibrated_bare_flags_stay_routine[wc -c README.md] ___________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_calibrated_bare_flags_sta0/Users/shadow/project')
+command = 'wc -c README.md'
+
+    @pytest.mark.parametrize("command", CALIBRATED_BARE_FLAG_COMMANDS)
+    def test_calibrated_bare_flags_stay_routine(workspace, command):
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "a.txt").write_text("a\n", encoding="utf-8")
+        (workspace / "b.txt").write_text("b\n", encoding="utf-8")
+>       assert decide(_terminal_request(command)).verdict == "allowed", command
+E       AssertionError: wc -c README.md
+E       assert 'pending' == 'allowed'
+E         
+E         - allowed
+E         + pending
+
+tests/test_permission_risk_policy.py:713: AssertionError
+________________ test_calibrated_bare_flags_stay_routine[ls -C] ________________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_calibrated_bare_flags_sta1/Users/shadow/project')
+command = 'ls -C'
+
+    @pytest.mark.parametrize("command", CALIBRATED_BARE_FLAG_COMMANDS)
+    def test_calibrated_bare_flags_stay_routine(workspace, command):
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "a.txt").write_text("a\n", encoding="utf-8")
+        (workspace / "b.txt").write_text("b\n", encoding="utf-8")
+>       assert decide(_terminal_request(command)).verdict == "allowed", command
+E       AssertionError: ls -C
+E       assert 'pending' == 'allowed'
+E         
+E         - allowed
+E         + pending
+
+tests/test_permission_risk_policy.py:713: AssertionError
+________________ test_calibrated_bare_flags_stay_routine[ls -o] ________________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_calibrated_bare_flags_sta2/Users/shadow/project')
+command = 'ls -o'
+
+    @pytest.mark.parametrize("command", CALIBRATED_BARE_FLAG_COMMANDS)
+    def test_calibrated_bare_flags_stay_routine(workspace, command):
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "a.txt").write_text("a\n", encoding="utf-8")
+        (workspace / "b.txt").write_text("b\n", encoding="utf-8")
+>       assert decide(_terminal_request(command)).verdict == "allowed", command
+E       AssertionError: ls -o
+E       assert 'pending' == 'allowed'
+E         
+E         - allowed
+E         + pending
+
+tests/test_permission_risk_policy.py:713: AssertionError
+__ test_calibrated_bare_flags_stay_routine[grep -C 2 REVIEW_TOKEN README.md] ___
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_calibrated_bare_flags_sta3/Users/shadow/project')
+command = 'grep -C 2 REVIEW_TOKEN README.md'
+
+    @pytest.mark.parametrize("command", CALIBRATED_BARE_FLAG_COMMANDS)
+    def test_calibrated_bare_flags_stay_routine(workspace, command):
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "a.txt").write_text("a\n", encoding="utf-8")
+        (workspace / "b.txt").write_text("b\n", encoding="utf-8")
+>       assert decide(_terminal_request(command)).verdict == "allowed", command
+E       AssertionError: grep -C 2 REVIEW_TOKEN README.md
+E       assert 'pending' == 'allowed'
+E         
+E         - allowed
+E         + pending
+
+tests/test_permission_risk_policy.py:713: AssertionError
+________ test_calibrated_bare_flags_stay_routine[head -c 100 README.md] ________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_calibrated_bare_flags_sta4/Users/shadow/project')
+command = 'head -c 100 README.md'
+
+    @pytest.mark.parametrize("command", CALIBRATED_BARE_FLAG_COMMANDS)
+    def test_calibrated_bare_flags_stay_routine(workspace, command):
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "a.txt").write_text("a\n", encoding="utf-8")
+        (workspace / "b.txt").write_text("b\n", encoding="utf-8")
+>       assert decide(_terminal_request(command)).verdict == "allowed", command
+E       AssertionError: head -c 100 README.md
+E       assert 'pending' == 'allowed'
+E         
+E         - allowed
+E         + pending
+
+tests/test_permission_risk_policy.py:713: AssertionError
+_________ test_calibrated_bare_flags_stay_routine[diff -c a.txt b.txt] _________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_calibrated_bare_flags_sta5/Users/shadow/project')
+command = 'diff -c a.txt b.txt'
+
+    @pytest.mark.parametrize("command", CALIBRATED_BARE_FLAG_COMMANDS)
+    def test_calibrated_bare_flags_stay_routine(workspace, command):
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        (workspace / "a.txt").write_text("a\n", encoding="utf-8")
+        (workspace / "b.txt").write_text("b\n", encoding="utf-8")
+>       assert decide(_terminal_request(command)).verdict == "allowed", command
+E       AssertionError: diff -c a.txt b.txt
+E       assert 'pending' == 'allowed'
+E         
+E         - allowed
+E         + pending
+
+tests/test_permission_risk_policy.py:713: AssertionError
+__________ test_calibrated_flag_passes_the_real_broker_without_a_card __________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_calibrated_flag_passes_th0/Users/shadow/project')
+
+    async def test_calibrated_flag_passes_the_real_broker_without_a_card(workspace):
+        from machina.permissions.broker import permission_broker, set_approval_handler
+    
+        async def unexpected_card(card):
+            pytest.fail("calibrated benign flag requested approval")
+    
+        (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+        request = _terminal_request("grep -C 2 REVIEW_TOKEN README.md")
+        set_approval_handler(unexpected_card)
+        try:
+>           assert await permission_broker.guard(request) is request
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_permission_risk_policy.py:726: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/permissions/broker.py:181: in guard
+    return await self._guard_interactive(req, handler, principal)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/permissions/broker.py:251: in _guard_interactive
+    verdict = await asyncio.wait_for(
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:488: in wait_for
+    return await fut
+           ^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+card = {'request_id': 'b070220beaf540149ea41b71f93f02d2', 'session_id': '', 'turn_id': '', 'agent': '', ...}
+
+    async def unexpected_card(card):
+>       pytest.fail("calibrated benign flag requested approval")
+E       Failed: calibrated benign flag requested approval
+
+tests/test_permission_risk_policy.py:720: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 19:18:15,006 [AUDIT] {"timestamp": 1792019895.006026, "event": "permission_pending", "request_id": "b070220beaf540149ea41b71f93f02d2", "session_id": "", "turn_id": "", "agent_id": "", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "4f7f6e8abe3d98e1", "reason": "write/exec or out-of-scope access requires approval"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792019895.006026, "event": "permission_pending", "request_id": "b070220beaf540149ea41b71f93f02d2", "session_id": "", "turn_id": "", "agent_id": "", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "4f7f6e8abe3d98e1", "reason": "write/exec or out-of-scope access requires approval"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+___________ test_recursive_copy_of_unreadable_subdir_requires_review ___________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_recursive_copy_of_unreada0/Users/shadow/project')
+
+    def test_recursive_copy_of_unreadable_subdir_requires_review(workspace):
+        source = workspace / "archive-src"
+        locked = source / "locked"
+        locked.mkdir(parents=True)
+        (locked / "notes.txt").write_text("hidden\n", encoding="utf-8")
+        (workspace / "archive-dst").mkdir()
+        os.chmod(locked, 0o000)
+        try:
+            try:
+                list(locked.iterdir())
+            except OSError:
+                pass
+            else:  # only reached when the OS ignores directory modes (e.g. root)
+                pytest.skip("directory permissions are not enforced for this user")
+            decision = decide(_terminal_request("cp -R archive-src/. archive-dst"))
+>           assert decision.verdict == "pending"
+E           AssertionError: assert 'allowed' == 'pending'
+E             
+E             - pending
+E             + allowed
+
+tests/test_permission_risk_policy.py:771: AssertionError
+_________ test_recursive_copy_tree_scan_failures_fail_closed[iterdir] __________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_recursive_copy_tree_scan_0/Users/shadow/project')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1093916a0>
+failure = 'iterdir'
+
+    @pytest.mark.parametrize("failure", ["iterdir", "entry-stat"])
+    def test_recursive_copy_tree_scan_failures_fail_closed(workspace, monkeypatch, failure):
+        from pathlib import Path as _Path
+    
+        source = workspace / "flaky-src"
+        (source / "nested").mkdir(parents=True)
+        (workspace / "flaky-dst").mkdir()
+        real_iterdir = _Path.iterdir
+        real_is_dir = _Path.is_dir
+    
+        if failure == "iterdir":
+    
+            def broken_iterdir(self):
+                if self.name == "nested":
+                    raise PermissionError("injected unreadable directory")
+                return real_iterdir(self)
+    
+            monkeypatch.setattr(_Path, "iterdir", broken_iterdir)
+        else:
+    
+            def broken_is_dir(self):
+                if self.name == "nested":
+                    raise OSError("injected stat failure")
+                return real_is_dir(self)
+    
+            monkeypatch.setattr(_Path, "is_dir", broken_is_dir)
+    
+        decision = decide(_terminal_request("cp -R flaky-src/. flaky-dst"))
+>       assert decision.verdict == "pending"
+E       AssertionError: assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:814: AssertionError
+________ test_recursive_copy_tree_scan_failures_fail_closed[entry-stat] ________
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1541/test_recursive_copy_tree_scan_1/Users/shadow/project')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b66fc40>
+failure = 'entry-stat'
+
+    @pytest.mark.parametrize("failure", ["iterdir", "entry-stat"])
+    def test_recursive_copy_tree_scan_failures_fail_closed(workspace, monkeypatch, failure):
+        from pathlib import Path as _Path
+    
+        source = workspace / "flaky-src"
+        (source / "nested").mkdir(parents=True)
+        (workspace / "flaky-dst").mkdir()
+        real_iterdir = _Path.iterdir
+        real_is_dir = _Path.is_dir
+    
+        if failure == "iterdir":
+    
+            def broken_iterdir(self):
+                if self.name == "nested":
+                    raise PermissionError("injected unreadable directory")
+                return real_iterdir(self)
+    
+            monkeypatch.setattr(_Path, "iterdir", broken_iterdir)
+        else:
+    
+            def broken_is_dir(self):
+                if self.name == "nested":
+                    raise OSError("injected stat failure")
+                return real_is_dir(self)
+    
+            monkeypatch.setattr(_Path, "is_dir", broken_is_dir)
+    
+        decision = decide(_terminal_request("cp -R flaky-src/. flaky-dst"))
+>       assert decision.verdict == "pending"
+E       AssertionError: assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_permission_risk_policy.py:814: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep --untracked --no-exclude-standard REVIEW_TOKEN]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep --no-exclude-standard REVIEW_TOKEN]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep REVIEW_TOKEN]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep REVIEW_TOKEN .]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep REVIEW_TOKEN src]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep -e REVIEW_TOKEN]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep --regexp=REVIEW_TOKEN]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep --untracked REVIEW_TOKEN '*.env']
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep -f patterns.txt]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep -Osh REVIEW_TOKEN README.md]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep -nOsh REVIEW_TOKEN README.md]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[git grep --open-files-in-pager=sh REVIEW_TOKEN README.md]
+FAILED tests/test_permission_risk_policy.py::test_git_grep_walks_require_review[uv run git grep --untracked REVIEW_TOKEN]
+FAILED tests/test_permission_risk_policy.py::test_git_revspec_credential_operands_require_credential_access[git show HEAD:credentials]
+FAILED tests/test_permission_risk_policy.py::test_git_revspec_credential_operands_require_credential_access[git show HEAD:.netrc]
+FAILED tests/test_permission_risk_policy.py::test_git_revspec_credential_operands_require_credential_access[git show HEAD:id_rsa]
+FAILED tests/test_permission_risk_policy.py::test_git_revspec_credential_operands_require_credential_access[git show HEAD:credentials.bak]
+FAILED tests/test_permission_risk_policy.py::test_git_revspec_credential_operands_require_credential_access[git show HEAD:.env-backup]
+FAILED tests/test_permission_risk_policy.py::test_credential_backup_names_require_review[.env~]
+FAILED tests/test_permission_risk_policy.py::test_credential_backup_names_require_review[.env-backup]
+FAILED tests/test_permission_risk_policy.py::test_credential_backup_names_require_review[credentials~]
+FAILED tests/test_permission_risk_policy.py::test_credential_backup_names_require_review[credentials.bak]
+FAILED tests/test_permission_risk_policy.py::test_credential_backup_names_require_review[credentials.1]
+FAILED tests/test_permission_risk_policy.py::test_credential_backup_names_require_review[deploy/production.env~]
+FAILED tests/test_permission_risk_policy.py::test_credential_backup_names_require_review[.netrc.bak]
+FAILED tests/test_permission_risk_policy.py::test_credential_backup_names_require_review[.netrc_backup]
+FAILED tests/test_permission_risk_policy.py::test_credential_backup_names_require_review[id_rsa.bak]
+FAILED tests/test_permission_risk_policy.py::test_terminal_read_of_backup_credential_name_requires_review
+FAILED tests/test_permission_risk_policy.py::test_calibrated_bare_flags_stay_routine[wc -c README.md]
+FAILED tests/test_permission_risk_policy.py::test_calibrated_bare_flags_stay_routine[ls -C]
+FAILED tests/test_permission_risk_policy.py::test_calibrated_bare_flags_stay_routine[ls -o]
+FAILED tests/test_permission_risk_policy.py::test_calibrated_bare_flags_stay_routine[grep -C 2 REVIEW_TOKEN README.md]
+FAILED tests/test_permission_risk_policy.py::test_calibrated_bare_flags_stay_routine[head -c 100 README.md]
+FAILED tests/test_permission_risk_policy.py::test_calibrated_bare_flags_stay_routine[diff -c a.txt b.txt]
+FAILED tests/test_permission_risk_policy.py::test_calibrated_flag_passes_the_real_broker_without_a_card
+FAILED tests/test_permission_risk_policy.py::test_recursive_copy_of_unreadable_subdir_requires_review
+FAILED tests/test_permission_risk_policy.py::test_recursive_copy_tree_scan_failures_fail_closed[iterdir]
+FAILED tests/test_permission_risk_policy.py::test_recursive_copy_tree_scan_failures_fail_closed[entry-stat]
+38 failed, 128 passed in 1.40s

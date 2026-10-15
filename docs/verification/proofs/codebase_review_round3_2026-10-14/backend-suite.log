@@ -1,0 +1,311 @@
+........................................................................ [  1%]
+........................................................................ [  3%]
+........................................................................ [  5%]
+........................................................................ [  7%]
+........................................................................ [  8%]
+........................................................................ [ 10%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 16%]
+........................................................................ [ 17%]
+.....................F.................................................. [ 19%]
+...................................F.................................... [ 21%]
+........................................................................ [ 23%]
+........................................................................ [ 24%]
+........................................................................ [ 26%]
+........................................................................ [ 28%]
+........................................................................ [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 33%]
+........................................................................ [ 35%]
+........................................................................ [ 37%]
+........................................................................ [ 39%]
+........................................................................ [ 41%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+...............x........................................................ [ 46%]
+........................................................................ [ 48%]
+........................................................................ [ 49%]
+........................................................................ [ 51%]
+........................................................................ [ 53%]
+...................................s.................................... [ 55%]
+........................................................................ [ 57%]
+........................................................................ [ 58%]
+........................................................................ [ 60%]
+........................................................................ [ 62%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+........................................................................ [ 67%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 73%]
+........................................................................ [ 74%]
+........................................................................ [ 76%]
+........................................................................ [ 78%]
+........................................................................ [ 80%]
+........................................................................ [ 82%]
+........................................................................ [ 83%]
+........................................................................ [ 85%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 90%]
+........................................................................ [ 92%]
+........................................................................ [ 94%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+........................................................................ [ 99%]
+....                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_sdk_remote_call_runs_through_agent_approval_pipeline[boom-arguments2-boom-failed] _
+
+db_pool = <machina.db.connection.Database object at 0x1126b2a30>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10fa926d0>
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1303/test_sdk_remote_call_runs_thro2')
+remote = 'boom', arguments = {}, marker = 'boom', expected = 'failed'
+
+    @pytest.mark.parametrize(
+        "remote, arguments, marker, expected",
+        [
+            ("echo", {"text": "hello"}, "hello", "completed"),
+            ("slow", {"seconds": 2}, "outcome_unknown", "outcome_unknown"),
+            ("boom", {}, "boom", "failed"),
+            ("big", {"size": 10000}, "truncated", "completed"),
+            ("ask_user", {"question": "do you approve?"}, "Elicitation not supported", "failed"),
+        ],
+    )
+    async def test_sdk_remote_call_runs_through_agent_approval_pipeline(
+        db_pool, monkeypatch, tmp_path, remote, arguments, marker, expected
+    ):
+        pytest.importorskip("mcp")
+        from machina.connectors.execution import connect_authorized, prepare_connect
+        from machina.core.agent import BaseReActAgent
+        from machina.core.models import LLMResponse
+        from machina.core.runtime import runtime_services
+        from machina.core.session import session_manager
+        from machina.db.connection import db
+        from machina.permissions import store
+        from machina.permissions.broker import clear_execution_context, set_approval_handler
+    
+        monkeypatch.setattr(db, "_pool", db_pool.pool)
+        service = ConnectorService()
+        monkeypatch.setattr(runtime_services, "_connector_service", service)
+        owner = "mcp-test-" + uuid.uuid4().hex
+        session = await session_manager.create(agent_id=owner)
+        fixture = Path(__file__).parent / "support" / "mcp_fixture_server.py"
+        service.registry.add(
+            ConnectorConfig(
+                id="fixture",
+                command=sys.executable,
+                argv=[str(fixture.resolve()), "--name", uuid.uuid4().hex],
+                cwd=str(tmp_path),
+                max_retries=0,
+                call_timeout=0.1 if remote == "slow" else 5,
+                result_limit=256,
+            )
+        )
+        preview = await prepare_connect(service, "fixture", session_id=str(session.id), agent_id=owner)
+        await connect_authorized(
+            service,
+            "fixture",
+            session_id=str(session.id),
+            agent_id=owner,
+            expected_digest=preview["digest"],
+        )
+        try:
+            tools = await service.tools_list("fixture")
+            name = next(t["name"] for t in tools["tools"] if t["remote_name"] == remote)
+            response = LLMResponse(
+                content="",
+                model="fixture",
+                tool_calls=[
+                    {
+                        "id": "call1",
+                        "function": {
+                            "name": "mcp_call",
+                            "arguments": {"name": name, "arguments": arguments},
+                        },
+                    }
+                ],
+            )
+            agent = BaseReActAgent(provider=AsyncMock(), agent_id=owner, allowed_tools=["mcp_call"])
+            set_approval_handler(None)
+            made = []
+            events = [
+                event
+                async for event in agent._execute_tool_calls_stream(response, [], made, session.id)
+            ]
+            assert made[0].get("needs_approval"), made
+            assert not any("hello" == str(getattr(e, "tool_result", None)) for e in events)
+    
+            async def approve(card):
+                await store.resolve_decision(card["request_id"], "approved", "test-human")
+                return "approved"
+    
+            # Resume the already-created exact pending request through durable broker.
+            await store.resolve_decision(
+                made[0]["needs_approval"]["request_id"], "approved", "test-human"
+            )
+            set_approval_handler(approve, principal="test-human")
+            made = []
+>           completed = [
+                event
+                async for event in agent._execute_tool_calls_stream(response, [], made, session.id)
+            ]
+
+tests/test_connectors_execution.py:159: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/core/agent.py:1288: in _execute_tool_calls_stream
+    await context_manager.add_chunk(
+machina/core/context.py:198: in add_chunk
+    row = await db.fetchrow(query, *base_args)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/db/connection.py:147: in fetchrow
+    result = await conn.fetchrow(query, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:775: in fetchrow
+    data = await self._execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:1904: in _execute
+    result, _ = await self.__execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2003: in __execute
+    result, stmt = await self._do_execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2069: in _do_execute
+    result = await executor(stmt, timeout)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+E   DETAIL:  Process 38956 waits for RowShareLock on relation 541496 of database 541086; blocked by process 38977.
+E   Process 38977 waits for AccessExclusiveLock on relation 541518 of database 541086; blocked by process 38956.
+E   HINT:  See server log for query details.
+
+asyncpg/protocol/protocol.pyx:197: DeadlockDetectedError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 15:16:38,463 [AUDIT] {"timestamp": 1792005398.46311, "event": "permission_pending", "request_id": "d90a274225cf4bec98709953dd10842d", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "a24647f49fe7d798", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+2026-10-14 15:16:38,468 [AUDIT] {"timestamp": 1792005398.4689522, "event": "permission_allowed", "request_id": "d90a274225cf4bec98709953dd10842d", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "a24647f49fe7d798", "reason": "approval granted"}
+2026-10-14 15:16:38,885 [AUDIT] {"timestamp": 1792005398.8850482, "event": "tool_call_start", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "tool_name": "mcp_call"}
+2026-10-14 15:16:38,887 [AUDIT] {"timestamp": 1792005398.887351, "event": "permission_pending", "request_id": "4bb93d2402084adfa8f690e854973601", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_call", "tool": "mcp_call", "mode": "ask", "digest_prefix": "52bb787659529909", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+2026-10-14 15:16:38,889 [AUDIT] {"timestamp": 1792005398.8897972, "event": "tool_call_complete", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "tool_name": "mcp_call", "duration_ms": 4}
+2026-10-14 15:16:38,896 [AUDIT] {"timestamp": 1792005398.8968298, "event": "tool_call_start", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "tool_name": "mcp_call"}
+2026-10-14 15:16:38,898 [AUDIT] {"timestamp": 1792005398.898401, "event": "permission_pending", "request_id": "f8d28c97b21b46d096261f087f26abb3", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_call", "tool": "mcp_call", "mode": "ask", "digest_prefix": "52bb787659529909", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+2026-10-14 15:16:38,902 [AUDIT] {"timestamp": 1792005398.902105, "event": "permission_allowed", "request_id": "f8d28c97b21b46d096261f087f26abb3", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_call", "tool": "mcp_call", "mode": "ask", "digest_prefix": "52bb787659529909", "reason": "approval granted"}
+2026-10-14 15:16:39,016 [AUDIT] {"timestamp": 1792005399.016308, "event": "tool_call_complete", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "tool_name": "mcp_call", "duration_ms": 119}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005398.46311, "event": "permission_pending", "request_id": "d90a274225cf4bec98709953dd10842d", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "a24647f49fe7d798", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005398.4689522, "event": "permission_allowed", "request_id": "d90a274225cf4bec98709953dd10842d", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "a24647f49fe7d798", "reason": "approval granted"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005398.8850482, "event": "tool_call_start", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "tool_name": "mcp_call"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005398.887351, "event": "permission_pending", "request_id": "4bb93d2402084adfa8f690e854973601", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_call", "tool": "mcp_call", "mode": "ask", "digest_prefix": "52bb787659529909", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005398.8897972, "event": "tool_call_complete", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "tool_name": "mcp_call", "duration_ms": 4}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005398.8968298, "event": "tool_call_start", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "tool_name": "mcp_call"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005398.898401, "event": "permission_pending", "request_id": "f8d28c97b21b46d096261f087f26abb3", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_call", "tool": "mcp_call", "mode": "ask", "digest_prefix": "52bb787659529909", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005398.902105, "event": "permission_allowed", "request_id": "f8d28c97b21b46d096261f087f26abb3", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "turn_id": "", "agent_id": "mcp-test-a249495c7c8e4677a9645ccc3ee2771f", "operation": "tool.mcp_call", "tool": "mcp_call", "mode": "ask", "digest_prefix": "52bb787659529909", "reason": "approval granted"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005399.016308, "event": "tool_call_complete", "session_id": "d03bce3e-69ec-4248-9797-ae324d31425f", "tool_name": "mcp_call", "duration_ms": 119}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+________________ test_mutation_auth_failure_never_replays[401] _________________
+
+db_pool = <machina.db.connection.Database object at 0x112953390>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1125fad60>
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1303/test_mutation_auth_failure_nev0')
+auth_status = 401
+
+    @pytest.mark.db
+    @pytest.mark.parametrize("auth_status", [401, 403])
+    async def test_mutation_auth_failure_never_replays(db_pool, monkeypatch, tmp_path, auth_status):
+        """One counted effect, then transport 401/403: unknown, no replay."""
+        pytest.importorskip("mcp")
+        from machina.connectors.models import ConnectorToolError
+        from machina.core.session import session_manager
+        from machina.db.connection import db
+    
+        monkeypatch.setattr(db, "_pool", db_pool.pool)
+        from machina.core.runtime import runtime_services as _runtime_services
+    
+        monkeypatch.setattr(_runtime_services, "_connector_service", None)
+        monkeypatch.setattr(
+            "machina.core.execution_context.resolve_execution_context",
+            AsyncMock(return_value=AsyncMock(mode="ask", backend="host", workspace=tmp_path)),
+        )
+        fixture = OAuthFixture()
+        fixture.switches["revoke_on_mutate"] = True
+        fixture.switches["auth_failure_status"] = auth_status
+        await fixture.start()
+        try:
+            service, coordinator = _service(fixture, tmp_path=tmp_path)
+            monkeypatch.setattr(_runtime_services, "_connector_service", service)
+            owner = f"agent-{uuid.uuid4().hex[:8]}"
+            session = await session_manager.create(title="oauth-noreplay", agent_id=owner)
+            try:
+                oauth_owner = OAuthOwner(session_id=str(session.id), agent_id=owner)
+                await _login(service, coordinator, fixture, oauth_owner)
+                preview = await prepare_connect(
+                    service, "remote", session_id=str(session.id), agent_id=owner
+                )
+>               await connect_authorized(
+                    service,
+                    "remote",
+                    session_id=str(session.id),
+                    agent_id=owner,
+                    expected_digest=preview["digest"],
+                )
+
+tests/test_connectors_oauth_execution.py:210: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/connectors/execution.py:166: in connect_authorized
+    await broker.permission_broker.guard(request)
+machina/permissions/broker.py:181: in guard
+    return await self._guard_interactive(req, handler, principal)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/permissions/broker.py:243: in _guard_interactive
+    approval = await _store.create_approval(req, principal=principal)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/permissions/store.py:506: in create_approval
+    await conn.execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:380: in execute
+    _, status, _ = await self._execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:1904: in _execute
+    result, _ = await self.__execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2003: in __execute
+    result, stmt = await self._do_execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2069: in _do_execute
+    result = await executor(stmt, timeout)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+E   DETAIL:  Process 39070 waits for RowShareLock on relation 541496 of database 541086; blocked by process 39081.
+E   Process 39081 waits for ShareLock on relation 541849 of database 541086; blocked by process 39070.
+E   HINT:  See server log for query details.
+
+asyncpg/protocol/protocol.pyx:197: DeadlockDetectedError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 15:16:45,313 [AUDIT] {"timestamp": 1792005405.313021, "event": "permission_pending", "request_id": "bb6ab12354d6411ca9e61deb0a97f3d8", "session_id": "b445c7c1-1d5f-4da0-b384-300bd899fbdc", "turn_id": "", "agent_id": "agent-a212b374", "operation": "tool.mcp_oauth_authorize", "tool": "mcp_oauth_authorize", "mode": "ask", "digest_prefix": "dc4e037e7082eeb2", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+2026-10-14 15:16:45,320 [AUDIT] {"timestamp": 1792005405.3204968, "event": "permission_allowed", "request_id": "bb6ab12354d6411ca9e61deb0a97f3d8", "session_id": "b445c7c1-1d5f-4da0-b384-300bd899fbdc", "turn_id": "", "agent_id": "agent-a212b374", "operation": "tool.mcp_oauth_authorize", "tool": "mcp_oauth_authorize", "mode": "ask", "digest_prefix": "dc4e037e7082eeb2", "reason": "approval granted"}
+2026-10-14 15:16:45,517 [AUDIT] {"timestamp": 1792005405.517618, "event": "permission_pending", "request_id": "32a1e4baa4ff400f92f0652b7bbca391", "session_id": "b445c7c1-1d5f-4da0-b384-300bd899fbdc", "turn_id": "", "agent_id": "agent-a212b374", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "5279a55a0d774d4f", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005405.313021, "event": "permission_pending", "request_id": "bb6ab12354d6411ca9e61deb0a97f3d8", "session_id": "b445c7c1-1d5f-4da0-b384-300bd899fbdc", "turn_id": "", "agent_id": "agent-a212b374", "operation": "tool.mcp_oauth_authorize", "tool": "mcp_oauth_authorize", "mode": "ask", "digest_prefix": "dc4e037e7082eeb2", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005405.3204968, "event": "permission_allowed", "request_id": "bb6ab12354d6411ca9e61deb0a97f3d8", "session_id": "b445c7c1-1d5f-4da0-b384-300bd899fbdc", "turn_id": "", "agent_id": "agent-a212b374", "operation": "tool.mcp_oauth_authorize", "tool": "mcp_oauth_authorize", "mode": "ask", "digest_prefix": "dc4e037e7082eeb2", "reason": "approval granted"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792005405.517618, "event": "permission_pending", "request_id": "32a1e4baa4ff400f92f0652b7bbca391", "session_id": "b445c7c1-1d5f-4da0-b384-300bd899fbdc", "turn_id": "", "agent_id": "agent-a212b374", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "5279a55a0d774d4f", "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.permissions.store:store.py:522 durable approval create failed
+DeadlockDetectedError
+/Users/shadow/machina/machina/permissions/store.py:506 (create_approval)
+/Users/shadow/machina/.venv/lib/python3.14/site-packages/asyncpg/connection.py:380 (execute)
+/Users/shadow/machina/.venv/lib/python3.14/site-packages/asyncpg/connection.py:1904 (_execute)
+/Users/shadow/machina/.venv/lib/python3.14/site-packages/asyncpg/connection.py:2003 (__execute)
+/Users/shadow/machina/.venv/lib/python3.14/site-packages/asyncpg/connection.py:2069 (_do_execute)
+asyncpg/protocol/protocol.pyx:197 (bind_execute)
+=========================== short test summary info ============================
+FAILED tests/test_connectors_execution.py::test_sdk_remote_call_runs_through_agent_approval_pipeline[boom-arguments2-boom-failed]
+FAILED tests/test_connectors_oauth_execution.py::test_mutation_auth_failure_never_replays[401]
+2 failed, 4032 passed, 1 skipped, 9 deselected, 1 xfailed in 182.02s (0:03:02)

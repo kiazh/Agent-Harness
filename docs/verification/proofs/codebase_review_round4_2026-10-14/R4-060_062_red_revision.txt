@@ -1,0 +1,3 @@
+cdc52324aedebc60a05361b7ed5ea8cb530a31b3
+3aecb4f9496f5d81b0be8591124762d67828de01eb68f814a5db422359fcf74f  machina/permissions/policy.py
+5f6b18d7c55ac899ce59c87d32fba120605aee78a0c58dd1374fa4a6dff37d93  machina/permissions/commands.py

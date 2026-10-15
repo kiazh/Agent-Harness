@@ -1,0 +1,4 @@
+=========================== short test summary info ============================
+FAILED tests/test_chaos.py::TestDatabaseChaos::test_agent_handles_db_connection_drop
+FAILED tests/test_chaos.py::TestDatabaseChaos::test_agent_handles_db_pool_exhaustion
+2 failed, 1 passed in 1.49s

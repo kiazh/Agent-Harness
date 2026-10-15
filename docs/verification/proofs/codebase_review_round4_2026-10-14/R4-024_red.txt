@@ -1,0 +1,51 @@
+✖ R4-024 /provider switch mirrors the authoritative route into the session snapshot (6.796042ms)
+✖ R4-024 provider remove re-pins the session and the next turn uses the fallback (8.43475ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 278.413375
+
+✖ failing tests:
+
+test at test/state.test.ts:1090:1
+✖ R4-024 /provider switch mirrors the authoritative route into the session snapshot (6.796042ms)
+  AssertionError [ERR_ASSERTION]: the app snapshot follows the gateway's pinned provider
+  + actual - expected
+  
+  + 'openrouter'
+  - 'acme'
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/state.test.ts:1095:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'openrouter',
+    expected: 'acme',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/state.test.ts:1100:1
+✖ R4-024 provider remove re-pins the session and the next turn uses the fallback (8.43475ms)
+  AssertionError [ERR_ASSERTION]: next turn routes to the fallback; notices: success:Provider "acme" added — 1 model(s) pulled: acme-1.
+  Switch with /provider acme, then pick a model with /models (or /default-model). | success:provider = acme | success:Provider "acme" removed — store entry, MACHINA_PROVIDER_ACME_API_KEY line in .env, 1 cached model(s), registry entry. | warning:Active provider fell back to openrouter (model openrouter/free). Pick a new default with /provider and /models. | error:Unknown provider: acme. Choose one of: openrouter
+  + actual - expected
+  
+  + undefined
+  - 'openrouter'
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/state.test.ts:1114:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'openrouter',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

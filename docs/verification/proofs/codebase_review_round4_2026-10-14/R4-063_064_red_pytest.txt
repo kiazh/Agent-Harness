@@ -1,0 +1,213 @@
+FFFF.FFFF                                                                [100%]
+=================================== FAILURES ===================================
+__________________ test_structured_args_redacted_recursively ___________________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x10961c050>
+
+    def test_structured_args_redacted_recursively(caplog):
+        logger = logging.getLogger("machina.r4_obs.structured")
+    
+        with caplog.at_level(logging.WARNING, logger="machina.r4_obs.structured"):
+            logger.warning(
+                "payload %s",
+                {
+                    "api_key": _KEY,
+                    "nested": [{"token": _KEY}, ("plain", _KEY), {"deep": [{"x": _KEY}]}],
+                    "count": 3,
+                },
+            )
+    
+        assert len(caplog.records) == 1
+        record = caplog.records[0]
+        rendered = record.getMessage()
+>       assert _KEY not in rendered
+E       assert 'sk-R4OBS0123456789abcdef' not in "payload {'a... 'count': 3}"
+E         
+E         'sk-R4OBS0123456789abcdef' is contained here:
+E           'token': 'sk-R4OBS0123456789abcdef'}, ('plain', 'sk-R4OBS0123456789abcdef'), {'deep': [{'x': 'sk-R4OBS0123456789abcdef'}]}], 'count': 3}
+E         ?           ++++++++++++++++++++++++
+
+tests/test_r4_063_064_observability.py:62: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.r4_obs.structured:test_r4_063_064_observability.py:50 payload {'api_key': '[REDACTED_OPENAI_KEY]', 'nested': [{'token': 'sk-R4OBS0123456789abcdef'}, ('plain', 'sk-R4OBS0123456789abcdef'), {'deep': [{'x': 'sk-R4OBS0123456789abcdef'}]}], 'count': 3}
+_______________ test_structured_kwargs_and_mapping_args_redacted _______________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x10972efd0>
+
+    def test_structured_kwargs_and_mapping_args_redacted(caplog):
+        logger = logging.getLogger("machina.r4_obs.mapping")
+    
+        with caplog.at_level(logging.WARNING, logger="machina.r4_obs.mapping"):
+            # %-style mapping args (record.args is a dict) take the same path.
+            logger.warning("cfg %(user)s", {"user": _KEY})
+            logger.warning("list %s", [_KEY, [_KEY]])
+    
+        assert len(caplog.records) == 2
+        for record in caplog.records:
+>           assert _KEY not in record.getMessage()
+E           assert 'sk-R4OBS0123456789abcdef' not in "list ['sk-R...789abcdef']]"
+E             
+E             'sk-R4OBS0123456789abcdef' is contained here:
+E               list ['sk-R4OBS0123456789abcdef', ['sk-R4OBS0123456789abcdef']]
+E             ?        ++++++++++++++++++++++++
+
+tests/test_r4_063_064_observability.py:77: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.r4_obs.mapping:test_r4_063_064_observability.py:72 cfg [REDACTED_OPENAI_KEY]
+WARNING  machina.r4_obs.mapping:test_r4_063_064_observability.py:73 list ['sk-R4OBS0123456789abcdef', ['sk-R4OBS0123456789abcdef']]
+________________ test_raising_redactor_masks_and_never_escapes _________________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x10972f390>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109628cb0>
+
+    def test_raising_redactor_masks_and_never_escapes(caplog, monkeypatch):
+        import machina.memory.redaction as redaction
+    
+        def _boom(text):
+            raise RuntimeError("redactor down")
+    
+        monkeypatch.setattr(redaction, "redact_secrets", _boom)
+        logger = logging.getLogger("machina.r4_obs.raising")
+    
+        with caplog.at_level(logging.WARNING, logger="machina.r4_obs.raising"):
+            # A raising redactor must not raise into the caller...
+>           logger.warning("secret=%s structured=%s", _SECRET, {"api_key": _KEY})
+
+tests/test_r4_063_064_observability.py:91: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py:1532: in warning
+    self._log(WARNING, msg, args, **kwargs)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py:1663: in _log
+    record = self.makeRecord(self.name, level, fn, lno, msg, args,
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py:1632: in makeRecord
+    rv = _logRecordFactory(name, level, fn, lno, msg, args, exc_info, func,
+machina/observability/safe_logging.py:25: in factory
+    record.msg = value(record.msg)
+                 ^^^^^^^^^^^^^^^^^
+machina/observability/safe_logging.py:19: in value
+    return redaction.redact_secrets(item).text
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+text = 'secret=%s structured=%s'
+
+    def _boom(text):
+>       raise RuntimeError("redactor down")
+E       RuntimeError: redactor down
+
+tests/test_r4_063_064_observability.py:84: RuntimeError
+_______________ test_cyclic_structured_arg_masks_at_depth_bound ________________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x10959e060>
+
+    def test_cyclic_structured_arg_masks_at_depth_bound(caplog):
+        logger = logging.getLogger("machina.r4_obs.cyclic")
+        cyclic: dict = {"api_key": _KEY}
+        cyclic["self"] = cyclic
+    
+        with caplog.at_level(logging.WARNING, logger="machina.r4_obs.cyclic"):
+            logger.warning("cyclic %s", cyclic)
+    
+        assert len(caplog.records) == 1
+        rendered = caplog.records[0].getMessage()
+>       assert _KEY not in rendered  # secret redacted before the cycle bound
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       assert 'sk-R4OBS0123456789abcdef' not in "cyclic {'ap...lf': {...}}}"
+E         
+E         'sk-R4OBS0123456789abcdef' is contained here:
+E           pi_key': 'sk-R4OBS0123456789abcdef', 'self': {...}}}
+
+tests/test_r4_063_064_observability.py:111: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.r4_obs.cyclic:test_r4_063_064_observability.py:107 cyclic {'api_key': '[REDACTED_OPENAI_KEY]', 'self': {'api_key': 'sk-R4OBS0123456789abcdef', 'self': {...}}}
+________________ test_span_ring_exposes_dropped_tool_call_delta ________________
+
+    def test_span_ring_exposes_dropped_tool_call_delta():
+        start_turn("t-tools")
+        for index in range(MAX_SPANS_PER_TURN - 1 + 20):
+            with tool_span(f"tool-{index}", {}):
+                pass
+        end_turn("t-tools")
+    
+        report = turn_report("t-tools")
+        assert report["dropped_spans"] == 20
+>       assert report["dropped_tool_spans"] == 20
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'dropped_tool_spans'
+
+tests/test_r4_063_064_observability.py:137: KeyError
+_______________ test_span_ring_tool_delta_counts_only_tool_spans _______________
+
+    def test_span_ring_tool_delta_counts_only_tool_spans():
+        from machina.observability.traces import llm_span
+    
+        start_turn("t-mixed")
+        for index in range(MAX_SPANS_PER_TURN - 1 + 10):
+            if index % 2:
+                with tool_span(f"tool-{index}", {}):
+                    pass
+            else:
+                with llm_span("m"):
+                    pass
+        end_turn("t-mixed")
+        report = turn_report("t-mixed")
+        # The 10 evicted spans alternate llm/tool: only the tool half is the
+        # tool-call undercount delta.
+        assert report["dropped_spans"] == 10
+>       assert report["dropped_tool_spans"] == 5
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'dropped_tool_spans'
+
+tests/test_r4_063_064_observability.py:163: KeyError
+_______ test_turn_ring_keeps_inflight_parent_and_marks_evicted_children ________
+
+    def test_turn_ring_keeps_inflight_parent_and_marks_evicted_children():
+        start_turn("t-parent", session_id="parent-session")
+        evictions: list[dict] = []
+        traces.add_sink(lambda event, payload: evictions.append(payload) if event == "turn_evicted" else None)
+        children = MAX_TURNS_RETAINED + 2
+        try:
+            for index in range(children):
+                child = f"t-child-{index}"
+                start_turn(child)
+                with tool_span(f"tool-{index}", {}):
+                    pass
+                end_turn(child)
+        finally:
+            traces.clear_sinks()
+    
+        expected_dropped = (1 + children) - MAX_TURNS_RETAINED
+        report = turn_report("t-parent")
+>       assert report is not None, "in-flight parent was evicted while closed turns were available"
+E       AssertionError: in-flight parent was evicted while closed turns were available
+E       assert None is not None
+
+tests/test_r4_063_064_observability.py:186: AssertionError
+_______________ test_forced_eviction_of_inflight_turns_is_marked _______________
+
+    def test_forced_eviction_of_inflight_turns_is_marked():
+        start_turn("t-inflight-0")
+        evictions: list[dict] = []
+        traces.add_sink(lambda event, payload: evictions.append(payload) if event == "turn_evicted" else None)
+        try:
+            for index in range(1, MAX_TURNS_RETAINED + 2):
+                start_turn(f"t-inflight-{index}")
+        finally:
+            traces.clear_sinks()
+    
+        expected_dropped = (1 + MAX_TURNS_RETAINED + 1) - MAX_TURNS_RETAINED
+>       assert traces.dropped_turns() == expected_dropped == 2
+               ^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'machina.observability.traces' has no attribute 'dropped_turns'
+
+tests/test_r4_063_064_observability.py:213: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_r4_063_064_observability.py::test_structured_args_redacted_recursively
+FAILED tests/test_r4_063_064_observability.py::test_structured_kwargs_and_mapping_args_redacted
+FAILED tests/test_r4_063_064_observability.py::test_raising_redactor_masks_and_never_escapes
+FAILED tests/test_r4_063_064_observability.py::test_cyclic_structured_arg_masks_at_depth_bound
+FAILED tests/test_r4_063_064_observability.py::test_span_ring_exposes_dropped_tool_call_delta
+FAILED tests/test_r4_063_064_observability.py::test_span_ring_tool_delta_counts_only_tool_spans
+FAILED tests/test_r4_063_064_observability.py::test_turn_ring_keeps_inflight_parent_and_marks_evicted_children
+FAILED tests/test_r4_063_064_observability.py::test_forced_eviction_of_inflight_turns_is_marked
+8 failed, 1 passed in 0.53s

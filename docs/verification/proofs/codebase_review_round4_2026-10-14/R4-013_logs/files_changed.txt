@@ -1,0 +1,19 @@
+== worktree state (my lane) ==
+ M machina/cli/auth.py
+ M machina/security/claude_auth.py
+ M machina/security/copilot_auth.py
+ M machina/security/gemini_auth.py
+ M tests/test_oauth_cli_auth.py
+?? machina/security/store_fence.py
+?? tests/test_auth_store_adversarial.py
+
+== diffstat (tracked) ==
+ machina/cli/auth.py              |  47 ++++----
+ machina/security/claude_auth.py  | 241 +++++++++++++++++++++++++--------------
+ machina/security/copilot_auth.py |  62 ++++++++++
+ machina/security/gemini_auth.py  | 233 +++++++++++++++++++++++--------------
+ tests/test_oauth_cli_auth.py     |  28 +++++
+ 5 files changed, 415 insertions(+), 196 deletions(-)
+
+== new module ==
+     190 machina/security/store_fence.py

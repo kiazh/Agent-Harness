@@ -1,0 +1,11 @@
+2026-10-14 15:15:26,560 [AUDIT] {"timestamp": 1792005326.560268, "event": "permission_allowed", "request_id": "824e2bbbf3ee4c2688bfa42386781f78", "session_id": "", "turn_id": "", "agent_id": "", "operation": "file.read", "tool": "read_file", "mode": "ask", "digest_prefix": "62e44f98d2b7a23b", "reason": "trusted project read"}
+Audit event dropped before the writer started; event was not persisted
+STORE_PATH /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-auth-security-review-b1drpiyz/workspace/auth/chatgpt.json
+READ_DECISION allowed
+READ_RETURNS_REFRESH True
+REDACTION_STILL_CONTAINS_REFRESH True
+REFRESH_POST_COUNT 2 SAME_OLD_REFRESH True
+REFRESH_RESULTS ['SYNTHETIC_REFRESH_fresh_ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ERROR:invalid_grant']
+LOGOUT_STORE_REMOVED True
+STORE_RESURRECTED True
+SCRATCH /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-auth-security-review-b1drpiyz

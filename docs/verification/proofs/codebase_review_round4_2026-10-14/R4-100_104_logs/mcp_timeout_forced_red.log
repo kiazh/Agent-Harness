@@ -1,0 +1,10 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________________ test_live_self_connect_call_disconnect ____________________
+forced by probe_mcp_timeout
+
+During handling of the above exception, another exception occurred:
+live MCP round trip exceeded its budget in this environment (overall=120s, connect=30s, discovery=30s, call=30s): TimeoutError('forced by probe_mcp_timeout')
+=========================== short test summary info ============================
+FAILED tests/test_mcp_manage_tool.py::test_live_self_connect_call_disconnect
+1 failed in 0.60s

@@ -1,0 +1,46 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ TestConfigNotLoadedAtImport.test_importing_config_does_not_load_it ______
+
+self = <tests.test_bug9_bug15_fixes.TestConfigNotLoadedAtImport object at 0x10b007b10>
+
+    def test_importing_config_does_not_load_it(self):
+        import json
+        import subprocess
+        import textwrap
+    
+        script = textwrap.dedent(
+            """
+            import json
+            import sys
+    
+            import machina.core.config  # noqa: F401
+    
+            module = sys.modules["machina.core.config"]
+            loaded_at_import = module._config is not None
+            first = module.get_config()
+            print(json.dumps({
+                "loaded_at_import": loaded_at_import,
+                "loaded_after_access": module._config is not None,
+                "same_instance": first is module.get_config(),
+            }))
+            """
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, f"fresh interpreter failed:\n{proc.stderr}"
+        state = json.loads(proc.stdout.strip().splitlines()[-1])
+>       assert state["loaded_at_import"] is False, (
+            "importing machina.core.config must not call Config.load()"
+        )
+E       AssertionError: importing machina.core.config must not call Config.load()
+E       assert True is False
+
+tests/test_bug9_bug15_fixes.py:279: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_bug9_bug15_fixes.py::TestConfigNotLoadedAtImport::test_importing_config_does_not_load_it
+1 failed in 0.57s

@@ -1,0 +1,23 @@
+== pre-fix checkout (git worktree --detach HEAD) ==
+/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-wheel.9LfZHX/pre/machina-0.2.0-py3-none-any.whl
+pre-fix wheel: machina-0.2.0-py3-none-any.whl
+PASS pre-fix telemetry members                            = 2
+pre-fix telemetry members: skills/telemetry.json skills/telemetry.json.lock 
+
+== post-fix working tree ==
+/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//r4095-wheel.9LfZHX/post/machina-0.2.0-py3-none-any.whl
+post-fix wheel: machina-0.2.0-py3-none-any.whl
+PASS post-fix telemetry members                           = 0
+PASS post-fix skills member count (pre minus telemetry)   = 110
+PASS member sets differ only by telemetry                 = identical
+
+== artifact checker on the pre-fix wheel (RED) ==
+      raise ValueError(f"Runtime skill telemetry leaked into the wheel: {leaked_telemetry}")
+PASS pre-fix wheel rejected for telemetry                 = yes
+
+== artifact checker on the post-fix wheel (GREEN) ==
+  Verified machina-0.2.0-py3-none-any.whl
+PASS post-fix wheel accepted                              = yes
+
+== result: ALL PROBES PASS
+probe exit: 0

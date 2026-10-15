@@ -1,0 +1,15 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________________ test_canary_detects_import_time_leak _____________________
+
+    def test_canary_detects_import_time_leak():
+>       assert os.environ.get("MACHINA_API_KEY") != "test-key-123"
+E       AssertionError: assert 'test-key-123' != 'test-key-123'
+E        +  where 'test-key-123' = get('MACHINA_API_KEY')
+E        +    where get = environ({'COLORTERM': 'truecolor', 'DISPLAY': '/var/run/com.apple.launchd.RBbUuD1g7f/org.xquartz:0', 'HOME': '/Users/s...iew_round4_2026-10-14/R4-100_104_logs/test_canary_api_key_leaky_stub.py::test_canary_detects_import_time_leak (call)'}).get
+E        +      where environ({'COLORTERM': 'truecolor', 'DISPLAY': '/var/run/com.apple.launchd.RBbUuD1g7f/org.xquartz:0', 'HOME': '/Users/s...iew_round4_2026-10-14/R4-100_104_logs/test_canary_api_key_leaky_stub.py::test_canary_detects_import_time_leak (call)'}) = os.environ
+
+docs/verification/proofs/codebase_review_round4_2026-10-14/R4-100_104_logs/test_canary_api_key_leaky_stub.py:16: AssertionError
+=========================== short test summary info ============================
+FAILED docs/verification/proofs/codebase_review_round4_2026-10-14/R4-100_104_logs/test_canary_api_key_leaky_stub.py::test_canary_detects_import_time_leak
+1 failed in 0.45s

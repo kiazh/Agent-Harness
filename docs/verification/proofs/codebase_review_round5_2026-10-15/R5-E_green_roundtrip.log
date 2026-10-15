@@ -1,0 +1,20 @@
+PASS shim normal
+PASS shim dollar
+PASS shim backtick
+PASS shim dquote
+PASS shim squote
+PASS shim backslash
+PASS shim trailback
+PASS shim space
+PASS shim combo
+shim: PASS=9 FAIL=0
+PASS shim byte-identical for normal path
+PASS rc sh byte-identical
+PASS rc fish byte-identical
+fish absent - fixture-level only
+fish quoted: '/tmp/x/o\'brien\\dir'
+PASS fish escaping
+ps escaped: C:\Users\O''Connor\machina\.venv\Scripts
+sq token count: 8
+PASS ps single-token round-trip
+TOTAL FAIL=0

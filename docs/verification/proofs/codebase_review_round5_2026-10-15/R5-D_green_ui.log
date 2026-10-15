@@ -1,0 +1,10 @@
+✔ R5-D1a bare /mode passes the active session ID on mode.get (0.574ms)
+✔ R5-D1b switching sessions refreshes the footer to the new session's authority (13.34875ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 237.424958

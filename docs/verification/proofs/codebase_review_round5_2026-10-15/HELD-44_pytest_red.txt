@@ -1,0 +1,123 @@
+FFFF..                                                                   [100%]
+=================================== FAILURES ===================================
+_________ test_cancelled_write_joins_worker_before_releasing_ownership _________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2093/test_cancelled_write_joins_wor0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bb6d5b0>
+
+    @pytest.mark.asyncio
+    async def test_cancelled_write_joins_worker_before_releasing_ownership(tmp_path, monkeypatch):
+        target = _prepare(tmp_path, monkeypatch)
+        gate = _Gate().install(monkeypatch)
+        task = asyncio.create_task(fmod.write_file("victim.txt", "OLD"))
+        try:
+            await gate.wait_entered()
+            timer = gate.arm_release()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            timer.join(timeout=5)
+            # Ownership was retained: the worker's replace completed before the
+            # cancellation returned to the caller.
+>           assert gate.finished.is_set()
+E           assert False
+E            +  where False = is_set()
+E            +    where is_set = <threading.Event at 0x10bb529c0: unset>.is_set
+E            +      where <threading.Event at 0x10bb529c0: unset> = <tests.test_r5_004_write_cancel._Gate object at 0x10c47bcb0>.finished
+
+tests/test_r5_004_write_cancel.py:89: AssertionError
+___________ test_tool_timeout_joins_worker_and_preserves_newer_edit ____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2093/test_tool_timeout_joins_worker0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bbfc710>
+
+    @pytest.mark.asyncio
+    async def test_tool_timeout_joins_worker_and_preserves_newer_edit(tmp_path, monkeypatch):
+        """agent.py:1033 pattern — ``asyncio.wait_for(registry.execute(...))``."""
+        target = _prepare(tmp_path, monkeypatch)
+        gate = _Gate().install(monkeypatch)
+    
+        async def call_old():
+            return await asyncio.wait_for(
+                registry.execute("write_file", path="victim.txt", content="OLD"),
+                timeout=0.2,
+            )
+    
+        task = asyncio.create_task(call_old())
+        try:
+            await gate.wait_entered()
+            timer = gate.arm_release(0.35)
+            with pytest.raises(asyncio.TimeoutError):
+                await task
+            timer.join(timeout=5)
+            # The hard timeout did not detach the write; the worker finished first.
+>           assert gate.finished.is_set()
+E           assert False
+E            +  where False = is_set()
+E            +    where is_set = <threading.Event at 0x10bbb6410: unset>.is_set
+E            +      where <threading.Event at 0x10bbb6410: unset> = <tests.test_r5_004_write_cancel._Gate object at 0x10bb99bd0>.finished
+
+tests/test_r5_004_write_cancel.py:117: AssertionError
+___________________ test_turn_cancel_gather_waits_for_worker ___________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2093/test_turn_cancel_gather_waits_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bb53130>
+
+    @pytest.mark.asyncio
+    async def test_turn_cancel_gather_waits_for_worker(tmp_path, monkeypatch):
+        """agent.py:1181-1188 pattern — cancel the tool tasks, then join them."""
+        target = _prepare(tmp_path, monkeypatch)
+        gate = _Gate().install(monkeypatch)
+        tasks = [
+            asyncio.create_task(
+                registry.execute("write_file", path="victim.txt", content="OLD")
+            )
+        ]
+        try:
+            await gate.wait_entered()
+            timer = gate.arm_release()
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            timer.join(timeout=5)
+>           assert gate.finished.is_set()
+E           assert False
+E            +  where False = is_set()
+E            +    where is_set = <threading.Event at 0x10bbddad0: unset>.is_set
+E            +      where <threading.Event at 0x10bbddad0: unset> = <tests.test_r5_004_write_cancel._Gate object at 0x10bb99a90>.finished
+
+tests/test_r5_004_write_cancel.py:143: AssertionError
+_________________ test_cancellation_join_is_bounded_by_worker __________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2093/test_cancellation_join_is_boun0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bbf9f50>
+
+    @pytest.mark.asyncio
+    async def test_cancellation_join_is_bounded_by_worker(tmp_path, monkeypatch):
+        _prepare(tmp_path, monkeypatch)
+        gate = _Gate().install(monkeypatch)
+        task = asyncio.create_task(fmod.write_file("victim.txt", "OLD"))
+        loop = asyncio.get_running_loop()
+        try:
+            await gate.wait_entered()
+            timer = gate.arm_release(0.2)
+            started = loop.time()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            elapsed = loop.time() - started
+            timer.join(timeout=5)
+>           assert gate.finished.is_set()
+E           assert False
+E            +  where False = is_set()
+E            +    where is_set = <threading.Event at 0x10bc15310: unset>.is_set
+E            +      where <threading.Event at 0x10bc15310: unset> = <tests.test_r5_004_write_cancel._Gate object at 0x10bb6f230>.finished
+
+tests/test_r5_004_write_cancel.py:166: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r5_004_write_cancel.py::test_cancelled_write_joins_worker_before_releasing_ownership
+FAILED tests/test_r5_004_write_cancel.py::test_tool_timeout_joins_worker_and_preserves_newer_edit
+FAILED tests/test_r5_004_write_cancel.py::test_turn_cancel_gather_waits_for_worker
+FAILED tests/test_r5_004_write_cancel.py::test_cancellation_join_is_bounded_by_worker
+4 failed, 2 passed in 1.86s

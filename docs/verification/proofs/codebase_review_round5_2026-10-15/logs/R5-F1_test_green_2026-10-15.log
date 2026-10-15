@@ -1,0 +1,13 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 2 items
+
+tests/test_r5_f1_consolidation_cursor.py::test_stale_worker_cannot_regress_durable_cursor PASSED [ 50%]
+tests/test_r5_f1_consolidation_cursor.py::test_cursor_reader_overrides_since_and_commits_checkpoint PASSED [100%]
+
+============================== 2 passed in 0.58s ===============================

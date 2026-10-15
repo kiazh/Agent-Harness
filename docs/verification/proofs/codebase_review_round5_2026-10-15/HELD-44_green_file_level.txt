@@ -1,0 +1,2 @@
+turn-1 cancelled=True after_new='NEW' final='NEW'
+VERDICT: CONTAINED (newer edit is the last writer)

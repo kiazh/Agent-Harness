@@ -1,0 +1,6 @@
+   Building machina @ file:///Users/shadow/machina
+      Built machina @ file:///Users/shadow/machina
+Uninstalled 1 package in 0.85ms
+Installed 1 package in 1ms
+starts=0
+resumes=0

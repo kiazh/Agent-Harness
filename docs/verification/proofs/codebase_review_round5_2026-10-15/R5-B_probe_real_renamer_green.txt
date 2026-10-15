@@ -1,0 +1,5 @@
+writes_ok=239 rejected=61 escaped_at=None
+outside/victim.txt='ORIGINAL'
+outside_files=['victim.txt']
+outside_temp_litter=0
+VERDICT: CONTAINED

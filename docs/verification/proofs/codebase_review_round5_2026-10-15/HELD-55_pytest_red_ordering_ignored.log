@@ -1,0 +1,39 @@
+F....                                                                    [100%]
+=================================== FAILURES ===================================
+_______________ test_batch_replays_in_event_order_across_readers _______________
+
+db_pool = <machina.db.connection.Database object at 0x109e00a50>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a5cf490>
+
+    async def test_batch_replays_in_event_order_across_readers(db_pool, monkeypatch):
+        """One 8-row batch draws from every reader that consumes replay order."""
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+    
+            await cm.add_chunks_batch([_chunk(sid, f"e{i}") for i in range(8)])
+    
+            # Premise under test: the whole batch shares one transaction timestamp.
+            assert (
+                await database.fetchval(
+                    "SELECT count(DISTINCT created_at) FROM context_chunks WHERE session_id=$1",
+                    sid,
+                )
+                == 1
+            )
+    
+            newest = [f"e{i}" for i in reversed(range(8))]
+            oldest = [f"e{i}" for i in range(8)]
+>           assert [
+                r["payload"]["content"] for r in await cm.get_recent_context(sid, limit=8)
+            ] == newest
+E           AssertionError: assert ['e7', 'e2', ...6', 'e4', ...] == ['e7', 'e6', ...3', 'e2', ...]
+E             
+E             At index 1 diff: 'e2' != 'e6'
+E             Use -v to get more diff
+
+tests/test_held_55_history_order.py:68: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_held_55_history_order.py::test_batch_replays_in_event_order_across_readers
+1 failed, 4 passed in 1.06s

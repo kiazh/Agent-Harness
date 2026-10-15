@@ -1,0 +1,92 @@
+FFFFFFF...F...FFFF.FF......F..F                                          [100%]
+=================================== FAILURES ===================================
+E   AttributeError: 'list' object has no attribute 'items'
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:580: AttributeError: 'list' object has no attribute 'items'
+E   AttributeError: 'str' object has no attribute 'items'
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:580: AttributeError: 'str' object has no attribute 'items'
+E   AssertionError: Traceback (most recent call last):
+        File "<frozen runpy>", line 203, in _run_module_as_main
+        File "<frozen runpy>", line 88, in _run_code
+        File "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/__main__.py", line 3, in <module>
+          from machina.cli import app
+        File "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/cli/__init__.py", line 23, in <module>
+          import machina.tools  # noqa: F401 — registers all built-in tools
+          ^^^^^^^^^^^^^^^^^^^^
+        File "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/tools/__init__.py", line 6, in <module>
+          from machina.tools import (
+          ...<14 lines>...
+          )
+        File "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/tools/agents.py", line 11, in <module>
+          from machina.core.exceptions import DelegationAccountingError, ToolError
+        File "/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/__init__.py", line 5, in <module>
+          from machina.core.config import Config, config
+      ImportError: cannot import name 'config' from 'machina.core.config' (/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py)
+      
+    assert 1 == 0
+     +  where 1 = CompletedProcess(args=['/Users/shadow/machina/.venv/bin/python', '-m', 'machina', 'config'], returncode=1, stdout='', ...onfig\' (/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py)\n').returncode
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/tests/test_r4_080_boot_config.py:79: AssertionError: Traceback (most recent call last):
+E   AssertionError: assert 'Run machina init and retry.' in '✗ Runtime schema upgrade failed. Run machina db init and retry.\n'
+     +  where '✗ Runtime schema upgrade failed. Run machina db init and retry.\n' = <Result SystemExit(1)>.output
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/tests/test_r4_080_boot_config.py:103: AssertionError: assert 'Run machina init and retry.' in '✗ Runtime schema upgrade failed. Run machina db init and retry.\n'
+E   AssertionError: overlapping first connects built multiple pools
+    assert 8 == 1
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/tests/test_r4_080_boot_config.py:131: AssertionError: overlapping first connects built multiple pools
+E   ValueError: embedded null byte
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1920: ValueError: embedded null byte
+E   ImportError: cannot import name 'REASONING_CATALOG_EFFORTS' from 'machina.core.config' (/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/tests/test_r4_082_gateway_providers.py:71: ImportError: cannot import name 'REASONING_CATALOG_EFFORTS' from 'machina.core.config' (/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py)
+E   ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:285: ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+E   ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:285: ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+E   ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:285: ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+E   ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:285: ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+E   ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:285: ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+E   ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:285: ValueError: reasoning_effort must be ''|low|medium|high|xhigh|max
+E   AssertionError: {'jsonrpc': '2.0', 'id': 1, 'error': {'code': -32603, 'message': 'internal error'}}
+    assert {'code': -32603, 'message': 'internal error'} is None
+     +  where {'code': -32603, 'message': 'internal error'} = <built-in method get of dict object at 0x10ef80cc0>('error')
+     +    where <built-in method get of dict object at 0x10ef80cc0> = {'jsonrpc': '2.0', 'id': 1, 'error': {'code': -32603, 'message': 'internal error'}}.get
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 20:52:25,514 [ERROR] Gateway method models.setEffort failed
+ValueError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/gateway/server.py:341 (handle_line)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/gateway/features/providers_feature.py:197 (models_set_effort)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:513 (set)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:285 (validate_value)
+------------------------------ Captured log call -------------------------------
+DEBUG    machina.gateway.server:server.py:339 → models.setEffort (id=1)
+ERROR    machina.gateway.server:server.py:347 Gateway method models.setEffort failed
+ValueError
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/gateway/server.py:341 (handle_line)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/gateway/features/providers_feature.py:197 (models_set_effort)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:513 (set)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/machina/core/config.py:285 (validate_value)
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/tests/test_r4_082_gateway_providers.py:153: AssertionError: {'jsonrpc': '2.0', 'id': 1, 'error': {'code': -32603, 'message': 'internal error'}}
+E   FileNotFoundError: [Errno 2] No such file or directory: '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1786/test_providers_remove_persists0/config.yaml'
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py:771: FileNotFoundError: [Errno 2] No such file or directory: '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1786/test_providers_remove_persists0/config.yaml'
+E   AssertionError: stderr never carried 'gateway auth token: '; saw: 2026-10-14 20:52:25,844 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+    WARNING machina.gateway.server: MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/machina-r4d1-red/tests/test_r4_083_gateway_standalone.py:70: AssertionError: stderr never carried 'gateway auth token: '; saw: 2026-10-14 20:52:25,844 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+=========================== short test summary info ============================
+FAILED tests/test_r4_080_boot_config.py::test_config_load_list_root_warns_and_keeps_defaults
+FAILED tests/test_r4_080_boot_config.py::test_config_load_scalar_root_warns_and_keeps_defaults
+FAILED tests/test_r4_080_boot_config.py::test_cli_runs_with_a_non_mapping_config_root
+FAILED tests/test_r4_080_boot_config.py::test_chat_runtime_schema_failure_names_machina_init
+FAILED tests/test_r4_080_boot_config.py::test_overlapping_first_connects_create_exactly_one_pool
+FAILED tests/test_r4_080_boot_config.py::test_run_bounded_returns_typed_result_for_nul_argv
+FAILED tests/test_r4_082_gateway_providers.py::test_canonical_effort_vocabulary_is_single_sourced
+FAILED tests/test_r4_082_gateway_providers.py::test_config_effort_surface_accepts_tiers_and_normalizes_aliases[minimal-minimal]
+FAILED tests/test_r4_082_gateway_providers.py::test_config_effort_surface_accepts_tiers_and_normalizes_aliases[off-]
+FAILED tests/test_r4_082_gateway_providers.py::test_config_effort_surface_accepts_tiers_and_normalizes_aliases[none-]
+FAILED tests/test_r4_082_gateway_providers.py::test_config_effort_surface_accepts_tiers_and_normalizes_aliases[default-]
+FAILED tests/test_r4_082_gateway_providers.py::test_config_effort_surface_accepts_tiers_and_normalizes_aliases[auto-]
+FAILED tests/test_r4_082_gateway_providers.py::test_set_effort_minimal_persists_through_both_surfaces
+FAILED tests/test_r4_082_gateway_providers.py::test_effort_set_over_the_wire_has_no_internal_error
+FAILED tests/test_r4_082_gateway_providers.py::test_providers_remove_persists_fallback_across_restart
+FAILED tests/test_r4_083_gateway_standalone.py::test_standalone_gateway_discloses_its_token_and_serves_methods
+16 failed, 15 passed in 61.15s (0:01:01)

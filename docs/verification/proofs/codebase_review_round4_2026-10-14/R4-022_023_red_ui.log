@@ -1,0 +1,160 @@
+✖ R4-022: a streamed denied tool renders the denied state, not the success check (14.271125ms)
+✖ R4-022: typed outcomes keep a consistent mapping (paused, failed, unknown, legacy) (0.519208ms)
+✖ R4-023: Menu sanitizes hostile payloads and splits embedded newlines into rows (1.52975ms)
+✖ R4-023: Picker inherits Menu sanitization for titles, labels and descriptions (0.311917ms)
+✖ R4-023: ToolTurn header splits newline-laden names/args into physical rows (0.262166ms)
+✖ R4-023: ApprovalCard dock title splits newline-laden tool/target fields (0.506708ms)
+✖ R4-023: hostile payloads render clean through the real alt-screen terminal (1.677208ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 0
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 243.371625
+
+✖ failing tests:
+
+test at test/r4-honesty.test.ts:107:1
+✖ R4-022: a streamed denied tool renders the denied state, not the success check (14.271125ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /⊘ terminal/. Input:
+  
+  '\n' +
+    '    ┌────────────────────────────────────────────────────────────────┐\n' +
+    '    │ ✔ terminal rm -rf /tmp/x                                       │\n' +
+    '    │   Permission denied: approval denied. The action was NOT       │\n' +
+    '    │   executed.                                                    │\n' +
+    '    └────────────────────────────────────────────────────────────────┘\n' +
+    '(spinner)'
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:122:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '\n    ┌────────────────────────────────────────────────────────────────┐\n    │ ✔ terminal rm -rf /tmp/x                                       │\n    │   Permission denied: approval denied. The action was NOT       │\n    │   executed.                                                    │\n    └────────────────────────────────────────────────────────────────┘\n(spinner)',
+    expected: /⊘ terminal/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test/r4-honesty.test.ts:129:1
+✖ R4-022: typed outcomes keep a consistent mapping (paused, failed, unknown, legacy) (0.519208ms)
+  AssertionError [ERR_ASSERTION]: outcome=paused isError=false: 
+      ┌────────────────────────────────────────────────────────────────┐
+      │ ✔ terminal                                                     │
+      │   Permission denied: nope. The action was NOT executed.        │
+      └────────────────────────────────────────────────────────────────┘
+  (spinner)
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:152:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/r4-honesty.test.ts:162:1
+✖ R4-023: Menu sanitizes hostile payloads and splits embedded newlines into rows (1.52975ms)
+  AssertionError [ERR_ASSERTION]: Menu: control byte reached a rendered row: "\u001b[38;2;93;93;102mTi\u001b]0;evil title\u0007tle\u001b[39m \u001b[38;2;93;93;102m(2/2)\u001b[39m"
+      at assertRowsClean (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:86:10)
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:169:2)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'Ti\x1B]0;evil title\x07tle (2/2)',
+    expected: /[\x00-\x1f\x7f-\u009f\u2028\u2029]/,
+    operator: 'doesNotMatch',
+    diff: 'simple'
+  }
+
+test at test/r4-honesty.test.ts:199:1
+✖ R4-023: Picker inherits Menu sanitization for titles, labels and descriptions (0.311917ms)
+  AssertionError [ERR_ASSERTION]: Picker: control byte reached a rendered row: "\u001b[38;2;93;93;102mPick \u001b]0;evil title\u0007\u001b[39m \u001b[38;2;93;93;102m(2/2)\u001b[39m"
+      at assertRowsClean (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:86:10)
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:210:2)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'Pick \x1B]0;evil title\x07 (2/2)',
+    expected: /[\x00-\x1f\x7f-\u009f\u2028\u2029]/,
+    operator: 'doesNotMatch',
+    diff: 'simple'
+  }
+
+test at test/r4-honesty.test.ts:221:1
+✖ R4-023: ToolTurn header splits newline-laden names/args into physical rows (0.262166ms)
+  AssertionError [ERR_ASSERTION]: ToolTurn: control byte reached a rendered row: "    \u001b[38;2;96;96;105m│\u001b[39m\u001b[48;2;23;23;28m\u001b[48;2;23;23;28m \u001b[38;2;93;93;102mundefined\u001b[39m name head\nname-tail \u001b[38;2;139;139;148mp \np2\u001b[39m                              \u001b[49m\u001b[38;2;96;96;105m│\u001b[39m"
+      at assertRowsClean (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:86:10)
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:225:2)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '    │ undefined name head\nname-tail p \np2                              │',
+    expected: /[\x00-\x1f\x7f-\u009f\u2028\u2029]/,
+    operator: 'doesNotMatch',
+    diff: 'simple'
+  }
+
+test at test/r4-honesty.test.ts:242:1
+✖ R4-023: ApprovalCard dock title splits newline-laden tool/target fields (0.506708ms)
+  AssertionError [ERR_ASSERTION]: ApprovalCard dock: control byte reached a rendered row: "Allow x \nInjected · y \nTarget2?                                      \u001b[38;2;93;93;102mrequest: req \u001b[39m"
+      at assertRowsClean (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:86:10)
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:259:2)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'Allow x \nInjected · y \nTarget2?                                      request: req ',
+    expected: /[\x00-\x1f\x7f-\u009f\u2028\u2029]/,
+    operator: 'doesNotMatch',
+    diff: 'simple'
+  }
+
+test at test/r4-honesty.test.ts:293:1
+✖ R4-023: hostile payloads render clean through the real alt-screen terminal (1.677208ms)
+  AssertionError [ERR_ASSERTION]: alt-screen Menu: control byte reached a rendered row: "\u001b[38;2;93;93;102mT \u001b]0;evil title\u0007\u001b[39m \u001b[38;2;93;93;102m(1/1)\u001b[39m\u001b[0m\u001b]8;;\u0007"
+      at assertRowsClean (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:86:10)
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/r4-honesty.test.ts:297:2)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'T \x1B]0;evil title\x07 (1/1)',
+    expected: /[\x00-\x1f\x7f-\u009f\u2028\u2029]/,
+    operator: 'doesNotMatch',
+    diff: 'simple'
+  }

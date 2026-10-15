@@ -1,0 +1,166 @@
+..........                                                               [100%]
+==================================== PASSES ====================================
+_____ test_malformed_200_raises_typed_error_and_never_caches[no-data-key] ______
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:21:29,294 [AUDIT] {"timestamp": 1792016489.294483, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,295 [AUDIT] {"timestamp": 1792016489.2958772, "event": "rag_embed_error", "model": "test-embed"}
+2026-10-14 18:21:29,296 [AUDIT] {"timestamp": 1792016489.2962492, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,296 [AUDIT] {"timestamp": 1792016489.2966049, "event": "rag_embed_error", "model": "test-embed"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.294483, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.2958772, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.2962492, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.2966049, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+WARNING  machina.observability.diagnostics:diagnostics.py:25 boundary failed: embeddings.embed_query error_type=ProviderError
+___ test_malformed_200_raises_typed_error_and_never_caches[empty-data-list] ____
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:21:29,302 [AUDIT] {"timestamp": 1792016489.3025768, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,302 [AUDIT] {"timestamp": 1792016489.3029408, "event": "rag_embed_error", "model": "test-embed"}
+2026-10-14 18:21:29,303 [AUDIT] {"timestamp": 1792016489.303196, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,303 [AUDIT] {"timestamp": 1792016489.3034549, "event": "rag_embed_error", "model": "test-embed"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3025768, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3029408, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.303196, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3034549, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+______ test_malformed_200_raises_typed_error_and_never_caches[null-data] _______
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:21:29,308 [AUDIT] {"timestamp": 1792016489.308821, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,309 [AUDIT] {"timestamp": 1792016489.3091671, "event": "rag_embed_error", "model": "test-embed"}
+2026-10-14 18:21:29,309 [AUDIT] {"timestamp": 1792016489.3094149, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,309 [AUDIT] {"timestamp": 1792016489.309935, "event": "rag_embed_error", "model": "test-embed"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.308821, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3091671, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3094149, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.309935, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+______ test_malformed_200_raises_typed_error_and_never_caches[dict-data] _______
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:21:29,315 [AUDIT] {"timestamp": 1792016489.31509, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,315 [AUDIT] {"timestamp": 1792016489.315403, "event": "rag_embed_error", "model": "test-embed"}
+2026-10-14 18:21:29,315 [AUDIT] {"timestamp": 1792016489.315648, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,315 [AUDIT] {"timestamp": 1792016489.315916, "event": "rag_embed_error", "model": "test-embed"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.31509, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.315403, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.315648, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.315916, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+_____ test_malformed_200_raises_typed_error_and_never_caches[string-data] ______
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:21:29,321 [AUDIT] {"timestamp": 1792016489.321096, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,321 [AUDIT] {"timestamp": 1792016489.32145, "event": "rag_embed_error", "model": "test-embed"}
+2026-10-14 18:21:29,321 [AUDIT] {"timestamp": 1792016489.3216882, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,321 [AUDIT] {"timestamp": 1792016489.3219368, "event": "rag_embed_error", "model": "test-embed"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.321096, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.32145, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3216882, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3219368, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+______ test_malformed_200_raises_typed_error_and_never_caches[list-body] _______
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:21:29,326 [AUDIT] {"timestamp": 1792016489.326947, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,327 [AUDIT] {"timestamp": 1792016489.3272882, "event": "rag_embed_error", "model": "test-embed"}
+2026-10-14 18:21:29,327 [AUDIT] {"timestamp": 1792016489.327533, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,327 [AUDIT] {"timestamp": 1792016489.327788, "event": "rag_embed_error", "model": "test-embed"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.326947, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3272882, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.327533, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.327788, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+________ test_empty_data_list_keeps_zero_vector_out_of_dense_retrieval _________
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:21:29,332 [AUDIT] {"timestamp": 1792016489.33266, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,333 [AUDIT] {"timestamp": 1792016489.332994, "event": "rag_embed_error", "model": "test-embed"}
+2026-10-14 18:21:29,333 [AUDIT] {"timestamp": 1792016489.33324, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,333 [AUDIT] {"timestamp": 1792016489.333499, "event": "rag_embed_error", "model": "test-embed"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.33266, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.332994, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.33324, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.333499, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+___________ test_valid_response_caches_and_recovers_after_malformed ____________
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:21:29,338 [AUDIT] {"timestamp": 1792016489.338633, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,338 [AUDIT] {"timestamp": 1792016489.338932, "event": "rag_embed_error", "model": "test-embed"}
+2026-10-14 18:21:29,339 [AUDIT] {"timestamp": 1792016489.339166, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+2026-10-14 18:21:29,339 [AUDIT] {"timestamp": 1792016489.339402, "event": "rag_embed_complete", "model": "test-embed", "count": 1}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.338633, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.338932, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.339166, "event": "rag_embed_start", "model": "test-embed", "count": 1, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.339402, "event": "rag_embed_complete", "model": "test-embed", "count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_________ test_batch_short_result_raises_without_partial_cache_writes __________
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 18:21:29,344 [AUDIT] {"timestamp": 1792016489.344179, "event": "rag_embed_start", "model": "test-embed", "count": 2, "provider": "openai"}
+2026-10-14 18:21:29,344 [AUDIT] {"timestamp": 1792016489.3444731, "event": "rag_embed_error", "model": "test-embed"}
+2026-10-14 18:21:29,344 [AUDIT] {"timestamp": 1792016489.344703, "event": "rag_embed_start", "model": "test-embed", "count": 2, "provider": "openai"}
+2026-10-14 18:21:29,344 [AUDIT] {"timestamp": 1792016489.3449411, "event": "rag_embed_complete", "model": "test-embed", "count": 2}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.344179, "event": "rag_embed_start", "model": "test-embed", "count": 2, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3444731, "event": "rag_embed_error", "model": "test-embed"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.rag.embedder:embedder.py:282 Embedding API response unusable: ProviderError
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.344703, "event": "rag_embed_start", "model": "test-embed", "count": 2, "provider": "openai"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792016489.3449411, "event": "rag_embed_complete", "model": "test-embed", "count": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+=========================== short test summary info ============================
+PASSED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[no-data-key]
+PASSED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[empty-data-list]
+PASSED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[null-data]
+PASSED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[dict-data]
+PASSED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[string-data]
+PASSED tests/test_embedding_failopen_adversarial.py::test_malformed_200_raises_typed_error_and_never_caches[list-body]
+PASSED tests/test_embedding_failopen_adversarial.py::test_empty_data_list_keeps_zero_vector_out_of_dense_retrieval
+PASSED tests/test_embedding_failopen_adversarial.py::test_valid_response_caches_and_recovers_after_malformed
+PASSED tests/test_embedding_failopen_adversarial.py::test_batch_short_result_raises_without_partial_cache_writes
+PASSED tests/test_embedding_failopen_adversarial.py::test_genuine_empty_input_keeps_zero_vector_contract_and_no_network
+10 passed in 0.53s

@@ -1,0 +1,6 @@
+primed cursor = {'id': 'ae637a1e-c6e0-46be-83b1-f8c6121aa1e0', 'at': '2026-10-15T02:00:09.978371+00:00'}
+stale worker read cursor = {'id': 'ae637a1e-c6e0-46be-83b1-f8c6121aa1e0', 'at': '2026-10-15T02:00:09.978371+00:00'}
+healthy workers advanced cursor: {'id': '79f5c6ed-c958-4354-98a9-f392bbbe3ec0', 'at': '2026-10-15T02:00:11.978371+00:00'} -> {'id': 'e8bbe7b8-1c3f-4b27-88ad-8280213b39fa', 'at': '2026-10-15T02:00:13.978371+00:00'}
+final cursor = {'id': '79f5c6ed-c958-4354-98a9-f392bbbe3ec0', 'at': '2026-10-15T02:00:11.978371+00:00'}
+RED REPRODUCED: stale cursor regressed the durable checkpoint
+  expected newest e8bbe7b8-1c3f-4b27-88ad-8280213b39fa, got 79f5c6ed-c958-4354-98a9-f392bbbe3ec0

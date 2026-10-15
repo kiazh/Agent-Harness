@@ -1,0 +1,2 @@
+R4-017: SIGINT -> exit 130 after 0.07s; claim_owner=None; slow_tool_pid=92208
+R4-018: exit=0; provider_requests=3; tool_result_reached_provider=True; grant_notice=True; paused=False

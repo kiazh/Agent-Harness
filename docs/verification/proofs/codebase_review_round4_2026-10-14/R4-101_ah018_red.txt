@@ -1,0 +1,123 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________________ test_agent_binds_scope_for_rag_tools _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d48b490>
+
+    async def test_agent_binds_scope_for_rag_tools(monkeypatch):
+        """AH-018: the agent itself must bind caller scope around every tool call.
+    
+        A RAG-style probe tool reads the REAL ``active_agent_scope()`` (including
+        its session-ownership gate; only the single DB read is stubbed). The agent
+        is instantiated and driven through its real ``_execute_tool_calls_stream``
+        with an LLM response invoking the probe — the ContextVars the probe
+        observes can only come from the agent's own binding code. The old version
+        set the vars in the test body and never invoked the probe.
+        """
+        import json
+    
+        from machina.core.agent import BaseReActAgent
+        from machina.core.models import LLMResponse
+        from machina.tools import agents as agents_mod
+        from machina.tools.base import Tool, registry
+    
+        seen: dict = {}
+    
+        async def _probe(session_id: str) -> str:
+            agent_id, sid = await agents_mod.active_agent_scope()
+            seen["agent"] = agent_id
+            seen["session"] = sid
+            assert session_id == str(sid)
+            return "ok"
+    
+        monkeypatch.setitem(
+            registry._tools,
+            "scope_probe",
+            Tool(
+                name="scope_probe",
+                description="probe",
+                parameters={
+                    "type": "object",
+                    "properties": {"session_id": {"type": "string"}},
+                    "required": ["session_id"],
+                },
+                func=_probe,
+                is_async=True,
+            ),
+        )
+        registry._definitions_cache = None
+    
+        async def _noop_add_chunk(*args, **kwargs):
+            return None
+    
+        monkeypatch.setattr("machina.core.agent.context_manager.add_chunk", _noop_add_chunk)
+    
+        class FakeDb:
+            async def fetchval(self, query, *args):
+                return "harness"
+    
+        monkeypatch.setattr(agents_mod, "db", FakeDb())
+    
+        class _A(BaseReActAgent):
+            def __init__(self):
+                self.agent_id = "harness"
+                self.allowed_tools = None
+                self.max_iterations = 1
+    
+        # Without scope bound, the probe's own gate refuses to run.
+        with pytest.raises(Exception, match="active agent session"):
+            await registry.execute("scope_probe", session_id=str(uuid.uuid4()))
+    
+        sid = uuid.uuid4()
+        agent = _A()
+        response = LLMResponse(
+            content="",
+            model="test-model",
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "function": {
+                        "name": "scope_probe",
+                        "arguments": json.dumps({"session_id": str(sid)}),
+                    },
+                }
+            ],
+        )
+        messages: list[dict] = [{"role": "user", "content": "go"}]
+        made: list[dict] = []
+        events = []
+        async for event in agent._execute_tool_calls_stream(response, messages, made, sid):
+            events.append(event)
+    
+        # The probe ran THROUGH the agent and observed the agent-bound scope.
+>       assert seen == {"agent": "harness", "session": sid}, (
+            "scope binding never reached the tool — the agent did not bind it"
+        )
+E       AssertionError: scope binding never reached the tool — the agent did not bind it
+E       assert {} == {'agent': 'ha...d4e69934dfa')}
+E         
+E         Right contains 2 more items:
+E         {'agent': 'harness', 'session': UUID('0cc0ae61-fafe-46a7-8a05-cd4e69934dfa')}
+E         Use -v to get more diff
+
+tests/test_handoff_regressions.py:557: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-14 21:44:25,206 [AUDIT] {"timestamp": 1792028665.206569, "event": "tool_call_start", "session_id": "0cc0ae61-fafe-46a7-8a05-cd4e69934dfa", "tool_name": "scope_probe"}
+2026-10-14 21:44:25,220 [AUDIT] {"timestamp": 1792028665.220404, "event": "permission_allowed", "request_id": "3fb32f54fb7f45c2b979af83b2aad506", "session_id": "0cc0ae61-fafe-46a7-8a05-cd4e69934dfa", "turn_id": "", "agent_id": "harness", "operation": "tool.scope_probe", "tool": "scope_probe", "mode": "ask", "digest_prefix": "a8a39353be359272", "targets": [], "argv": [], "reason": "in-process operation"}
+2026-10-14 21:44:25,221 [AUDIT] {"timestamp": 1792028665.2210119, "event": "tool_call_error", "session_id": "0cc0ae61-fafe-46a7-8a05-cd4e69934dfa", "tool_name": "scope_probe", "duration_ms": 13}
+2026-10-14 21:44:25,221 [AUDIT] {"timestamp": 1792028665.221282, "event": "tool_call_complete", "session_id": "0cc0ae61-fafe-46a7-8a05-cd4e69934dfa", "tool_name": "scope_probe", "duration_ms": 13}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028665.206569, "event": "tool_call_start", "session_id": "0cc0ae61-fafe-46a7-8a05-cd4e69934dfa", "tool_name": "scope_probe"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028665.220404, "event": "permission_allowed", "request_id": "3fb32f54fb7f45c2b979af83b2aad506", "session_id": "0cc0ae61-fafe-46a7-8a05-cd4e69934dfa", "turn_id": "", "agent_id": "harness", "operation": "tool.scope_probe", "tool": "scope_probe", "mode": "ask", "digest_prefix": "a8a39353be359272", "targets": [], "argv": [], "reason": "in-process operation"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.agent:agent.py:1091 Tool execution failed for 'scope_probe'
+TypeError
+/Users/shadow/machina/machina/core/agent.py:1081 (_run_one)
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028665.2210119, "event": "tool_call_error", "session_id": "0cc0ae61-fafe-46a7-8a05-cd4e69934dfa", "tool_name": "scope_probe", "duration_ms": 13}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:144 {"timestamp": 1792028665.221282, "event": "tool_call_complete", "session_id": "0cc0ae61-fafe-46a7-8a05-cd4e69934dfa", "tool_name": "scope_probe", "duration_ms": 13}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+=========================== short test summary info ============================
+FAILED tests/test_handoff_regressions.py::test_agent_binds_scope_for_rag_tools
+1 failed in 0.48s

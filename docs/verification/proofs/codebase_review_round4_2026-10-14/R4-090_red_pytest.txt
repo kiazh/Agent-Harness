@@ -1,0 +1,401 @@
+FF.FFF..FFFFF                                                            [100%]
+=================================== FAILURES ===================================
+_______________ test_read_file_pages_a_file_larger_than_max_size _______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1818/test_read_file_pages_a_file_la0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c43b5c0>
+
+    async def test_read_file_pages_a_file_larger_than_max_size(tmp_path, monkeypatch):
+        """A file over max_size is still readable a window at a time."""
+        fmod = _file_module(tmp_path, monkeypatch)
+        lines = [f"line-{i:05d} " + "x" * 240 for i in range(1, 401)]
+        target = tmp_path / "large.txt"
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        assert target.stat().st_size > 100_000  # far beyond the page budget
+    
+        # A window deep in the file (300 * ~250B >> max_size) must be reachable.
+>       page = await fmod.read_file("large.txt", offset=300, limit=5, max_size=4096)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_090_tools.py:77: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+path = 'large.txt', offset = 300, limit = 5, max_size = 4096
+
+    @registry.register(
+        name="read_file",
+        description="Read the contents of a file. Returns the file content as text.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the file to read"},
+                "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (1-indexed)",
+                },
+                "limit": {"type": "integer", "description": "Maximum number of lines to read"},
+                "max_size": {
+                    "type": "integer",
+                    "description": "Maximum file size in bytes (default: 1048576 = 1 MB)",
+                },
+            },
+            "required": ["path"],
+        },
+    )
+    async def read_file(
+        path: str, offset: int = 1, limit: int = 2000, max_size: int = 1_048_576
+    ) -> str:
+        """Read a file with optional offset and limit.
+    
+        Args:
+            path: Path to the file to read.
+            offset: Line number to start reading from (1-indexed).
+            limit: Maximum number of lines to read.
+            max_size: Maximum file size in bytes. Files larger than this are rejected.
+        """
+        if offset < 1:
+            raise ToolError(f"offset must be >= 1, got {offset}")
+        if limit < 1:
+            raise ToolError(f"limit must be >= 1, got {limit}")
+        if max_size < 1:
+            raise ToolError(f"max_size must be >= 1, got {max_size}")
+        effective_max = min(max_size, 5_242_880)
+        try:
+            # Full mode: broker-authorized absolute host paths permitted.
+            file_path = resolve_path(path, allow_outside=True)
+        except ValueError as e:
+            raise ToolError(f"{e}") from e
+    
+        if not file_path.exists():
+            raise ToolError(f"File not found: {path}")
+        if not file_path.is_file():
+            raise ToolError(f"Not a file: {path}")
+    
+        # Check file size before reading
+        file_size = file_path.stat().st_size
+        if file_size > effective_max:
+>           raise ToolError(
+                f"File '{path}' is too large ({file_size} bytes, max {effective_max} bytes)"
+            )
+E           machina.core.exceptions.ToolError: File 'large.txt' is too large (100800 bytes, max 4096 bytes)
+
+machina/tools/file.py:290: ToolError
+_______ test_read_file_marker_reports_truncation_and_last_page_is_clean ________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1818/test_read_file_marker_reports_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd29010>
+
+    async def test_read_file_marker_reports_truncation_and_last_page_is_clean(tmp_path, monkeypatch):
+        """Truncation at limit is explicit; a page that reaches EOF is unmarked."""
+        fmod = _file_module(tmp_path, monkeypatch)
+        (tmp_path / "notes.txt").write_text(
+            "\n".join(f"line-{i}" for i in range(1, 11)) + "\n", encoding="utf-8"
+        )
+    
+        page = await fmod.read_file("notes.txt", limit=4)
+        assert "line-1\n" in page and "line-4\n" in page
+        assert "line-5" not in page
+>       assert "of 10" in page
+E       AssertionError: assert 'of 10' in 'line-1\nline-2\nline-3\nline-4\n'
+
+tests/test_r4_090_tools.py:98: AssertionError
+_________ test_read_file_pages_past_a_giant_line_without_buffering_it __________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1818/test_read_file_pages_past_a_gi0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd16c50>
+
+    async def test_read_file_pages_past_a_giant_line_without_buffering_it(tmp_path, monkeypatch):
+        """Skipping an out-of-window giant line stays piece-bounded."""
+        fmod = _file_module(tmp_path, monkeypatch)
+        target = tmp_path / "giant.txt"
+        target.write_text("a" * (2 * 1024 * 1024) + "\ntarget-line\n", encoding="utf-8")
+    
+>       page = await fmod.read_file("giant.txt", offset=2, limit=5, max_size=4096)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_090_tools.py:130: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+path = 'giant.txt', offset = 2, limit = 5, max_size = 4096
+
+    @registry.register(
+        name="read_file",
+        description="Read the contents of a file. Returns the file content as text.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the file to read"},
+                "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (1-indexed)",
+                },
+                "limit": {"type": "integer", "description": "Maximum number of lines to read"},
+                "max_size": {
+                    "type": "integer",
+                    "description": "Maximum file size in bytes (default: 1048576 = 1 MB)",
+                },
+            },
+            "required": ["path"],
+        },
+    )
+    async def read_file(
+        path: str, offset: int = 1, limit: int = 2000, max_size: int = 1_048_576
+    ) -> str:
+        """Read a file with optional offset and limit.
+    
+        Args:
+            path: Path to the file to read.
+            offset: Line number to start reading from (1-indexed).
+            limit: Maximum number of lines to read.
+            max_size: Maximum file size in bytes. Files larger than this are rejected.
+        """
+        if offset < 1:
+            raise ToolError(f"offset must be >= 1, got {offset}")
+        if limit < 1:
+            raise ToolError(f"limit must be >= 1, got {limit}")
+        if max_size < 1:
+            raise ToolError(f"max_size must be >= 1, got {max_size}")
+        effective_max = min(max_size, 5_242_880)
+        try:
+            # Full mode: broker-authorized absolute host paths permitted.
+            file_path = resolve_path(path, allow_outside=True)
+        except ValueError as e:
+            raise ToolError(f"{e}") from e
+    
+        if not file_path.exists():
+            raise ToolError(f"File not found: {path}")
+        if not file_path.is_file():
+            raise ToolError(f"Not a file: {path}")
+    
+        # Check file size before reading
+        file_size = file_path.stat().st_size
+        if file_size > effective_max:
+>           raise ToolError(
+                f"File '{path}' is too large ({file_size} bytes, max {effective_max} bytes)"
+            )
+E           machina.core.exceptions.ToolError: File 'giant.txt' is too large (2097165 bytes, max 4096 bytes)
+
+machina/tools/file.py:290: ToolError
+_____________ test_write_file_enospc_mid_write_preserves_original ______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1818/test_write_file_enospc_mid_wri0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bd33a70>
+
+    async def test_write_file_enospc_mid_write_preserves_original(tmp_path, monkeypatch):
+        """An injected ENOSPC during the write cannot destroy the original."""
+        fmod = _file_module(tmp_path, monkeypatch)
+        workdir = tmp_path / "data"
+        workdir.mkdir()
+        target = workdir / "report.txt"
+        target.write_text("ORIGINAL", encoding="utf-8")
+    
+        observed = []
+        real_fdopen = os.fdopen
+    
+        class _PartialFailure:
+            def __init__(self, handle):
+                self._handle = handle
+    
+            def write(self, data):
+                observed.append(target.read_text(encoding="utf-8"))
+                self._handle.write(data[:8])
+                self._handle.flush()
+                raise OSError(errno.ENOSPC, "No space left on device")
+    
+            def __enter__(self):
+                return self
+    
+            def __exit__(self, *exc_info):
+                self._handle.close()
+                return False
+    
+            def fileno(self):
+                return self._handle.fileno()
+    
+        def failing_fdopen(fd, *args, **kwargs):
+            return _PartialFailure(real_fdopen(fd, *args, **kwargs))
+    
+        monkeypatch.setattr(os, "fdopen", failing_fdopen)
+        with pytest.raises(ToolError):
+            await fmod.write_file("data/report.txt", "x" * 4096)
+    
+>       assert observed == ["ORIGINAL"], "the original was already damaged mid-write"
+E       AssertionError: the original was already damaged mid-write
+E       assert [''] == ['ORIGINAL']
+E         
+E         At index 0 diff: '' != 'ORIGINAL'
+E         Use -v to get more diff
+
+tests/test_r4_090_tools.py:178: AssertionError
+__________ test_write_file_fsync_failure_leaves_original_and_no_temp ___________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1818/test_write_file_fsync_failure_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bbbfd90>
+
+    async def test_write_file_fsync_failure_leaves_original_and_no_temp(tmp_path, monkeypatch):
+        """A failure after the write but before replace is still non-destructive."""
+        fmod = _file_module(tmp_path, monkeypatch)
+        target = tmp_path / "report.txt"
+        target.write_text("ORIGINAL", encoding="utf-8")
+    
+        def failing_fsync(_fd):
+            raise OSError(errno.ENOSPC, "No space left on device")
+    
+        monkeypatch.setattr(os, "fsync", failing_fsync)
+>       with pytest.raises(ToolError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ToolError
+
+tests/test_r4_090_tools.py:193: Failed
+______________ test_persona_summary_separates_absent_from_failure ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c2dd450>
+
+    async def test_persona_summary_separates_absent_from_failure(monkeypatch):
+        from machina.core.agent_def import agent_registry
+        from machina.tools import harness
+    
+        async def missing(_name):
+            return None
+    
+        monkeypatch.setattr(agent_registry, "get", missing)
+        absent = await harness._persona_summary("ghost", {})
+    
+        async def broken(_name):
+            raise RuntimeError("soulspec store offline")
+    
+        monkeypatch.setattr(agent_registry, "get", broken)
+        failed = await harness._persona_summary("ghost", {})
+    
+        assert absent["available"] is False and failed["available"] is False
+>       assert absent["reason"] == "no_agent_definition"
+               ^^^^^^^^^^^^^^^^
+E       KeyError: 'reason'
+
+tests/test_r4_090_tools.py:247: KeyError
+___________ test_harness_status_surfaces_persona_resolution_failure ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c383770>
+
+    async def test_harness_status_surfaces_persona_resolution_failure(monkeypatch):
+        from machina.core.agent_def import agent_registry
+        from machina.core.models import Session
+        from machina.tools import harness
+    
+        sid = uuid.uuid4()
+        owner = "persona-failure-owner"
+        monkeypatch.setattr(harness, "active_agent_scope", AsyncMock(return_value=(owner, sid)))
+        monkeypatch.setattr(
+            harness.session_manager,
+            "get",
+            AsyncMock(return_value=Session(id=sid, agent_id=owner)),
+        )
+        monkeypatch.setattr(
+            harness.growth_store,
+            "get",
+            AsyncMock(return_value={"notes": {}, "interactions": 0, "feedback_count": 0}),
+        )
+        monkeypatch.setattr(
+            harness.growth_store, "rsi_status", AsyncMock(return_value={"enabled": False})
+        )
+    
+        async def broken(_name):
+            raise RuntimeError("persona resolution exploded")
+    
+        monkeypatch.setattr(agent_registry, "get", broken)
+        payload = json.loads(await harness.harness_status())
+        persona = payload["effective_persona"]
+>       assert persona == {"available": False, "reason": "persona_resolution_failed"}
+E       AssertionError: assert {'available': False} == {'available':...ution_failed'}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Right contains 1 more item:
+E         {'reason': 'persona_resolution_failed'}
+E         Use -v to get more diff
+
+tests/test_r4_090_tools.py:281: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.skills.registry:registry.py:668 Skipping skill /Users/shadow/machina/skills/cost-optimization/SKILL.md: ValueError
+WARNING  machina.skills.registry:registry.py:668 Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+______ test_every_model_facing_tool_schema_declares_additional_properties ______
+
+    def test_every_model_facing_tool_schema_declares_additional_properties():
+        import machina.tools  # noqa: F401 — registers every built-in tool
+        from machina.tools.base import registry
+    
+        definitions = registry.get_tool_definitions()
+        assert definitions
+        for definition in definitions:
+            declared = definition.parameters.get("additionalProperties")
+>           assert declared in (True, False), (
+                f"{definition.name} schema must declare additionalProperties, got {declared!r}"
+            )
+E           AssertionError: delegate schema must declare additionalProperties, got None
+E           assert None in (True, False)
+
+tests/test_r4_090_tools.py:297: AssertionError
+_________ test_additional_properties_true_is_honored_by_the_validator __________
+
+    def test_additional_properties_true_is_honored_by_the_validator():
+        from machina.tools.base import ToolRegistry
+    
+        reg = ToolRegistry()
+    
+        @reg.register(
+            name="flexible",
+            parameters={"type": "object", "properties": {}, "additionalProperties": True},
+        )
+        def flexible(**_kwargs):
+            return "ok"
+    
+        @reg.register(
+            name="strict",
+            parameters={
+                "type": "object",
+                "properties": {"x": {"type": "integer"}},
+                "required": ["x"],
+            },
+        )
+        def strict(x: int):
+            return x
+    
+        definitions = {d.name: d.parameters for d in reg.get_tool_definitions()}
+        assert definitions["flexible"]["additionalProperties"] is True
+>       assert definitions["strict"]["additionalProperties"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'additionalProperties'
+
+tests/test_r4_090_tools.py:336: KeyError
+______ test_five_tools_declare_typed_parameters_with_ranges_and_defaults _______
+
+    def test_five_tools_declare_typed_parameters_with_ranges_and_defaults():
+        import machina.tools  # noqa: F401 — registers every built-in tool
+        from machina.tools.base import registry
+    
+        for name, (properties, required) in _FIVE_TOOLS.items():
+            tool = registry.get_tool(name)
+            assert tool is not None, name
+            schema = tool.parameters
+            assert set(schema["properties"]) == properties, name
+            assert schema.get("required", []) == required, name
+            for prop_name, prop in schema["properties"].items():
+                assert prop.get("description"), (name, prop_name)
+>               assert prop["description"] != prop_name, (
+                    f"{name}.{prop_name} still has the inferred placeholder description"
+                )
+E               AssertionError: web_search.query still has the inferred placeholder description
+E               assert 'query' != 'query'
+
+tests/test_r4_090_tools.py:370: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r4_090_tools.py::test_read_file_pages_a_file_larger_than_max_size
+FAILED tests/test_r4_090_tools.py::test_read_file_marker_reports_truncation_and_last_page_is_clean
+FAILED tests/test_r4_090_tools.py::test_read_file_pages_past_a_giant_line_without_buffering_it
+FAILED tests/test_r4_090_tools.py::test_write_file_enospc_mid_write_preserves_original
+FAILED tests/test_r4_090_tools.py::test_write_file_fsync_failure_leaves_original_and_no_temp
+FAILED tests/test_r4_090_tools.py::test_persona_summary_separates_absent_from_failure
+FAILED tests/test_r4_090_tools.py::test_harness_status_surfaces_persona_resolution_failure
+FAILED tests/test_r4_090_tools.py::test_every_model_facing_tool_schema_declares_additional_properties
+FAILED tests/test_r4_090_tools.py::test_additional_properties_true_is_honored_by_the_validator
+FAILED tests/test_r4_090_tools.py::test_five_tools_declare_typed_parameters_with_ranges_and_defaults
+10 failed, 3 passed in 9.09s

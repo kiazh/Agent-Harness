@@ -1,0 +1,309 @@
+F...F......F...FF.F.F                                                    [100%]
+=================================== FAILURES ===================================
+________ test_keyring_backend_policy_matrix[plaintext-flag-on-allowed] _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10cc30180>
+backend = ('keyring.backends.plaintext', 'PlaintextKeyring'), flag = '1'
+allowed = True
+
+    @pytest.mark.parametrize(
+        ("backend", "flag", "allowed"),
+        [
+            (_PLAINTEXT_BACKEND, "1", True),  # the documented escape hatch
+            (_PLAINTEXT_BACKEND, None, False),  # default: plaintext rejected
+            (_PLAINTEXT_BACKEND, "0", False),  # precisely "1" enables it
+            (_PLAINTEXT_BACKEND, "true", False),
+            (_UNKNOWN_BACKEND, "1", False),  # the flag must not widen the allowlist
+            (_UNKNOWN_BACKEND, None, False),
+            (_NATIVE_BACKEND, "1", True),  # allowlisted backends unaffected
+            (_NATIVE_BACKEND, None, True),
+            (_FAIL_BACKEND, "1", False),  # fail/null rejected with the flag too
+            (_FAIL_BACKEND, None, False),
+            (_NULL_BACKEND, "1", False),
+        ],
+        ids=[
+            "plaintext-flag-on-allowed",
+            "plaintext-flag-unset-rejected",
+            "plaintext-flag-0-rejected",
+            "plaintext-flag-true-rejected",
+            "unknown-flag-on-rejected",
+            "unknown-flag-unset-rejected",
+            "native-flag-on-allowed",
+            "native-flag-unset-allowed",
+            "fail-flag-on-rejected",
+            "fail-flag-unset-rejected",
+            "null-flag-on-rejected",
+        ],
+    )
+    def test_keyring_backend_policy_matrix(monkeypatch, backend, flag, allowed):
+        _install_keyring(monkeypatch, backend, flag)
+        if allowed:
+>           key = oauth_keys.get_master_key()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_045_047_049_providers.py:122: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+key_provider = None, timeout = 5.0, lock_path = None
+
+    def get_master_key(*, key_provider=None, timeout: float = 5.0, lock_path=None) -> bytes:
+        """Resolve the 32-byte AES master key.
+    
+        Priority: explicit key_provider (tests) → operator env secret →
+        OS keyring. Raises OAuthKeyUnavailable on absence/failure.
+        Callers must invoke this from a worker thread (store uses to_thread);
+        keyring calls are bounded by *timeout* and never hang an event loop.
+        When *lock_path* is given, key creation is serialized across processes
+        so racing workers cannot mint conflicting keys.
+        """
+        if key_provider is not None:
+            key = key_provider()
+            if not isinstance(key, (bytes, bytearray)) or len(key) != 32:
+                raise OAuthKeyUnavailable("oauth key provider must return 32 bytes")
+            return bytes(key)
+        supplied = os.environ.get(MASTER_KEY_ENV, "").strip()
+        if supplied:
+            from machina.security.secrets import get_secret
+    
+            resolved = get_secret(MASTER_KEY_ENV)
+            if not resolved:
+                raise OAuthKeyUnavailable("oauth master key is configured but unreadable")
+            return _decode_supplied(resolved)
+        # Distinguish missing (fall through to keyring) from malformed (fail above).
+        try:
+            import keyring as keyring_mod
+        except ImportError as exc:
+            raise OAuthKeyUnavailable(
+                "no oauth master key: set MACHINA_OAUTH_MASTER_KEY or install an OS keyring backend"
+            ) from exc
+        if not _keyring_bounded(
+            lambda: _keyring_backend_usable(keyring_mod),
+            timeout=timeout,
+            timeout_message="os keyring backend is locked or unavailable",
+        ):
+>           raise OAuthKeyUnavailable("no secure OS keyring backend available for oauth master key")
+E           machina.security.oauth_keys.OAuthKeyUnavailable: no secure OS keyring backend available for oauth master key
+
+machina/security/oauth_keys.py:113: OAuthKeyUnavailable
+_________ test_keyring_backend_policy_matrix[unknown-flag-on-rejected] _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10dff3df0>
+backend = ('shadow.backends', 'CustomBackend'), flag = '1', allowed = False
+
+    @pytest.mark.parametrize(
+        ("backend", "flag", "allowed"),
+        [
+            (_PLAINTEXT_BACKEND, "1", True),  # the documented escape hatch
+            (_PLAINTEXT_BACKEND, None, False),  # default: plaintext rejected
+            (_PLAINTEXT_BACKEND, "0", False),  # precisely "1" enables it
+            (_PLAINTEXT_BACKEND, "true", False),
+            (_UNKNOWN_BACKEND, "1", False),  # the flag must not widen the allowlist
+            (_UNKNOWN_BACKEND, None, False),
+            (_NATIVE_BACKEND, "1", True),  # allowlisted backends unaffected
+            (_NATIVE_BACKEND, None, True),
+            (_FAIL_BACKEND, "1", False),  # fail/null rejected with the flag too
+            (_FAIL_BACKEND, None, False),
+            (_NULL_BACKEND, "1", False),
+        ],
+        ids=[
+            "plaintext-flag-on-allowed",
+            "plaintext-flag-unset-rejected",
+            "plaintext-flag-0-rejected",
+            "plaintext-flag-true-rejected",
+            "unknown-flag-on-rejected",
+            "unknown-flag-unset-rejected",
+            "native-flag-on-allowed",
+            "native-flag-unset-allowed",
+            "fail-flag-on-rejected",
+            "fail-flag-unset-rejected",
+            "null-flag-on-rejected",
+        ],
+    )
+    def test_keyring_backend_policy_matrix(monkeypatch, backend, flag, allowed):
+        _install_keyring(monkeypatch, backend, flag)
+        if allowed:
+            key = oauth_keys.get_master_key()
+            assert isinstance(key, bytes) and len(key) == 32
+        else:
+>           with pytest.raises(OAuthKeyUnavailable):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE OAuthKeyUnavailable
+
+tests/test_r4_045_047_049_providers.py:125: Failed
+_____________ test_non_loopback_plaintext_http_refused_by_default ______________
+
+store_paths = {'providers': PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_no...r/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_non_loopback_plaintext_ht0/home/.env')}
+
+    def test_non_loopback_plaintext_http_refused_by_default(store_paths):
+>       with pytest.raises(store.ProviderStoreError) as excinfo:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderStoreError
+
+tests/test_r4_045_047_049_providers.py:146: Failed
+__________ test_opt_in_allows_non_loopback_http_with_visible_warning ___________
+
+store_paths = {'providers': PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_op...r/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_opt_in_allows_non_loopbac0/home/.env')}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e1ac890>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x10e0ecec0>
+
+    def test_opt_in_allows_non_loopback_http_with_visible_warning(store_paths, monkeypatch, caplog):
+        monkeypatch.setenv("MACHINA_ALLOW_PLAINTEXT_HTTP", "1")
+        with caplog.at_level(logging.WARNING, logger="machina.security.providers"):
+            entry = store.add_provider(
+                "remote-llm",
+                "http://192.0.2.10:8000/v1",
+                api_key="sk-cleartext",
+                env_file=store_paths["env"],
+            )
+        assert entry["base_url"] == "http://192.0.2.10:8000/v1"
+        assert store.get_provider_entry("remote-llm")["base_url"] == entry["base_url"]
+        warnings = [r.getMessage() for r in caplog.records if r.name == "machina.security.providers"]
+>       assert any(
+            "MACHINA_ALLOW_PLAINTEXT_HTTP" in line and "192.0.2.10" in line for line in warnings
+        ), warnings
+E       AssertionError: []
+E       assert False
+E        +  where False = any(<generator object test_opt_in_allows_non_loopback_http_with_visible_warning.<locals>.<genexpr> at 0x10e087370>)
+
+tests/test_r4_045_047_049_providers.py:183: AssertionError
+_____________________ test_opt_in_flag_must_be_exactly_one _____________________
+
+store_paths = {'providers': PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_op...r/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_opt_in_flag_must_be_exact0/home/.env')}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e102d50>
+
+    def test_opt_in_flag_must_be_exactly_one(store_paths, monkeypatch):
+        monkeypatch.setenv("MACHINA_ALLOW_PLAINTEXT_HTTP", "true")
+>       with pytest.raises(store.ProviderStoreError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderStoreError
+
+tests/test_r4_045_047_049_providers.py:190: Failed
+____ test_fetch_models_refuses_plaintext_bearer_to_non_loopback_by_default _____
+
+store_paths = {'providers': PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_fe...r/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_fetch_models_refuses_plai0/home/.env')}
+
+    def test_fetch_models_refuses_plaintext_bearer_to_non_loopback_by_default(store_paths):
+        requests = []
+    
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={"data": []})
+    
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+>           with pytest.raises(store.ProviderStoreError) as excinfo:
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE ProviderStoreError
+
+tests/test_r4_045_047_049_providers.py:208: Failed
+___________ test_contended_store_lock_fails_bounded_with_typed_error ___________
+
+providers_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_contended_store_lock_fail0/providers.json')
+timeout_override = '0.4', window = 10.0
+
+    def _run_contended_add(providers_file: Path, timeout_override: str, window: float):
+        try:
+>           return subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    _ADD_UNDER_CONTENTION,
+                    str(providers_file),
+                    timeout_override,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=window,
+                env=_child_env(providers_file),
+                cwd=str(ROOT),
+            )
+
+tests/test_r4_045_047_049_providers.py:301: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:557: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1221: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:2154: in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: -9 args: ['/Users/shadow/machina/.venv/bin/python', '-c'...>
+endtime = 227116.152441125, orig_timeout = 10.0, stdout_seq = []
+stderr_seq = [], skip_check_and_raise = False
+
+    def _check_timeout(self, endtime, orig_timeout, stdout_seq, stderr_seq,
+                       skip_check_and_raise=False):
+        """Convenience for checking if a timeout has expired."""
+        if endtime is None:
+            return
+        if skip_check_and_raise or _time() > endtime:
+>           raise TimeoutExpired(
+                    self.args, orig_timeout,
+                    output=b''.join(stdout_seq) if stdout_seq else None,
+                    stderr=b''.join(stderr_seq) if stderr_seq else None)
+E           subprocess.TimeoutExpired: Command '['/Users/shadow/machina/.venv/bin/python', '-c', '\nimport json, os, sys, time\n\nproviders_file = sys.argv[1]\ntimeout_override = float(sys.argv[2])\nos.environ["MACHINA_PROVIDERS_FILE"] = providers_file\n\ndef open_fds():\n    try:\n        return {int(name) for name in os.listdir("/dev/fd") if name.isdigit()}\n    except OSError:\n        return None\n\nfrom machina.security import providers as store\nif timeout_override:\n    store._STORE_LOCK_TIMEOUT_SECONDS = timeout_override\nbefore = open_fds()\nstarted = time.monotonic()\nerror = None\ntry:\n    store.add_provider("contended", "http://127.0.0.1:9000/v1")\nexcept BaseException as exc:  # reported verbatim; the parent asserts the type\n    error = {"type": type(exc).__name__, "message": str(exc)}\nelapsed = time.monotonic() - started\nafter = open_fds()\nleaked = sorted(after - before) if before is not None and after is not None else None\nprint(json.dumps({"error": error, "elapsed": elapsed, "leaked_fds": leaked}))\n', '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_contended_store_lock_fail0/providers.json', '0.4']' timed out after 10.0 seconds
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1268: TimeoutExpired
+
+During handling of the above exception, another exception occurred:
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_contended_store_lock_fail0')
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX flock semantics are required")
+    def test_contended_store_lock_fails_bounded_with_typed_error(tmp_path):
+        providers_file = tmp_path / "providers.json"
+        lock_path = Path(str(providers_file) + ".lock")
+        ready = tmp_path / "holder.ready"
+        holder = subprocess.Popen(
+            [sys.executable, "-c", _LOCK_HOLDER, str(lock_path), str(ready)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            _wait_for_file(ready)
+            # Five compressed-clock repeats: typed error, bounded elapsed, no leak.
+            for attempt in range(5):
+>               completed = _run_contended_add(providers_file, "0.4", window=10.0)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r4_045_047_049_providers.py:336: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+providers_file = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-1519/test_contended_store_lock_fail0/providers.json')
+timeout_override = '0.4', window = 10.0
+
+    def _run_contended_add(providers_file: Path, timeout_override: str, window: float):
+        try:
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    _ADD_UNDER_CONTENTION,
+                    str(providers_file),
+                    timeout_override,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=window,
+                env=_child_env(providers_file),
+                cwd=str(ROOT),
+            )
+        except subprocess.TimeoutExpired:
+>           pytest.fail(
+                f"lock acquisition blocked past the {window}s harness window: "
+                "the provider-store lock is unbounded"
+            )
+E           Failed: lock acquisition blocked past the 10.0s harness window: the provider-store lock is unbounded
+
+tests/test_r4_045_047_049_providers.py:316: Failed
+=========================== short test summary info ============================
+FAILED tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[plaintext-flag-on-allowed]
+FAILED tests/test_r4_045_047_049_providers.py::test_keyring_backend_policy_matrix[unknown-flag-on-rejected]
+FAILED tests/test_r4_045_047_049_providers.py::test_non_loopback_plaintext_http_refused_by_default
+FAILED tests/test_r4_045_047_049_providers.py::test_opt_in_allows_non_loopback_http_with_visible_warning
+FAILED tests/test_r4_045_047_049_providers.py::test_opt_in_flag_must_be_exactly_one
+FAILED tests/test_r4_045_047_049_providers.py::test_fetch_models_refuses_plaintext_bearer_to_non_loopback_by_default
+FAILED tests/test_r4_045_047_049_providers.py::test_contended_store_lock_fails_bounded_with_typed_error
+7 failed, 14 passed in 10.52s
