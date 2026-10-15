@@ -52,10 +52,12 @@ from machina.research.locomo import (
 )
 
 # The benchmark reuses test-harness functions (single source of truth). Those
-# live in the repo's tests/ package, which is deliberately NOT shipped in the
-# wheel — so this tool requires a source checkout and fails with a clear
-# message otherwise.
+# live in the separate Machina-DevTools checkout (next to this repository, or
+# pointed at by MACHINA_DEVTOOLS) — the suite is deliberately NOT shipped in
+# the wheel, so this tool fails with a clear message when it is absent.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEVTOOLS_ENV = "MACHINA_DEVTOOLS"
+_DEVTOOLS_SIBLINGS = ("Machina-DevTools", "machina-devtools")
 
 # Subprocess sections must be bounded: an unbounded child (suite/UI) would
 # hang the whole benchmark with no way to notice. A timed-out section is
@@ -73,14 +75,30 @@ _INCIDENT = {
 }
 
 
+def _devtools_root_or_none() -> Path | None:
+    candidates: list[Path] = []
+    env = os.environ.get(_DEVTOOLS_ENV)
+    if env:
+        candidates.append(Path(env).expanduser())
+    # Running from the DevTools checkout itself (its tests/ is importable).
+    candidates.append(Path.cwd())
+    candidates.extend(_REPO_ROOT.parent / name for name in _DEVTOOLS_SIBLINGS)
+    for candidate in candidates:
+        if (candidate / "tests" / "__init__.py").is_file():
+            return candidate.resolve()
+    return None
+
+
 def _ensure_tests_importable() -> None:
-    if str(_REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(_REPO_ROOT))
-    if not (_REPO_ROOT / "tests" / "__init__.py").is_file():
+    devtools = _devtools_root_or_none()
+    if devtools is None:
         raise SystemExit(
-            "benchmark requires a source checkout (tests/ not found). "
-            "Run it from the repository root."
+            "benchmark requires the Machina-DevTools checkout next to this "
+            f"repository (or {_DEVTOOLS_ENV} pointing at it). "
+            "Clone https://github.com/kiazh/Machina-DevTools beside it."
         )
+    if str(devtools) not in sys.path:
+        sys.path.insert(0, str(devtools))
 
 
 def _git_head() -> str:
@@ -123,7 +141,6 @@ def _incident_replay() -> dict:
 def _retrieval() -> dict:
     _ensure_tests_importable()
     import pytest
-
     from tests import test_retrieval_eval as ev
 
     def _run(callable_):
@@ -157,10 +174,10 @@ def _locomo_path(explicit: str | None) -> Path | None:
     env = os.environ.get("MACHINA_LOCOMO_DATA")
     if env:
         candidates.append(Path(env).expanduser())
-    candidates += [
-        _REPO_ROOT / "tests" / "data" / "locomo10.json",
-        Path.home() / ".machina" / "locomo" / "locomo10.json",
-    ]
+    devtools = _devtools_root_or_none()
+    if devtools is not None:
+        candidates.append(devtools / "tests" / "data" / "locomo10.json")
+    candidates.append(Path.home() / ".machina" / "locomo" / "locomo10.json")
     for candidate in candidates:
         if candidate.is_file():
             return candidate
@@ -393,6 +410,17 @@ def _comparisons(results: dict) -> dict:
 
 def _suite() -> dict:
     started = time.monotonic()
+    devtools = _devtools_root_or_none()
+    if devtools is None:
+        return {
+            "summary": "",
+            "error": (
+                "backend suite requires the Machina-DevTools checkout "
+                f"(or {_DEVTOOLS_ENV} pointing at it)"
+            ),
+            "wall_seconds": 0.0,
+            "exit_code": 2,
+        }
     try:
         out = subprocess.run(
             [
@@ -404,10 +432,11 @@ def _suite() -> dict:
                 "-p",
                 "no:cacheprovider",
             ],
-            cwd=_REPO_ROOT,
+            cwd=devtools,
             capture_output=True,
             text=True,
             timeout=_SUITE_TIMEOUT_SECONDS,
+            env={**os.environ, "MACHINA_REPO": str(_REPO_ROOT)},
         )
     except subprocess.TimeoutExpired:
         return {

@@ -85,4 +85,10 @@ extend-exclude = ["skills/ecc", "machina/bundled_agents/ecc"]
 # I = import order, UP = modern Python syntax.
 select = ["E4", "E7", "E9", "F", "B904", "I", "UP"]
 
+# The benchmark imports the DevTools suite (`tests`) at runtime from its
+# separate checkout; classify it as third-party so import sorting is stable
+# whether or not a stray tests/ directory exists locally.
+[tool.ruff.lint.isort]
+known-third-party = ["tests"]
+
 
