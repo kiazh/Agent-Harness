@@ -32,7 +32,13 @@ def _execute(session_id, operation):
     try:
         _run(run())
     except ValueError as exc:
-        console.print(str(exc), markup=False)
+        # Validation, disabled-growth, and bad-JSON failures are typed
+        # errors, never tracebacks. Plain (non-markup) print so a hostile
+        # key name cannot break rendering either.
+        console.print(f"Error: {exc}", markup=False)
+        raise typer.Exit(1) from None
+    except OSError as exc:
+        console.print(f"Error: file operation failed ({type(exc).__name__}).", markup=False)
         raise typer.Exit(1) from None
 
 
@@ -94,11 +100,13 @@ def feedback(episode: str, reward: float, session: str = typer.Option(None, "--s
 @app.command("import-policy")
 def import_policy(path: Path, session: str = typer.Option(None, "--session", "-s")):
     """Install validated weights produced by the existing offline RL trainer."""
-    payload = json.loads(path.read_text(encoding="utf-8"))
 
     async def install(store, current):
         from machina.memory.growth import require_growth_enabled
 
+        # Read inside the guarded operation so a missing/unreadable file or
+        # bad JSON is a typed error (OSError/ValueError), never a traceback.
+        payload = json.loads(path.read_text(encoding="utf-8"))
         require_growth_enabled()
         await store.install_policy(current.agent_id, payload)
         return {"installed": True}

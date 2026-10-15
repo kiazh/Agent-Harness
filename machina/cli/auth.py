@@ -175,7 +175,7 @@ def _expiry_text(value: Any) -> str:
 
 def _print_signed_in(tokens: dict[str, Any]) -> None:
     account = tokens.get("account_id") or "unknown account"
-    output.success(f"Signed in to ChatGPT ({escape(str(account))}).")
+    output.success(f"Signed in to ChatGPT ({account}).")
     output.status_line("Access token expires", _expiry_text(tokens.get("expires_at")))
     output.muted(f"Tokens live in {chatgpt_auth.auth_path()}; the chatgpt provider uses them.")
 
@@ -285,7 +285,7 @@ def login(
                 "Run `machina auth login` again.",
             )
         else:
-            output.error(f"Sign-in was not completed ({escape(server.error)}).")
+            output.error(f"Sign-in was not completed ({server.error}).")
         raise typer.Exit(EXIT_FAILED)
     assert server.code  # a settled flow without error always carries a code
     try:
@@ -358,7 +358,7 @@ app.add_typer(chatgpt_app, name="chatgpt")
 def _print_copilot_signed_in(tokens: dict[str, Any]) -> None:
     account = tokens.get("account") or "unknown account"
     family = tokens.get("token_family") or "unknown"
-    output.success(f"Signed in to GitHub Copilot ({escape(str(account))}, {family} token).")
+    output.success(f"Signed in to GitHub Copilot ({account}, {family} token).")
     output.muted(f"Tokens live in {copilot_auth.auth_path()}; the copilot provider uses them.")
 
 

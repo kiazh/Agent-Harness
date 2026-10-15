@@ -90,6 +90,28 @@ def _run(coro):
         return pool.submit(asyncio.run, coro).result()
 
 
+def _sync_env_shadow(key: str, value: str) -> None:
+    """Mirror the gateway's ``config.set`` sync for a persisted default.
+
+    ``Config.get`` reads ``MACHINA_<KEY>`` (and ``.env``) before
+    ``config.yaml``, so a saved default would be shadowed — or a stale
+    line would resurrect a previous value across restarts — without the
+    sync. The durable file write already happened; a failed ``.env``
+    update only warns, never fails the command.
+    """
+    env_key = f"MACHINA_{key.upper()}"
+    os.environ[env_key] = value
+    try:
+        from machina.security.env_file import set_env_values
+
+        set_env_values({env_key: value})
+    except (OSError, ValueError) as error:
+        console.print(
+            f"[yellow]Could not update .env ({escape(type(error).__name__)}); "
+            f"edit {escape(env_key)} manually.[/yellow]"
+        )
+
+
 def _parse_uuid(s: str) -> uuid.UUID | None:
     """Parse a UUID string, returning None if invalid.
 
@@ -454,6 +476,12 @@ def repl(
     mode: str = typer.Option(None, "--mode", help="Execution mode: ask|workspace|sandbox|full"),
 ):
     """Open the interactive UI (same as running `machina` with no arguments)."""
+    if mode is not None:
+        normalized = mode.strip().lower()
+        if normalized not in ("ask", "workspace", "sandbox", "full"):
+            output.error("Invalid --mode. Use ask|workspace|sandbox|full.")
+            raise typer.Exit(1)
+        config.set("execution_mode", normalized)
     raise typer.Exit(launch_ui(model=model, provider=provider, session_id=session_id, mode=mode))
 
 
@@ -533,6 +561,7 @@ def set_mode(
 
                 count = await permission_broker.revoke("*")
                 config.set("execution_mode", "ask", persist=True)
+                _sync_env_shadow("execution_mode", "ask")
                 output.status_line("Mode", f"ask ({count} grants revoked)", "success")
             finally:
                 await db.close()
@@ -560,7 +589,15 @@ def set_mode(
                 return
         # Persistent default (LP-13): per-session activation happens in the
         # TUI (`/mode full`) and auto-grants only under this default.
-        config.set("execution_mode", normalized, persist=True)
+        # MACHINA_EXECUTION_MODE shadows the file (Config.get checks the
+        # environment first), so sync it like the gateway syncs
+        # MACHINA_MODEL/MACHINA_PROVIDER on config.set.
+        try:
+            config.set("execution_mode", normalized, persist=True)
+        except ValueError as error:
+            output.error(str(error))
+            raise typer.Exit(1) from None
+        _sync_env_shadow("execution_mode", normalized)
         output.status_line("Mode", f"{normalized} (saved)", "success")
         if normalized == "full":
             console.print(
@@ -704,9 +741,18 @@ def fork(
         try:
             sid = _parse_uuid(session_id)
             if sid is None:
-                console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                output.error(f"Invalid session ID: {session_id}")
                 raise typer.Exit(1)
-            new_session = await session_manager.fork(sid, title=title)
+            try:
+                new_session = await session_manager.fork(sid, title=title)
+            except ValueError as error:
+                # Unknown session (and other validation failures) are a
+                # typed error, never a traceback.
+                output.error(str(error))
+                raise typer.Exit(1) from None
+            except OSError as error:
+                output.error(f"Could not fork session ({type(error).__name__}).")
+                raise typer.Exit(1) from None
             output.success(f"Forked session {session_id} → {new_session.id}")
             output.muted(f"Title: {new_session.title or '(untitled)'}")
         finally:
@@ -731,11 +777,11 @@ def delete(
         try:
             sid = _parse_uuid(session_id)
             if sid is None:
-                console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                output.error(f"Invalid session ID: {session_id}")
                 raise typer.Exit(1)
             session = await session_manager.get(sid)
             if not session:
-                console.print(f"[red]Session {session_id} not found[/red]")
+                output.error(f"Session {session_id} not found")
                 raise typer.Exit(1)
 
             if not force:
@@ -780,9 +826,9 @@ def delete(
             finally:
                 await end_mutation(sid, token)
             if deleted:
-                console.print(f"[green]Session {session_id} deleted.[/green]")
+                output.success(f"Session {session_id} deleted.")
             else:
-                console.print(f"[red]Failed to delete session {session_id}.[/red]")
+                output.error(f"Failed to delete session {session_id}.")
                 raise typer.Exit(1)
         finally:
             await db.close()
@@ -803,7 +849,7 @@ def context(
             if session_id:
                 sid = _parse_uuid(session_id)
                 if sid is None:
-                    console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                    output.error(f"Invalid session ID: {session_id}")
                     raise typer.Exit(1)
             else:
                 session = await session_manager.get_last_active()
@@ -815,9 +861,9 @@ def context(
             session = await session_manager.get(sid)
             if session:
                 console.print(f"[bold]Session:[/bold] {session.id}")
-                console.print(f"[bold]Title:[/bold] {session.title or '(untitled)'}")
-                console.print(f"[bold]Status:[/bold] {session.status}")
-                console.print(f"[bold]Goal:[/bold] {session.goal or '(none)'}")
+                console.print(f"[bold]Title:[/bold] {escape(session.title or '(untitled)')}")
+                console.print(f"[bold]Status:[/bold] {escape(str(session.status))}")
+                console.print(f"[bold]Goal:[/bold] {escape(session.goal or '(none)')}")
                 from machina.core.context_windows import context_window_for
 
                 window = context_window_for(session.model or config.get("model"))
@@ -901,10 +947,10 @@ def learn(
     except services.ServiceError as e:
         output.error(str(e))
         raise typer.Exit(1) from None
-    console.print(f"[green]Skill '{skill.name}' created successfully![/green]")
-    console.print(f"  Description: {skill.description}")
-    console.print(f"  Triggers: {', '.join(skill.triggers)}")
-    console.print(f"  Source: {skill.source}")
+    console.print(f"[green]Skill '{escape(skill.name)}' created successfully![/green]")
+    console.print(f"  Description: {escape(skill.description)}")
+    console.print(f"  Triggers: {escape(', '.join(skill.triggers))}")
+    console.print(f"  Source: {escape(skill.source)}")
 
 
 @app.command(name="curator")
@@ -946,14 +992,14 @@ def curator(
         if report["top_skills"]:
             console.print("\n[bold]Top skills:[/bold]")
             for s in report["top_skills"]:
-                console.print(f"  {s['name']}: {s['usage_count']} uses")
+                console.print(f"  {escape(s['name'])}: {s['usage_count']} uses")
 
     elif action == "archive":
         archived = curator.archive_stale(days=days)
         if archived:
             console.print(f"[green]Archived {len(archived)} stale skills:[/green]")
             for name in archived:
-                console.print(f"  - {name}")
+                console.print(f"  - {escape(name)}")
         else:
             console.print("[yellow]No stale skills found.[/yellow]")
 
@@ -963,7 +1009,7 @@ def curator(
             prefix = "[yellow]Would remove[/yellow]" if dry_run else "[green]Removed[/green]"
             console.print(f"{prefix} {len(removed)} unused skills:")
             for name in removed:
-                console.print(f"  - {name}")
+                console.print(f"  - {escape(name)}")
         else:
             console.print("[yellow]No unused skills found.[/yellow]")
 
@@ -973,7 +1019,7 @@ def curator(
             console.print(f"[bold]Stale skills ({len(stale)}):[/bold]")
             for s in stale:
                 last = s.last_activity_at.strftime("%Y-%m-%d") if s.last_activity_at else "never"
-                console.print(f"  {s.name} (last activity: {last})")
+                console.print(f"  {escape(s.name)} (last activity: {last})")
         else:
             console.print("[yellow]No stale skills found.[/yellow]")
 
@@ -982,7 +1028,7 @@ def curator(
         if unused:
             console.print(f"[bold]Unused skills ({len(unused)}):[/bold]")
             for s in unused:
-                console.print(f"  {s.name} (created: {s.created_at.strftime('%Y-%m-%d')})")
+                console.print(f"  {escape(s.name)} (created: {s.created_at.strftime('%Y-%m-%d')})")
         else:
             console.print("[yellow]No unused skills found.[/yellow]")
 
@@ -991,12 +1037,14 @@ def curator(
         if top:
             console.print(f"[bold]Top {len(top)} skills:[/bold]")
             for i, s in enumerate(top, 1):
-                console.print(f"  {i}. {s.name} — {s.usage_count} uses, {s.view_count} views")
+                console.print(
+                    f"  {i}. {escape(s.name)} — {s.usage_count} uses, {s.view_count} views"
+                )
         else:
             console.print("[yellow]No skill usage data.[/yellow]")
 
     else:
-        console.print(f"[red]Unknown action:[/red] {action}")
+        output.error(f"Unknown action: {action}")
         console.print("[dim]Available: report, archive, cleanup, stale, unused, top[/dim]")
         raise typer.Exit(1)
 
@@ -1036,11 +1084,11 @@ def hub(
         table.add_column("Version", style="dim")
         for s in skills:
             table.add_row(
-                s.get("name", ""),
-                s.get("description", "")[:60],
-                s.get("author", ""),
-                ", ".join(s.get("tags", [])[:3]),
-                s.get("version", "1.0.0"),
+                escape(s.get("name", "")),
+                escape(s.get("description", "")[:60]),
+                escape(s.get("author", "")),
+                escape(", ".join(s.get("tags", [])[:3])),
+                escape(s.get("version", "1.0.0")),
             )
         console.print(table)
 
@@ -1068,9 +1116,9 @@ def hub(
         tag_list = [t.strip() for t in tags.split(",")] if tags else []
         try:
             entry = hub.publish(name, author=author or "", tags=tag_list)
-            console.print(f"[green]Published '{entry['name']}' to hub.[/green]")
+            console.print(f"[green]Published '{escape(entry['name'])}' to hub.[/green]")
         except ValueError as e:
-            console.print(f"[red]{e}[/red]")
+            output.error(str(e))
             raise typer.Exit(1) from None
 
     elif action == "install":
@@ -1079,11 +1127,11 @@ def hub(
             raise typer.Exit(1)
         try:
             skill = hub.install(name)
-            console.print(f"[green]Installed '{skill.name}' from hub.[/green]")
-            console.print(f"  Description: {skill.description}")
-            console.print(f"  Triggers: {', '.join(skill.triggers)}")
+            console.print(f"[green]Installed '{escape(skill.name)}' from hub.[/green]")
+            console.print(f"  Description: {escape(skill.description)}")
+            console.print(f"  Triggers: {escape(', '.join(skill.triggers))}")
         except ValueError as e:
-            console.print(f"[red]{e}[/red]")
+            output.error(str(e))
             raise typer.Exit(1) from None
 
     elif action == "telemetry":
@@ -1098,15 +1146,15 @@ def hub(
         table.add_column("Published", style="dim")
         for t in telemetry:
             table.add_row(
-                t.get("name", ""),
-                str(t.get("usage_count", 0)),
-                str(t.get("view_count", 0)),
-                t.get("published_at", "")[:10],
+                escape(t.get("name", "")),
+                escape(str(t.get("usage_count", 0))),
+                escape(str(t.get("view_count", 0))),
+                escape(t.get("published_at", "")[:10]),
             )
         console.print(table)
 
     else:
-        console.print(f"[red]Unknown action:[/red] {action}")
+        output.error(f"Unknown action: {action}")
         console.print("[dim]Available: list, search, publish, install, telemetry[/dim]")
         raise typer.Exit(1)
 
@@ -1142,9 +1190,9 @@ def doctor():
 
     def check(label: str, ok: bool, detail: str = "", hint: str = "") -> None:
         mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
-        console.print(f"  {label}: {mark} {detail}".rstrip())
+        console.print(f"  {escape(label)}: {mark} {escape(detail)}".rstrip())
         if not ok and hint:
-            console.print(f"      {hint}", style="dim")
+            console.print(f"      {escape(hint)}", style="dim")
 
     check(
         "Python", sys.version_info >= (3, 11), sys.version.split()[0], "Python 3.11+ is required."
@@ -1230,14 +1278,14 @@ def init(
         if db_url:
             db.dsn = db_url
         console.print("[bold]Initializing Machina...[/bold]")
-        console.print(f"  Database: {db.dsn.split('@')[-1]}")
+        console.print(f"  Database: {escape(db.dsn.split('@')[-1])}")
         try:
             with output.spinner("Creating schema..."):
                 await db.connect()
                 await db.initialize_schema()
             console.print("  Schema: [green]✓ created[/green]")
         except Exception as e:
-            console.print(f"  Schema: [red]✗ failed[/red] ({e})")
+            console.print(f"  Schema: [red]✗ failed[/red] ({escape(str(e))})")
             raise typer.Exit(1) from None
         finally:
             await db.close()
@@ -1344,16 +1392,21 @@ def setup(
         )
         raise typer.Exit(1)
 
-    target = find_env_file()
+    try:
+        target = find_env_file()
+    except (OSError, ValueError) as error:
+        # A bad $MACHINA_ENV_FILE override is a typed error, never a traceback.
+        output.error(f"Cannot resolve the .env location: {error}")
+        raise typer.Exit(1) from None
     if target.is_file() and force:
-        console.print(f"[bold]Overwriting existing .env:[/bold] {target}")
+        console.print(f"[bold]Overwriting existing .env:[/bold] {escape(str(target))}")
         existing: dict[str, str] = {}
     elif target.is_file():
-        console.print(f"[bold]Found existing .env:[/bold] {target}")
+        console.print(f"[bold]Found existing .env:[/bold] {escape(str(target))}")
         console.print("Press Enter to keep each current value (use --force to start over).")
         existing = read_env_values(target)
     else:
-        console.print(f"[bold]Creating new .env:[/bold] {target}")
+        console.print(f"[bold]Creating new .env:[/bold] {escape(str(target))}")
         existing = {}
 
     prompts: list[tuple[str, str, str, bool]] = [
@@ -1454,11 +1507,15 @@ def setup(
 
     if not target.is_file():
         # Seed from .env.example so comments/docs carry over, then apply values.
-        example = target.parent / ".env.example"
-        if example.is_file():
-            target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
-        else:
-            target.write_text("# Machina environment (git-ignored)\n", encoding="utf-8")
+        try:
+            example = target.parent / ".env.example"
+            if example.is_file():
+                target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+            else:
+                target.write_text("# Machina environment (git-ignored)\n", encoding="utf-8")
+        except OSError as error:
+            output.error(f"Could not create {target}: {type(error).__name__}.")
+            raise typer.Exit(1) from None
         # Secret file hygiene (wave-3 hotfix): the seed must be 0600 before
         # any values land; without this an updates={} path leaves it 0644.
         try:
@@ -1466,7 +1523,11 @@ def setup(
         except OSError:
             pass
     if updates:
-        set_env_values(updates, target)
+        try:
+            set_env_values(updates, target)
+        except (OSError, ValueError) as error:
+            output.error(f"Could not write {target}: {type(error).__name__}.")
+            raise typer.Exit(1) from None
         changed = ", ".join(sorted(updates))
         console.print(f"\n[green]✓ Wrote {len(updates)} value(s) to .env:[/green] {changed}")
     else:
@@ -1503,7 +1564,7 @@ def serve(
     import uvicorn
 
     console.print("[bold]Machina API[/bold]")
-    console.print(f"  Host: {host}")
+    console.print(f"  Host: {escape(host)}")
     console.print(f"  Port: {port}")
     console.print(f"  Reload: {'enabled' if reload else 'disabled'}")
     console.print()
@@ -1519,7 +1580,7 @@ def serve(
         output.error(f"Failed to start server: {e}")
         raise typer.Exit(1) from None
 
-    console.print(f"[green]Starting server at {url}[/green]")
+    console.print(f"[green]Starting server at {escape(url)}[/green]")
     console.print("[dim]Press Ctrl+C to stop[/dim]")
     console.print()
 
@@ -1562,10 +1623,18 @@ def config_set(
         console.print(f"[dim]Available keys: {', '.join(config.to_dict().keys())}[/dim]")
         raise typer.Exit(1)
 
-    config.set(key, value, persist=persist)
-    console.print(f"[green]Set {key} = {escape(str(value))}[/green]")
+    try:
+        config.set(key, value, persist=persist)
+    except ValueError as error:
+        output.error(str(error))
+        raise typer.Exit(1) from None
+    console.print(f"[green]Set {escape(key)} = {escape(str(value))}[/green]")
     if persist:
         console.print("[dim]Config saved to file.[/dim]")
+        if key in ("model", "provider"):
+            # MACHINA_MODEL/MACHINA_PROVIDER shadow the file (Config.get
+            # checks the environment first) — sync them like the gateway.
+            _sync_env_shadow(key, str(config.get(key)))
 
 
 # ─── Memory commands ────────────────────────────────────────────────────────
@@ -1619,11 +1688,13 @@ def memory_search(
             for i, rm in enumerate(results, 1):
                 m = rm.memory
                 console.print(
-                    f"\n  [{i}] [cyan]({m.category}, importance={m.importance:.2f}, score={rm.score:.3f})[/cyan]"
+                    f"\n  [{i}] [cyan]({escape(m.category)}, importance={m.importance:.2f}, score={rm.score:.3f})[/cyan]"
                 )
-                console.print(f"      {m.content[:200]}")
+                console.print(f"      {escape(m.content[:200])}")
                 if rm.persona_interpretation:
-                    console.print(f"      [dim][persona] {rm.persona_interpretation[:200]}[/dim]")
+                    console.print(
+                        f"      [dim][persona] {escape(rm.persona_interpretation[:200])}[/dim]"
+                    )
             console.print()
         finally:
             await db.close()
@@ -1644,13 +1715,13 @@ def memory_forget(
 
             mid = _parse_uuid(memory_id)
             if mid is None:
-                console.print(f"[red]Invalid memory ID: {memory_id}[/red]")
+                output.error(f"Invalid memory ID: {memory_id}")
                 raise typer.Exit(1)
             deleted = await memory_store.delete(mid)
             if deleted:
-                console.print(f"[green]Memory {memory_id} deleted.[/green]")
+                output.success(f"Memory {memory_id} deleted.")
             else:
-                console.print(f"[yellow]Memory {memory_id} not found.[/yellow]")
+                console.print(f"[yellow]Memory {escape(memory_id)} not found.[/yellow]")
         finally:
             await db.close()
 
@@ -1689,11 +1760,11 @@ def memory_pending(
 
             for p in pending:
                 table.add_row(
-                    str(p.id)[:8],
-                    p.category,
+                    escape(str(p.id))[:8],
+                    escape(p.category),
                     f"{p.importance:.2f}",
-                    p.content[:60],
-                    ", ".join(p.redactions) if p.redactions else "—",
+                    escape(p.content[:60]),
+                    escape(", ".join(p.redactions)) if p.redactions else "—",
                 )
 
             console.print(table)
@@ -1717,12 +1788,12 @@ def memory_approve(
 
             pid = _parse_uuid(pending_id)
             if pid is None:
-                console.print(f"[red]Invalid pending memory ID: {pending_id}[/red]")
+                output.error(f"Invalid pending memory ID: {pending_id}")
                 raise typer.Exit(1)
             memory = await memory_approval_gate.approve(pid, review_note=note)
             if memory:
                 console.print(
-                    f"[green]Pending memory {pending_id} approved → memory {memory.id}[/green]"
+                    f"[green]Pending memory {escape(pending_id)} approved → memory {memory.id}[/green]"
                 )
             else:
                 console.print(
@@ -1748,11 +1819,11 @@ def memory_reject(
 
             pid = _parse_uuid(pending_id)
             if pid is None:
-                console.print(f"[red]Invalid pending memory ID: {pending_id}[/red]")
+                output.error(f"Invalid pending memory ID: {pending_id}")
                 raise typer.Exit(1)
             rejected = await memory_approval_gate.reject(pid, review_note=note)
             if rejected:
-                console.print(f"[green]Pending memory {pending_id} rejected.[/green]")
+                console.print(f"[green]Pending memory {escape(pending_id)} rejected.[/green]")
             else:
                 console.print(
                     f"[yellow]Pending memory {pending_id} not found or already reviewed.[/yellow]"
@@ -1933,10 +2004,10 @@ def user_profile_list(
 
             for p in profiles:
                 table.add_row(
-                    p.user_id,
-                    p.display_name or "—",
-                    str(p.interaction_count),
-                    str(len(p.topics)),
+                    escape(p.user_id),
+                    escape(p.display_name or "—"),
+                    escape(str(p.interaction_count)),
+                    escape(str(len(p.topics))),
                 )
 
             console.print(table)
@@ -2235,7 +2306,7 @@ def uninstall():
 
     console.print("[bold]Uninstall plan:[/bold]")
     for item in plan:
-        console.print(f"  • {item}")
+        console.print(f"  • {escape(item)}")
 
     # 1. PATH: Windows registry + shim file (created by install.sh).
     if remove_path:

@@ -31,10 +31,14 @@ const KNOWN_KEYS: Array<[string, string]> = [
 	["TOGETHER_API_KEY", "Together AI (open models)"],
 	["DEEPSEEK_API_KEY", "DeepSeek models"],
 	["XAI_API_KEY", "xAI (Grok models)"],
+	["OPENCODE_API_KEY", "OpenCode Zen (free + paid models gateway)"],
+	["KIMI_API_KEY", "Kimi Code (K3 coding models)"],
+	["CUSTOM_API_KEY", "Custom OpenAI-compatible endpoint"],
 	["COHERE_API_KEY", "Cohere (reranking)"],
 	["DATABASE_URL", "PostgreSQL connection string"],
 	["SEARXNG_URL", "Self-hosted SearXNG for web search"],
 	["MACHINA_MODEL", "Default model identifier"],
+	["CUSTOM_BASE_URL", "Custom OpenAI-compatible base URL"],
 ];
 
 /** One /keys row: a catalog key or a user-added provider's derived key. */

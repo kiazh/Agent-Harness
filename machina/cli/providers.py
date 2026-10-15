@@ -350,9 +350,9 @@ def _chatgpt_models_cmd(*, refresh: bool, json_output: bool) -> None:
     table.add_column("Max", justify="right")
     for model in visible:
         table.add_row(
-            model.slug,
-            "/".join(model.supported_efforts) or "—",
-            model.default_effort or "—",
+            escape(model.slug),
+            escape("/".join(model.supported_efforts)) or "—",
+            escape(model.default_effort or "—"),
             _fmt_context(model.context_window),
             _fmt_context(model.max_context_window),
         )
@@ -376,13 +376,20 @@ def _named_models_cmd(provider: str, *, refresh: bool, json_output: bool) -> Non
     stale = age is None or age >= MODELS_TTL_SECONDS
     fetch_error = None
     models = list(entry.get("models") or [])
+    kept_cache = False
     if refresh or stale:
         try:
             key = store.resolve_provider_key(entry)
             pulled = store.fetch_models(str(entry.get("base_url") or ""), api_key=key)
-            models = store.save_models(provider, pulled) if pulled else []
         except Exception as error:
             fetch_error = str(error) or type(error).__name__
+        else:
+            if pulled:
+                models = store.save_models(provider, pulled)
+            elif models:
+                # A successful fetch with an empty catalog must not wipe a
+                # good cache: keep showing the cached list and say so.
+                kept_cache = True
     if json_output:
         typer.echo(
             json_lib.dumps(
@@ -406,8 +413,10 @@ def _named_models_cmd(provider: str, *, refresh: bool, json_output: bool) -> Non
     table.add_column("Model")
     table.add_column("Context", justify="right")
     for row in models:
-        table.add_row(str(row.get("id")), _fmt_context(row.get("contextWindow")))
+        table.add_row(escape(str(row.get("id"))), _fmt_context(row.get("contextWindow")))
     console.print(table)
+    if kept_cache:
+        console.print("[yellow]Live refresh returned no models; showing the cached list.[/yellow]")
     if fetch_error:
         console.print(
             f"[yellow]Live refresh failed, showing the cached list: {escape(fetch_error)}[/yellow]"

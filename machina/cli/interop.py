@@ -56,7 +56,7 @@ def run_status() -> int:
     try:
         results = interop.detect()
     except Exception as error:  # detection must never hard-fail the command
-        console.print(f"[red]Interop detection failed:[/red] {error}")
+        console.print(f"[red]Interop detection failed:[/red] {escape(str(error))}")
         return EXIT_FAILED
 
     table = Table(title=f"External agent harnesses ({len(results)})")
@@ -75,20 +75,20 @@ def run_status() -> int:
         enabled = result.enabled_cell
         enabled_style = {"yes": "green", "manual": "yellow"}.get(enabled, "dim")
         table.add_row(
-            result.label,
+            escape(result.label),
             _flag(result.installed),
-            _version_cell(result.version),
+            escape(_version_cell(result.version)),
             _flag(result.running),
-            _registered_cell(result),
+            escape(_registered_cell(result)),
             f"[{enabled_style}]{enabled}[/{enabled_style}]",
         )
         hints.append(_hint_for(key, result))
 
     console.print(table)
-    console.print("[dim]Machina MCP server:[/dim] " + shlex.join(interop.server_command()))
+    console.print("[dim]Machina MCP server:[/dim] " + escape(shlex.join(interop.server_command())))
     actionable = [hint for hint in hints if hint]
     for hint in actionable:
-        console.print(f"[dim]· {hint}[/dim]")
+        console.print(f"[dim]· {escape(hint)}[/dim]")
     if actionable:
         console.print(
             "[dim]Enable other harnesses with `machina interop enable <platform>`; "
@@ -127,15 +127,15 @@ def run_enable(platform: str, *, scope: str = "project", dry_run: bool = False) 
     try:
         result = interop.enable(platform, scope=normalized, dry_run=dry_run)
     except interop.UnknownPlatform as error:
-        console.print(f"[red]{error}[/red]")
+        console.print(f"[red]{escape(str(error))}[/red]")
         return EXIT_USAGE
     for step in result.steps:
-        console.print(f"  [dim]{step}[/dim]")
+        console.print(f"  [dim]{escape(step)}[/dim]")
     style = "green" if result.ok else "red"
-    console.print(f"[{style}]{result.message}[/{style}]")
+    console.print(f"[{style}]{escape(result.message)}[/{style}]")
     if result.verify:
         mark = "[green]✓[/green]" if result.verify.get("ok") else "[red]✗[/red]"
-        console.print(f"  {mark} verify: {result.verify.get('detail', '')}")
+        console.print(f"  {mark} verify: {escape(str(result.verify.get('detail', '')))}")
     return EXIT_OK if result.ok else EXIT_FAILED
 
 
@@ -144,15 +144,15 @@ def run_disable(platform: str) -> int:
     try:
         result = interop.disable(platform)
     except interop.UnknownPlatform as error:
-        console.print(f"[red]{error}[/red]")
+        console.print(f"[red]{escape(str(error))}[/red]")
         return EXIT_USAGE
     for step in result.steps:
-        console.print(f"  [dim]{step}[/dim]")
+        console.print(f"  [dim]{escape(step)}[/dim]")
     style = "green" if result.ok else "yellow"
-    console.print(f"[{style}]{result.message}[/{style}]")
+    console.print(f"[{style}]{escape(result.message)}[/{style}]")
     if result.verify:
         mark = "[green]✓[/green]" if result.verify.get("ok") else "[red]✗[/red]"
-        console.print(f"  {mark} verify: {result.verify.get('detail', '')}")
+        console.print(f"  {mark} verify: {escape(str(result.verify.get('detail', '')))}")
     return EXIT_OK if result.ok else EXIT_FAILED
 
 
