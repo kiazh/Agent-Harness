@@ -114,9 +114,7 @@ async def test_missing_provenance_rejection_is_retryable(db_pool, monkeypatch):
         # Transient miss: the source memory is durable but its provenance row
         # is not visible yet (e.g. the write's provenance insert failed after
         # the memory insert committed).
-        await db_pool.execute(
-            "DELETE FROM memory_provenance WHERE memory_id = $1", source.id
-        )
+        await db_pool.execute("DELETE FROM memory_provenance WHERE memory_id = $1", source.id)
         first = await bus.deliver(source.id, target_agent, publisher_agent=source_agent)
         assert first.status == "rejected"
         assert (

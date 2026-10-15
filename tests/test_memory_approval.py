@@ -589,9 +589,7 @@ class TestApprovalGateWiring:
                 == memory.id
             )
         finally:
-            await db_pool.execute(
-                "DELETE FROM pending_memories WHERE agent_id = $1", agent_id
-            )
+            await db_pool.execute("DELETE FROM pending_memories WHERE agent_id = $1", agent_id)
             await db_pool.execute("DELETE FROM memories WHERE agent_id = $1", agent_id)
 
     async def test_enabled_reject_creates_no_memory(self, db_pool, monkeypatch):
@@ -633,9 +631,7 @@ class TestApprovalGateWiring:
                 == "rejected"
             )
         finally:
-            await db_pool.execute(
-                "DELETE FROM pending_memories WHERE agent_id = $1", agent_id
-            )
+            await db_pool.execute("DELETE FROM pending_memories WHERE agent_id = $1", agent_id)
             await db_pool.execute("DELETE FROM memories WHERE agent_id = $1", agent_id)
 
     async def test_disabled_writes_directly_without_pending(self, db_pool, monkeypatch):
