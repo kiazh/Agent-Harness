@@ -36,6 +36,9 @@ _SEMVER = re.compile(
 
 # RF6-F6: every imported package file is bounded and must be UTF-8 text.
 _PACKAGE_FILE_MAX_BYTES = 256 * 1024
+# R4-091: bound how many files one manifest may reference, so a manifest
+# cannot turn a package import into an unbounded number of reads.
+_PACKAGE_REFERENCE_MAX = 64
 
 
 def _package_file(root: Path, relative: str) -> Path:
@@ -72,6 +75,16 @@ def _previous_package_files(root: Path) -> set[str]:
 
 def _read_package_file(path: Path, *, label: str) -> bytes:
     """Read one package file under the size cap with UTF-8 validation."""
+    try:
+        size = path.stat().st_size
+    except OSError as error:
+        raise ValueError(f"package file unreadable: {label}") from error
+    # Pre-stat before reading: a symlink (or a growing file) must not be
+    # pulled into memory first only to be rejected afterwards.
+    if size > _PACKAGE_FILE_MAX_BYTES:
+        raise ValueError(
+            f"package file exceeds size limit ({_PACKAGE_FILE_MAX_BYTES} bytes): {label}"
+        )
     try:
         data = path.read_bytes()
     except OSError as error:
@@ -145,6 +158,10 @@ def _validate_manifest(manifest: dict[str, Any]) -> dict[str, str]:
             if not isinstance(relative, str):
                 raise ValueError(f"{key} must be a file path")
             references[key] = relative
+    if len(references) > _PACKAGE_REFERENCE_MAX:
+        raise ValueError(
+            f"package declares too many files ({len(references)} > {_PACKAGE_REFERENCE_MAX})"
+        )
     if len(references.values()) != len(set(references.values())):
         raise ValueError("package files must not alias the same path")
     for key in ("allowedTools",):

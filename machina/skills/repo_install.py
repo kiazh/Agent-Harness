@@ -90,11 +90,15 @@ def parse_repo_url(url: str) -> RepoSource:
     text = url.strip()
     try:
         parts = urlparse(text)
+        hostname = (parts.hostname or "").lower()
+        # ``port`` parses lazily and raises ValueError for ":99999" or ":abc";
+        # keep those inside the typed error instead of escaping raw.
+        port = parts.port
     except ValueError:
         raise RepoInstallError("repo link is not a valid URL") from None
-    if parts.scheme != "https" or (parts.hostname or "").lower() != "github.com":
+    if parts.scheme != "https" or hostname != "github.com":
         raise RepoInstallError("only https://github.com links are supported")
-    if parts.username or parts.password or parts.port:
+    if parts.username or parts.password or port:
         raise RepoInstallError("repo links must not embed credentials or ports")
     segments = [seg for seg in parts.path.split("/") if seg not in ("", ".")]
     if len(segments) < 2:
@@ -794,6 +798,57 @@ def _manifest_path(skills_dir: Path, name: str) -> Path:
     return skills_dir / name / ".install-manifest.json"
 
 
+def remove_installed_skill(skill_dir: Path) -> bool:
+    """Remove the manifest-owned tree of a repo-installed skill.
+
+    Activation renames a digest-verified build into ``<skills_dir>/<name>``
+    and records every installed file in ``.install-manifest.json``. Deleting
+    only SKILL.md leaves the manifest and the resources behind, and every
+    reinstall then refuses as diverged from the manifest; removing the owned
+    tree is the inverse of activation.
+
+    Returns False when *skill_dir* holds no install manifest (an ordinary
+    skill directory — the caller decides how to delete it). The directory is
+    removed only once the manifest proves ownership: it must decode to an
+    object, list files in a mapping, and every recorded path must resolve
+    under this directory. A manifest that cannot prove ownership refuses
+    loudly instead of half-deleting.
+    """
+    manifest_file = skill_dir / ".install-manifest.json"
+    if not manifest_file.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        raise RepoInstallError(
+            f"install manifest for '{skill_dir.name}' is unreadable; refusing to delete the tree"
+        ) from exc
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(files, dict) or not files:
+        raise RepoInstallError(
+            f"install manifest for '{skill_dir.name}' is malformed; refusing to delete the tree"
+        )
+    prefix = f"{skill_dir.name}/"
+    for relative in files:
+        if not isinstance(relative, str) or not relative.startswith(prefix):
+            raise RepoInstallError(
+                f"install manifest for '{skill_dir.name}' does not own this tree; "
+                "refusing to delete"
+            )
+        try:
+            _confined(skill_dir, relative[len(prefix) :])
+        except RepoInstallError as exc:
+            raise RepoInstallError(
+                f"install manifest for '{skill_dir.name}' has an unsafe path; "
+                "refusing to delete the tree"
+            ) from exc
+    try:
+        shutil.rmtree(skill_dir)
+    except OSError as exc:
+        raise RepoInstallError(f"could not remove installed skill '{skill_dir.name}'") from exc
+    return True
+
+
 def activate_plan(plan_detail: dict[str, Any], staged: Path, skills_dir: Path) -> list[str]:
     """Re-verify recorded digests from the staged tree, then install.
 
@@ -990,13 +1045,23 @@ def _fsync_file(path: Path) -> None:
         os.fsync(handle.fileno())
 
 
+# Windows cannot open a directory as a file descriptor (os.open on a
+# directory raises), so the directory-sync durability step is unsupported
+# there. Activation degrades to best-effort on that platform only; POSIX
+# keeps the strict rollback contract (see _fsync_dir).
+_DIR_FSYNC_SUPPORTED = os.name != "nt"
+
+
 def _fsync_dir(path: Path, *, best_effort: bool = False) -> None:
     # Staging keeps best-effort durability on platforms without directory
-    # fsync. Skill activation must refuse when its directory sync fails.
+    # fsync. Skill activation must refuse when its directory sync fails —
+    # except on Windows, where every directory open fails by platform design,
+    # so the sync is best-effort there and the rename itself remains the
+    # durability boundary.
     try:
         dir_fd = os.open(str(path), os.O_RDONLY)
     except OSError:
-        if best_effort:
+        if best_effort or not _DIR_FSYNC_SUPPORTED:
             return
         raise
     try:

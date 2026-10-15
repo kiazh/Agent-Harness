@@ -266,6 +266,12 @@ def test_deferred_import_count_ratchet():
     #   claude/gemini readiness branches are gone with their subscription
     #   flows (owner-directed; vendor terms). Census measured at 689 on this
     #   tree after the removal, so cap 692 -> 689.
+    #   R4-091 skills/soulspec cluster (2026-10-14, this change): +1 deferred
+    #   import — skills/registry.py binds repo_install.remove_installed_skill
+    #   inside delete_skill so the registry's top-level imports stay the
+    #   ports+observability seam (test_architecture_pairs pins that set).
+    #   Census 687 -> 688 over the committed base (measured); the cap is
+    #   unchanged at 689 because it already binds the grown census.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))

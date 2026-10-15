@@ -107,3 +107,32 @@ def test_classify_task_never_guesses_on_bare_follow_ons():
 
     for query in ["continue", "do it", "go ahead", "proceed", "and then?"]:
         assert classify_task(query) == "ambiguous"
+
+
+# --- R4-091: bare English-word technologies are topics, not coding intent ---
+
+
+@pytest.mark.parametrize("query", ["go ahead", "go on", "go", "rust", "swift"])
+def test_bare_technology_follow_ons_do_not_activate_the_coding_pipeline(query, tmp_path):
+    """Bare-tech requests classify as ambiguous; the workflow classifier must
+    not latch onto the coding pipeline from the token alone."""
+    plan = plan_workflow(query, skills=SkillRegistry(tmp_path))
+    assert plan.kind != "coding"
+    coding_stages = {"inspect and plan", "implement and test", "verify"}
+    assert not [stage for stage, _ in plan.stages if stage in coding_stages]
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["write a Go server", "build a Rust CLI", "implement a Swift app"],
+)
+def test_technology_in_an_explicit_task_still_activates_coding(query, tmp_path):
+    assert plan_workflow(query, skills=SkillRegistry(tmp_path)).kind == "coding"
+
+
+def test_follow_up_keeps_an_inherited_technology_stack(tmp_path):
+    """A "continue" after a Go task inherits the stack without the raw query
+    ever naming "go", so the bare-technology gate must not drop it."""
+    history = [{"chunk_type": "user_message", "payload": {"content": "Build a Go server"}}]
+    plan = plan_workflow("continue", skills=SkillRegistry(tmp_path), recent=history)
+    assert plan.kind == "coding"

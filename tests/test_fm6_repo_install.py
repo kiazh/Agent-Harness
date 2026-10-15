@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -97,3 +98,24 @@ def test_skills_dir_fsync_failure_rolls_back(tmp_path, monkeypatch):
     assert activate_plan(detail, staged, skills_dir) == ["alpha"]
     manifest = json.loads((skills_dir / "alpha" / ".install-manifest.json").read_text())
     assert manifest["revision"] == detail["revision"]
+
+
+def test_windows_activation_degrades_dir_fsync_to_best_effort(tmp_path, monkeypatch):
+    """Windows cannot fsync a directory; activation must stay usable there.
+
+    The strict POSIX contract (a failed directory sync rolls the install
+    back) cannot hold on a platform where ``os.open`` on a directory always
+    raises, so the sync degrades to best-effort at activation on Windows.
+    """
+    detail, staged, skills_dir = _stage(tmp_path, monkeypatch)
+    monkeypatch.setattr(repo_install, "_DIR_FSYNC_SUPPORTED", False, raising=False)
+    real_open = os.open
+
+    def windows_open(path, flags, *args, **kwargs):
+        if str(path) == str(skills_dir):
+            raise PermissionError("directories cannot be opened as file descriptors")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", windows_open)
+    assert activate_plan(detail, staged, skills_dir) == ["alpha"]
+    assert (skills_dir / "alpha" / ".install-manifest.json").is_file()

@@ -100,6 +100,8 @@ def test_url_validation_matrix():
         "https://github.com.evil.com/o/r",
         "https://user:pass@github.com/o/r",
         "https://github.com:8443/o/r",
+        "https://github.com:99999/o/r",
+        "https://github.com:abc/o/r",
         "https://github.com/onlyowner",
         "https://github.com/o/r/blob/main/README.md",
         "https://github.com/o/r/tree/../escape",
@@ -231,7 +233,9 @@ def test_stage_activate_roundtrip_and_registry_pickup(tmp_path, monkeypatch):
     registry = SkillRegistry(skills_dir=skills_dir)
     registry.load_all()
     assert registry.get("alpha") is not None
-    assert "reference" in registry.get_skill_content("alpha") or True
+    assert registry.get_skill_content("alpha") == "Help with alpha tasks."
+    # The reference file travels through staging/activation with SKILL.md.
+    assert (skills_dir / "alpha" / "ref.txt").read_text(encoding="utf-8") == "reference\n"
     # Idempotent second activation with the same manifest.
     assert activate_plan(detail, found, skills_dir) == ["alpha"]
 
@@ -633,6 +637,58 @@ def test_idempotent_activation_verifies_installed_files(tmp_path, monkeypatch):
     with pytest.raises(RepoInstallError) as error:
         activate_plan(detail, staged, skills_dir)
     assert "SKILL.md" in str(error.value)
+
+
+def test_delete_skill_removes_repo_install_and_reinstall_succeeds(tmp_path, monkeypatch):
+    """Deleting a repo-installed skill must remove its whole manifest-owned tree.
+
+    A SKILL.md-only unlink leaves the resources and the install manifest
+    behind, so every reinstall refuses as "diverged from its manifest".
+    """
+    from machina.skills.registry import SkillRegistry
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    revision = make_repo(
+        root,
+        {
+            "skills/alpha/SKILL.md": ALPHA_SKILL,
+            "skills/alpha/scripts/run.py": "print('alpha')\n",
+        },
+    )
+    monkeypatch.setattr(repo_install, "staging_root", lambda: tmp_path / "staging")
+    plan = scan_repo(root, parse_repo_url("https://github.com/o/r"), revision)
+    staged = write_staged_plan(plan, root)
+    detail, _ = load_staged_plan(plan.digest)
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    assert activate_plan(detail, staged, skills_dir) == ["alpha"]
+
+    registry = SkillRegistry(skills_dir=skills_dir)
+    registry.load_all()
+    assert registry.get("alpha") is not None
+    assert registry.delete_skill("alpha") is True
+    assert not (skills_dir / "alpha").exists()
+
+    assert activate_plan(detail, staged, skills_dir) == ["alpha"]
+    assert (skills_dir / "alpha" / "scripts" / "run.py").is_file()
+
+
+def test_delete_skill_refuses_corrupt_install_manifest(tmp_path):
+    """A manifest that cannot prove ownership refuses deletion, loudly."""
+    from machina.skills.registry import SkillRegistry
+
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "alpha"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(ALPHA_SKILL)
+    (skill_dir / ".install-manifest.json").write_text("{not json", encoding="utf-8")
+    registry = SkillRegistry(skills_dir=skills_dir)
+    registry.load_all()
+    with pytest.raises(RepoInstallError):
+        registry.delete_skill("alpha")
+    assert (skill_dir / "SKILL.md").is_file()
+    assert (skill_dir / ".install-manifest.json").is_file()
 
 
 def test_empty_plan_activates_to_nothing(tmp_path, monkeypatch):

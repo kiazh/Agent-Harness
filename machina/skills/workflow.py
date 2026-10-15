@@ -6,13 +6,20 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from machina.core.intent import conversational
+from machina.core.intent import classify_task, conversational
 from machina.skills.registry import Skill, SkillRegistry
 from machina.skills.runtime import _words
 
 #: Skill that anchors research-mode verification; never reused as the domain
 #: fallback, otherwise its stage label collapses onto "domain".
 _RESEARCH_ANCHOR = "ecc-deep-research"
+
+#: Technology names that are ordinary English words ("go ahead", "rust",
+#: "swift"). The intent classifier calls requests built only from these tokens
+#: ambiguous and refuses to guess, so the bare token must not activate the
+#: coding pipeline either. A real tech mention inside an explicit task ("write
+#: a Go server") is not ambiguous and keeps activating.
+_AMBIGUOUS_TECHNOLOGIES = frozenset({"go", "rust", "swift"})
 
 
 @dataclass
@@ -124,11 +131,19 @@ def plan_workflow(
     # coding/research task still gets the generic pipeline below.
     strong = [s for s in matches if _strong_match(s, routing_query)]
     task_words = set(_words(routing_query))
+    mentioned = task_words & _TECHNOLOGIES
+    if words & _AMBIGUOUS_TECHNOLOGIES and classify_task(routing_query) == "ambiguous":
+        # "go ahead" / "go on" / a bare "rust" or "swift": the token the user
+        # typed is an English word on its own, so it is a topic, not
+        # authorization to start its implementation pipeline. Only tokens the
+        # raw query actually named are dropped — a stack inherited for a short
+        # follow-up ("continue" after a Go task) still activates.
+        mentioned -= _AMBIGUOUS_TECHNOLOGIES
     coding = bool(
-        task_words
-        & (
-            _TECHNOLOGIES
-            | {
+        mentioned
+        | (
+            task_words
+            & {
                 "api",
                 "debug",
                 "refactor",
@@ -177,7 +192,7 @@ def plan_workflow(
         "kotlin",
         "swift",
     ):
-        if technology not in task_words:
+        if technology not in mentioned:
             continue
         base = "golang" if technology == "go" else technology
         suffixes = ("testing", "tdd", "patterns") if "testing" in task_words else ("patterns",)

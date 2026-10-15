@@ -347,6 +347,15 @@ class SkillParser:
     def parse(file_path: str | Path) -> Skill:
         """Parse a SKILL.md file."""
         path = Path(file_path)
+        # Bound the read itself: a symlink can point at an arbitrarily large
+        # file, and reading it only to reject the content afterwards invites
+        # the OOM the content cap exists to prevent. The cap is the same
+        # 1 MB ceiling as MAX_CONTENT_SIZE and applies to the raw file
+        # (frontmatter included).
+        if path.stat().st_size > SkillParser.MAX_CONTENT_SIZE:
+            raise ValueError(
+                f"Skill file exceeds maximum size of {SkillParser.MAX_CONTENT_SIZE} bytes"
+            )
         text = path.read_text(encoding="utf-8")
 
         # Extract YAML frontmatter
@@ -903,17 +912,28 @@ class SkillRegistry(SkillSource):
         if self._skills.get(name) and self._skills[name].source_type == "builtin-ecc":
             return False
         skill = self._skills.pop(name, None)
-        if skill:
-            self._invalidate()
-            skill_path = Path(skill.file_path)
-            if skill_path.exists():
-                skill_path.unlink()
-            # Remove parent directory if empty
-            parent = skill_path.parent
-            if parent.exists() and not any(parent.iterdir()):
-                parent.rmdir()
+        if not skill:
+            return False
+        self._invalidate()
+        skill_path = Path(skill.file_path)
+        # Repo-installed skills own a whole manifest-tracked tree. Unlinking
+        # only SKILL.md leaves the manifest and the resources behind, and
+        # every reinstall then refuses as "diverged from its manifest".
+        # Removing the owned tree is the inverse of activation; a manifest
+        # that cannot prove ownership refuses loudly instead of half-deleting.
+        # Deferred import: the registry's top-level imports stay the
+        # ports+observability seam (pinned by test_architecture_pairs).
+        from machina.skills.repo_install import remove_installed_skill
+
+        if remove_installed_skill(skill_path.parent):
             return True
-        return False
+        if skill_path.exists():
+            skill_path.unlink()
+        # Remove parent directory if empty
+        parent = skill_path.parent
+        if parent.exists() and not any(parent.iterdir()):
+            parent.rmdir()
+        return True
 
     @classmethod
     def reset(cls) -> None:
@@ -1005,6 +1025,10 @@ class SkillCurator:
         }
 
 
+class SkillHubError(ValueError):
+    """Invalid or corrupt skill-hub entry; safe to show to the user."""
+
+
 class SkillHub:
     """Community-curated skill sharing — publish, discover, install skills."""
 
@@ -1021,10 +1045,10 @@ class SkillHub:
             or name in (".", "..")
             or ".." in name
         ):
-            raise ValueError(f"Invalid skill name: {name!r}")
+            raise SkillHubError(f"Invalid skill name: {name!r}")
         path = (self.hub_dir / f"{name}.json").resolve()
         if not path.is_relative_to(self.hub_dir.resolve()):
-            raise ValueError(f"Invalid skill name: {name!r}")
+            raise SkillHubError(f"Invalid skill name: {name!r}")
         return path
 
     def publish(self, name: str, author: str = "", tags: list[str] | None = None) -> dict[str, Any]:
@@ -1036,10 +1060,10 @@ class SkillHub:
         """
         skill = self.registry.get(name)
         if not skill:
-            raise ValueError(f"Skill '{name}' not found")
+            raise SkillHubError(f"Skill '{name}' not found")
         content = self.registry.get_skill_content(skill.name)
         if not isinstance(content, str) or not content:
-            raise ValueError(
+            raise SkillHubError(
                 f"Skill '{name}' is disabled or has no readable content; enable it before publishing"
             )
 
@@ -1060,15 +1084,44 @@ class SkillHub:
         hub_file.write_text(json.dumps(hub_entry, indent=2), encoding="utf-8")
         return hub_entry
 
+    @staticmethod
+    def _listable(entry: Any) -> bool:
+        """Whether a decoded hub file is an entry the listing surfaces can render.
+
+        Type-hardening: a corrupt entry (JSON that is not an object, or whose
+        display fields are the wrong type) must never reach ``search``,
+        ``get_hub_telemetry`` or the CLI table, where raw ``AttributeError`` /
+        ``TypeError`` would escape.
+        """
+        if not isinstance(entry, dict):
+            return False
+        if not isinstance(entry.get("name"), str):
+            return False
+        if not isinstance(entry.get("description", ""), str):
+            return False
+        if not isinstance(entry.get("author", ""), str):
+            return False
+        if not isinstance(entry.get("version", "1.0.0"), str):
+            return False
+        if not isinstance(entry.get("published_at", ""), str):
+            return False
+        tags = entry.get("tags", [])
+        return isinstance(tags, list) and all(isinstance(tag, str) for tag in tags)
+
     def list_hub(self) -> list[dict[str, Any]]:
-        """List all skills available in the hub."""
+        """List all skills available in the hub.
+
+        Unreadable files and JSON that is not a renderable entry object are
+        skipped, exactly like malformed JSON always was.
+        """
         skills = []
-        for f in self.hub_dir.glob("*.json"):
+        for f in sorted(self.hub_dir.glob("*.json")):
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
-                skills.append(data)
             except (json.JSONDecodeError, OSError):
                 continue
+            if self._listable(data):
+                skills.append(data)
         return skills
 
     def search(self, query: str) -> list[dict[str, Any]]:
@@ -1088,24 +1141,41 @@ class SkillHub:
         """Install a skill from the hub into the local registry."""
         hub_file = self._hub_file(name)
         if not hub_file.exists():
-            raise ValueError(f"Skill '{name}' not found in hub")
+            raise SkillHubError(f"Skill '{name}' not found in hub")
 
-        data = json.loads(hub_file.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(hub_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise SkillHubError(
+                f"Skill '{name}' hub entry is unreadable; publish it again"
+            ) from exc
         if not isinstance(data, dict):
-            raise ValueError(f"Skill '{name}' hub entry is not a JSON object")
+            raise SkillHubError(f"Skill '{name}' hub entry is not a JSON object")
+        entry_name = data.get("name")
+        if not isinstance(entry_name, str) or not entry_name.strip():
+            raise SkillHubError(f"Skill '{name}' hub entry has no usable name; publish it again")
+        description = data.get("description", "")
+        if not isinstance(description, str):
+            raise SkillHubError(f"Skill '{name}' hub entry has a non-string description")
+        triggers = data.get("triggers", [])
+        if not isinstance(triggers, list) or any(not isinstance(t, str) for t in triggers):
+            raise SkillHubError(f"Skill '{name}' hub entry has invalid triggers")
+        version = data.get("version", "1.0.0")
+        if not isinstance(version, str):
+            raise SkillHubError(f"Skill '{name}' hub entry has a non-string version")
         content = data.get("content")
         if not isinstance(content, str):
-            raise ValueError(
+            raise SkillHubError(
                 f"Skill '{name}' hub entry has no publishable content; publish it again"
             )
         return self.registry.create_skill(
-            name=data["name"],
-            description=data.get("description", ""),
+            name=entry_name,
+            description=description,
             content=content,
-            triggers=data.get("triggers", []),
+            triggers=triggers,
             source=f"hub:{name}",
             source_type="hub",
-            version=data.get("version", "1.0.0"),
+            version=version,
         )
 
     def get_hub_telemetry(self) -> list[dict[str, Any]]:

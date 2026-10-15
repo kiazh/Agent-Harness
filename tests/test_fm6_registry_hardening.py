@@ -10,6 +10,7 @@ RED-first:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -74,3 +75,95 @@ def test_short_name_in_skill_file_is_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match="name"):
         SkillParser.parse(bad_file)
+
+
+# ─── R4-091: corrupt hub entries raise typed ValueError, never Key/TypeError ──
+
+
+def test_install_hub_entry_without_name_raises_value_error_not_key_error(tmp_path):
+    registry = SkillRegistry(tmp_path / "skills")
+    hub = SkillHub(registry, tmp_path / "hub")
+    (tmp_path / "hub" / "nameless.json").write_text(
+        json.dumps({"description": "Broken entry", "content": "Steps"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="name"):
+        hub.install("nameless")
+
+
+def test_install_hub_entry_with_nonstring_name_raises_value_error_not_type_error(tmp_path):
+    registry = SkillRegistry(tmp_path / "skills")
+    hub = SkillHub(registry, tmp_path / "hub")
+    (tmp_path / "hub" / "fieldless.json").write_text(
+        json.dumps({"name": 5, "description": "Broken entry", "content": "Steps"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="name"):
+        hub.install("fieldless")
+
+
+def test_list_hub_skips_json_that_is_not_an_entry_object(tmp_path):
+    registry = SkillRegistry(tmp_path / "skills")
+    hub = SkillHub(registry, tmp_path / "hub")
+    (tmp_path / "hub" / "array.json").write_text("[1, 2, 3]", encoding="utf-8")
+    (tmp_path / "hub" / "good.json").write_text(
+        json.dumps(
+            {
+                "name": "good",
+                "description": "Fine entry",
+                "triggers": [],
+                "content": "Steps",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert [entry["name"] for entry in hub.list_hub()] == ["good"]
+
+
+def test_search_skips_type_corrupt_hub_entries(tmp_path):
+    registry = SkillRegistry(tmp_path / "skills")
+    hub = SkillHub(registry, tmp_path / "hub")
+    (tmp_path / "hub" / "fieldy.json").write_text(
+        json.dumps({"name": 3, "description": ["no"], "tags": {"x": 1}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "hub" / "bad-tags.json").write_text(
+        json.dumps({"name": "bad-tags", "description": "Bad tags", "tags": 0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "hub" / "good.json").write_text(
+        json.dumps(
+            {
+                "name": "good",
+                "description": "Fine entry",
+                "tags": ["demo"],
+                "content": "Steps",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert [entry["name"] for entry in hub.list_hub()] == ["good"]
+    assert [entry["name"] for entry in hub.search("good")] == ["good"]
+
+
+# ─── R4-091: the 1 MB parse cap is a pre-stat guard, not a post-read check ───
+
+
+def test_parser_checks_file_size_before_reading_a_symlinked_huge_file(tmp_path, monkeypatch):
+    target = tmp_path / "huge.md"
+    with target.open("wb") as handle:
+        handle.truncate(SkillParser.MAX_CONTENT_SIZE + 1)
+    skill_dir = tmp_path / "huge-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").symlink_to(target)
+    reads = []
+    real_read_text = Path.read_text
+
+    def spy(path, *args, **kwargs):
+        reads.append(path)
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", spy)
+    with pytest.raises(ValueError, match="maximum size"):
+        SkillParser.parse(skill_dir / "SKILL.md")
+    assert reads == []

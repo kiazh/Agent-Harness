@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -76,4 +77,42 @@ def test_oversized_soul_json_rejected(tmp_path):
     _base_package(tmp_path)
     (tmp_path / "soul.json").write_bytes(b'{"padding": "' + b"a" * (256 * 1024) + b'"}')
     with pytest.raises(ValueError, match="size"):
+        SoulSpec.from_package(tmp_path)
+
+
+# ─── R4-091: pre-stat guards so a symlinked huge file never gets read ───────
+
+
+def test_symlinked_oversized_package_file_rejected_before_read(tmp_path, monkeypatch):
+    _base_package(tmp_path)
+    huge = tmp_path / "HUGE.md"
+    with huge.open("wb") as handle:
+        handle.truncate(256 * 1024 + 1)
+    link = tmp_path / "LINKED.md"
+    link.symlink_to(huge)
+    manifest = json.loads((tmp_path / "soul.json").read_text(encoding="utf-8"))
+    manifest["files"]["linked"] = "LINKED.md"
+    (tmp_path / "soul.json").write_text(json.dumps(manifest), encoding="utf-8")
+    reads = []
+    real_read_bytes = Path.read_bytes
+
+    def spy(path):
+        reads.append(path)
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", spy)
+    with pytest.raises(ValueError, match="size"):
+        SoulSpec.from_package(tmp_path)
+    assert huge not in reads
+
+
+def test_package_with_too_many_referenced_files_rejected(tmp_path):
+    _base_package(tmp_path)
+    manifest = json.loads((tmp_path / "soul.json").read_text(encoding="utf-8"))
+    for index in range(65):
+        name = f"doc{index:02d}.md"
+        (tmp_path / name).write_text("ok", encoding="utf-8")
+        manifest["files"][f"doc{index:02d}"] = name
+    (tmp_path / "soul.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="too many"):
         SoulSpec.from_package(tmp_path)
