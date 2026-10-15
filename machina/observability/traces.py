@@ -43,6 +43,7 @@ __all__ = [
     "current_turn_id",
     "delegation_span",
     "dropped_reservations",
+    "dropped_turns",
     "end_turn",
     "get_turn",
     "llm_span",
@@ -129,8 +130,11 @@ class TurnTrace:
     task_class: str = ""
     status: str = STATUS_OPEN
     stop_reason: str = ""
+    parent_turn_id: str = ""
     spans: list[Span] = field(default_factory=list)
     dropped_spans: int = 0
+    dropped_tool_spans: int = 0
+    dropped_turns: int = 0
     ledger: list[dict[str, Any]] = field(default_factory=list)
     ledger_dropped: int = 0
     ended: bool = False
@@ -149,6 +153,10 @@ _TURNS: dict[str, TurnTrace] = {}
 _RESERVATIONS: dict[str, dict[str, Any]] = {}
 #: Reservation entries evicted by the FIFO cap (late finishes are dropped).
 _reservations_dropped: int = 0
+#: Turn entries evicted by the registry cap (their reports become unavailable;
+#: an evicted turn's retained parent carries the per-turn ``dropped_turns``
+#: marker, and every eviction is announced on the sink channel).
+_turns_dropped: int = 0
 _sinks: list[Callable[[str, dict[str, Any]], None]] = []
 
 _active_turn: ContextVar[str | None] = ContextVar("machina_trace_active_turn", default=None)
@@ -184,9 +192,10 @@ def clear_sinks() -> None:
 
 def reset_for_tests() -> None:
     """Clear registry, reservations, sinks, and context isolation state."""
-    global _enabled, _reservations_dropped
+    global _enabled, _reservations_dropped, _turns_dropped
     _enabled = True
     _reservations_dropped = 0
+    _turns_dropped = 0
     _TURNS.clear()
     _RESERVATIONS.clear()
     del _sinks[:]
@@ -198,6 +207,17 @@ def reset_for_tests() -> None:
 def dropped_reservations() -> int:
     """Count reservation entries evicted by the FIFO cap in this process."""
     return _reservations_dropped
+
+
+def dropped_turns() -> int:
+    """Count turns evicted by the registry cap in this process.
+
+    An evicted turn's report is gone; the event is marked here globally and on
+    the evicted turn's retained parent (``TurnTrace.dropped_turns``), so tool
+    and delegation totals from before the eviction are never silently lost
+    without a marker.
+    """
+    return _turns_dropped
 
 
 def _emit(event: str, payload: dict[str, Any]) -> None:
@@ -253,12 +273,18 @@ def _append_span(
     )
     turn.spans.append(span)
     if len(turn.spans) > MAX_SPANS_PER_TURN:
-        # Bounded ring: evict oldest non-root span, keep a dropped-count marker.
-        del turn.spans[1]
+        # Bounded ring: evict oldest non-root span, keep dropped-count markers.
+        # Tool spans additionally bump their own delta so `turn_report` can
+        # flag that `tool_calls.total` no longer equals the real total.
+        evicted = turn.spans.pop(1)
         turn.dropped_spans += 1
+        if evicted.kind == TOOL:
+            turn.dropped_tool_spans += 1
         root = turn.root
         if root is not None:
             root.attributes["dropped_spans"] = turn.dropped_spans
+            if turn.dropped_tool_spans:
+                root.attributes["dropped_tool_spans"] = turn.dropped_tool_spans
     return span
 
 
@@ -284,6 +310,38 @@ def _close_open_spans(turn: TurnTrace, status: str) -> None:
 # ─── turn lifecycle ─────────────────────────────────────────────────────────
 
 
+def _evict_turns() -> None:
+    """Bounded FIFO eviction with markers (R4-064).
+
+    Finished turns are evicted first so an in-flight turn cannot be dropped
+    while any closed turn could be; only when every retained turn is in flight
+    is the oldest force-evicted, and that case is marked (global counter +
+    ``turn_evicted`` sink event, plus the victim's retained parent when there
+    is one). Every eviction is marked.
+    """
+    global _turns_dropped
+    while len(_TURNS) > MAX_TURNS_RETAINED:
+        victim_id = next((tid for tid, turn in _TURNS.items() if turn.ended), None)
+        if victim_id is None:
+            victim_id = next(iter(_TURNS))
+        victim = _TURNS.pop(victim_id)
+        _turns_dropped += 1
+        parent = _TURNS.get(victim.parent_turn_id) if victim.parent_turn_id else None
+        if parent is not None:
+            parent.dropped_turns += 1
+            root = parent.root
+            if root is not None:
+                root.attributes["dropped_turns"] = parent.dropped_turns
+        _emit(
+            "turn_evicted",
+            {
+                "turn_id": victim_id,
+                "ended": victim.ended,
+                "parent_turn_id": victim.parent_turn_id,
+            },
+        )
+
+
 def start_turn(
     turn_id: str,
     *,
@@ -304,6 +362,7 @@ def start_turn(
             session_id=str(session_id or ""),
             agent_id=str(agent_id or ""),
             task_class=str(task_class or ""),
+            parent_turn_id=str(prev) if prev is not None else "",
             _stack_depth=len(_span_stack.get()),
         )
         root = Span(
@@ -321,8 +380,7 @@ def start_turn(
         )
         turn.spans.append(root)
         _TURNS[tid] = turn
-        while len(_TURNS) > MAX_TURNS_RETAINED:
-            _TURNS.pop(next(iter(_TURNS)))
+        _evict_turns()
         _active_turn.set(tid)
         _emit("turn_started", {"turn_id": tid, "session_id": turn.session_id})
         return turn
@@ -755,6 +813,8 @@ def turn_report(turn_id: str) -> dict[str, Any] | None:
             "approval_waits": {"count": approval_count, "waited_ms_total": approval_waited_ms},
             "spans": len(turn.spans),
             "dropped_spans": turn.dropped_spans,
+            "dropped_tool_spans": turn.dropped_tool_spans,
+            "dropped_turns": turn.dropped_turns,
             "ledger_dropped": turn.ledger_dropped,
         }
     except Exception:
@@ -773,6 +833,8 @@ def render_diagnostics(turn_id: str, *, max_chars: int = DIAGNOSTICS_MAX_CHARS) 
             approvals = report["approval_waits"]
             tool_bits = ", ".join(f"{k}={v}" for k, v in sorted(tools["by_outcome"].items()))
             del_bits = ", ".join(f"{k}={v}" for k, v in sorted(delegations["by_status"].items()))
+            dropped_tools = report["dropped_tool_spans"]
+            dropped_turns = report["dropped_turns"]
             text = (
                 f"turn {report['turn_id']} session {report['session_id'] or '-'}"
                 f" agent {report['agent_id'] or '-'}"
@@ -783,11 +845,13 @@ def render_diagnostics(turn_id: str, *, max_chars: int = DIAGNOSTICS_MAX_CHARS) 
                 f" {report['unknown_calls']} unknown)\n"
                 f"tools: {tools['total']}"
                 + (f" ({tool_bits})" if tool_bits else "")
+                + (f" (+{dropped_tools} dropped)" if dropped_tools else "")
                 + f"\ndelegations: {delegations['total']}"
                 + (f" ({del_bits})" if del_bits else "")
                 + f"\napprovals: {approvals['count']} waits,"
                 f" {approvals['waited_ms_total']:.0f} ms waited\n"
                 f"spans: {report['spans']} (+{report['dropped_spans']} dropped)"
+                + (f"\nchild turns evicted: {dropped_turns}" if dropped_turns else "")
             )
         try:
             text = redact_secrets(text).text
