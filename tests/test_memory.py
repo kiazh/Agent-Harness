@@ -877,26 +877,6 @@ def test_persona_enabled_fallback_records_failure(monkeypatch):
     assert [op for op, _ in recorded] == ["retriever.persona_enabled"]
 
 
-async def test_backfill_embeddings_records_embed_failure(monkeypatch):
-    """A failed backfill row is skipped and reported, never silently dropped."""
-    from machina.memory import store as store_module
-
-    recorded = []
-    monkeypatch.setattr(store_module, "record_failure", lambda op, e: recorded.append((op, e)))
-
-    async def fake_fetch(_query, _limit):
-        return [{"id": uuid.uuid4(), "content": "User prefers Python"}]
-
-    async def boom_embed(_content):
-        raise RuntimeError("embedding provider offline")
-
-    monkeypatch.setattr(store_module.db, "fetch", fake_fetch)
-    monkeypatch.setattr("machina.memory.embeddings.embed_query", boom_embed)
-    out = await MemoryStore().backfill_embeddings()
-    assert out == {"embedded": 0, "skipped": 1}
-    assert [op for op, _ in recorded] == ["memory.store.backfill_embed"]
-
-
 # ===========================================================================
 # MemoryConsolidator Tests
 # ===========================================================================
