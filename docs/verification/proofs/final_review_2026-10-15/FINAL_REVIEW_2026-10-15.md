@@ -116,10 +116,12 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | ID | Sev | Finding | Status |
 |---|---|---|---|
 | U1 | P3 | OutputViewer renders name/toolId unsanitized | FIXED 39376d0 |
-| U2 | P3 | `dim` token below WCAG AA for essential text | FIXED 39376d0 |
+| U2 | P3 | `dim` token below WCAG AA for essential text | FIXED 39376d0 + 9ec0bce (all 29 skins, dim>=4.5) |
 | U3 | Q | Dead exports (windowAroundCursor/setOutcome/getState) | FIXED 39376d0 |
 | U4 | Q | OAuthProgress missing return; agents.ts shadow | FIXED 39376d0 |
 | U5 | Q | White-box test pins (state/mode tests) | DEFERRED (not behavior bugs) |
+| U6 | P3 | `App.inFlightSessionId` write-only dead state | FIXED 9ec0bce |
+| U7 | Q | inline provider-add KEY kept in editor history | FIXED 9ec0bce (commandCarriesSecret) |
 
 ## I. Infra / docs
 
@@ -161,3 +163,13 @@ Commit trail for fixes: `56c0222` S1/S8 · `4714e5e` F12 · `39376d0` UI · `886
 `2918981` docs-truth · `d1438e8` P8/P9 · `fa13f27` R3/R4/R5 · `56f8ad3` F01/F13/T3/T4 ·
 `5100624` misc · `08a8f0e` batch3-A · `7e68a28` batch3-B · `50efd64` connectors · `dd096ad` core ·
 `9806574` provider ratchet delta.
+
+
+## Final gates (2026-10-15)
+
+- Backend full suite (serial, machina_test): **4900 passed, 1 skipped, 9 deselected**
+  — log `stage3_gate_backend_final.log` (commit 86b1c2c).
+- UI gate alone (`npm run check`): **exit 0 — 481 tests, 475 passed, 6 skipped,
+  0 failed**, tsc + eslint clean — log `stage3_gate_ui_final.log` (commit 9ec0bce).
+- Architecture ratchets green (agent.py 2213, audit 254, sse 55, package 5002 —
+  all with delta-table entries).
