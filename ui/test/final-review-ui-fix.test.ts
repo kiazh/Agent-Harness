@@ -1,7 +1,9 @@
 // Final-review UI fix lane. Evidence for
 // docs/verification/proofs/final_review_2026-10-15/line_ui.md:
 //   P3-1 OutputViewer header sanitizes an untrusted provider tool name/id;
-//   P3-2 default/mono `dim` tokens clear WCAG AA and stay below `muted`;
+//   P3-2 every skin's `dim` token clears WCAG AA and stays below `muted`
+//        (default/mono fixed first; codex/opencode/tokyonight + the rest of
+//        the registry in the P3-2 residual follow-up);
 //   Q-3  OAuthProgress "c" cancel branch returns.
 
 import assert from "node:assert/strict";
@@ -9,7 +11,7 @@ import { test } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { OutputStore, OutputViewer } from "../src/components/OutputViewer.ts";
 import { OAuthProgress } from "../src/components/OAuthProgress.ts";
-import { skinBase } from "../src/design/theme.ts";
+import { SKIN_NAMES, skinBase } from "../src/design/theme.ts";
 
 test("P3-1 retained-output header sanitizes a hostile tool name and id", () => {
 	const toolId = "tool\x1b[2Jid";
@@ -37,7 +39,7 @@ test("P3-1 viewer header keeps a well-behaved name verbatim (no behavior drift)"
 	assert.match(header, /Output: read_file \(abcdef01\)/);
 });
 
-test("P3-2 default and mono dim clear WCAG AA and stay below muted", () => {
+test("P3-2 every skin's dim clears WCAG AA and stays below muted", () => {
 	const luminance = (hex: string): number => {
 		const [r, g, b] = hex.slice(1).match(/../g)!.map((pair) => {
 			const channel = Number.parseInt(pair, 16) / 255;
@@ -49,7 +51,7 @@ test("P3-2 default and mono dim clear WCAG AA and stay below muted", () => {
 		const values = [luminance(a), luminance(b)].sort((x, y) => y - x);
 		return (values[0]! + 0.05) / (values[1]! + 0.05);
 	};
-	for (const name of ["default", "mono"]) {
+	for (const name of SKIN_NAMES) {
 		const base = skinBase(name)!;
 		const dim = contrast(base.neutral, base.dim);
 		assert.ok(dim >= 4.5, `${name}.dim contrast ${dim.toFixed(2)}:1 is below 4.5:1`);

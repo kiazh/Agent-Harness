@@ -1,0 +1,14 @@
+✔ V02 tool previews count wrapping with honest local and backend truncation (0.643542ms)
+✔ V03 diff headers, additions, deletions and whitespace classify correctly (0.420959ms)
+ℹ tests 481
+ℹ suites 0
+ℹ pass 475
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 6
+ℹ todo 0
+ℹ duration_ms 2736.070583
+
+> machina-ui@0.1.0 lint
+> eslint src/ test/ --ext .ts
+

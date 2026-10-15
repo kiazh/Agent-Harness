@@ -78,7 +78,7 @@ test("new calm palettes keep text and selection accents readable", () => {
 	}
 });
 
-test("dim text tokens clear WCAG AA and stay below muted (default, mono)", () => {
+test("dim text tokens clear WCAG AA and stay below muted (every skin)", () => {
 	const luminance = (hex: string): number => {
 		const [r, g, b] = hex.slice(1).match(/../g)!.map((pair) => {
 			const channel = Number.parseInt(pair, 16) / 255;
@@ -90,15 +90,24 @@ test("dim text tokens clear WCAG AA and stay below muted (default, mono)", () =>
 		const values = [luminance(a), luminance(b)].sort((x, y) => y - x);
 		return (values[0]! + 0.05) / (values[1]! + 0.05);
 	};
-	// `dim` carries essential footer/menu/thinking text, not decoration: it
+	// `dim` carries essential footer/menu/tool-status text, not decoration: it
 	// must clear the AA normal-text bound on its own surface while staying
-	// quieter than `muted` (review P3-2).
-	for (const name of ["default", "mono"]) {
-		const base = skinBase(name)!;
+	// quieter than `muted` (review P3-2). Iterate the whole registry rather
+	// than a hardcoded pair so the runtime-default `codex` skin — which the
+	// original default/mono pair missed — stays guarded.
+	let checked = 0;
+	for (const name of SKIN_NAMES) {
+		const base = skinBase(name);
+		assert.ok(base, `${name} has a palette`);
 		const dim = contrast(base.neutral, base.dim);
+		const muted = contrast(base.neutral, base.muted);
 		assert.ok(dim >= 4.5, `${name}.dim contrast ${dim.toFixed(2)}:1 is below 4.5:1`);
-		assert.ok(dim < contrast(base.neutral, base.muted), `${name}.dim must stay below muted`);
+		assert.ok(dim < muted, `${name}.dim (${dim.toFixed(2)}) must stay below muted (${muted.toFixed(2)})`);
+		checked++;
 	}
+	assert.equal(checked, SKIN_NAMES.length, "every registered skin defines a checked dim token");
+	const codex = skinBase("codex")!;
+	assert.ok(contrast(codex.neutral, codex.dim) >= 4.5, "the runtime-default codex.dim clears AA");
 });
 
 test("legacy theme facade still resolves", async () => {
