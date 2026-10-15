@@ -342,3 +342,52 @@ def test_atomic_write_file_at_pathname_mode_preserved(tmp_path):
     fmod._atomic_write_file_at(None, "p.txt", "new", parent=tmp_path)
     assert target.read_text() == "new"
     assert [p.name for p in tmp_path.iterdir()] == ["p.txt"], "temp file leaked"
+
+
+@pytest.mark.parametrize("tail", ["x" * 8192, "界" * 8192, ("abc" * 20 + "\n") * 200])
+def test_optional_total_scan_bounds_bytes_within_and_across_lines(monkeypatch, tail):
+    import io
+
+    monkeypatch.setattr(fmod, "_READ_TOTAL_SCAN_BYTES", 1024)
+    monkeypatch.setattr(fmod, "_READ_LINE_CHUNK", 64)
+    prefix = "short\n" * 10
+
+    class CountingText(io.StringIO):
+        consumed = 0
+
+        def readline(self, size=-1):
+            text = super().readline(size)
+            self.consumed += len(text.encode("utf-8"))
+            return text
+
+    stream = CountingText(prefix + tail)
+    page, shown, total, exact = fmod._read_page(
+        stream, offset=1, limit=10, max_bytes=1024, path="tail.log"
+    )
+    assert page == prefix
+    assert shown == 10
+    assert total >= 11
+    assert not exact
+    assert stream.consumed <= len(prefix.encode()) + 1024 + 4 * 64
+    assert stream.tell() < len(prefix + tail)
+
+
+async def test_trailing_long_line_returns_lower_bound_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(fmod, "_BASE_DIR", tmp_path.resolve())
+    monkeypatch.setattr(fmod, "_READ_TOTAL_SCAN_BYTES", 1024)
+    (tmp_path / "tail.log").write_text("short\n" * 10 + "x" * 8192)
+    result = await fmod.read_file("tail.log", limit=10)
+    assert result.startswith("short\n" * 10)
+    assert "of at least 11;" in result
+    assert "offset=11" in result
+
+
+def test_total_scan_byte_budget_does_not_limit_required_offset_traversal(monkeypatch):
+    import io
+
+    monkeypatch.setattr(fmod, "_READ_TOTAL_SCAN_BYTES", 128)
+    page, shown, total, exact = fmod._read_page(
+        io.StringIO("x" * 4096 + "\nselected\n"),
+        offset=2, limit=1, max_bytes=64, path="offset.log",
+    )
+    assert (page, shown, total, exact) == ("selected\n", 1, 2, True)

@@ -537,6 +537,7 @@ _READ_MAX_PAGE_BYTES = 5_242_880
 # files, unchanged); otherwise the marker reports a lower bound instead of
 # reading a multi-GB file to EOF for a `limit=10` page.
 _READ_TOTAL_SCAN_LINES = 1000
+_READ_TOTAL_SCAN_BYTES = 1 << 20
 
 
 def _read_page(
@@ -548,31 +549,38 @@ def _read_page(
     outside the requested window are consumed piece by piece and discarded; a
     window whose encoded size exceeds *max_bytes* is rejected (fail closed)
     instead of returned. Counting stops ``_READ_TOTAL_SCAN_LINES`` past the
-    window, so ``total_exact`` is ``False`` for very large files (the caller
-    then reports a lower bound rather than scanning to EOF).
+    window or at ``_READ_TOTAL_SCAN_BYTES`` of trailing text, so ``total_exact``
+    is ``False`` for very large files (the caller then reports a lower bound
+    rather than scanning to EOF).
     """
     page: list[str] = []
     page_bytes = 0
     total_lines = 0
     total_exact = True
     scan_cap = offset + limit - 1 + _READ_TOTAL_SCAN_LINES
+    scan_bytes = 0
     while True:
         piece = stream.readline(_READ_LINE_CHUNK)
         if piece == "":
             break
         total_lines += 1
-        parts: list[str] | None = [piece] if offset <= total_lines < offset + limit else None
-        size = len(piece)
-        while not piece.endswith("\n"):
+        parts: list[str] | None = [] if offset <= total_lines < offset + limit else None
+        size = 0
+        while True:
+            if total_lines >= offset + limit:
+                scan_bytes += len(piece.encode("utf-8", errors="replace"))
+                if scan_bytes >= _READ_TOTAL_SCAN_BYTES:
+                    return "".join(page), len(page), total_lines, False
+            if parts is not None:
+                size += len(piece)
+                if size > max_bytes:
+                    raise ValueError(f"File '{path}' exceeds max size during read")
+                parts.append(piece)
+            if piece.endswith("\n"):
+                break
             piece = stream.readline(_READ_LINE_CHUNK)
             if piece == "":
                 break
-            size += len(piece)
-            if parts is None:
-                continue
-            if size > max_bytes:
-                raise ValueError(f"File '{path}' exceeds max size during read")
-            parts.append(piece)
         if parts is None:
             if total_lines >= scan_cap:
                 total_exact = False

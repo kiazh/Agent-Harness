@@ -48,9 +48,6 @@ DEVICE_SCOPE = "read:user"
 DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 DEVICE_POLL_INTERVAL = 5.0
 DEVICE_POLL_SAFETY_MARGIN = 3.0
-# Upper bound on a single poll wait. GitHub's ``slow_down`` ``interval`` is
-# untrusted input; a sanity cap keeps a huge/erroneous value from stalling a
-# login even when the caller allows a long overall timeout.
 DEVICE_POLL_MAX_WAIT = 60.0
 DEFAULT_DEVICE_TIMEOUT = 300.0
 
@@ -433,18 +430,20 @@ def device_flow_poll(
     wait = max(1.0, float(interval)) + DEVICE_POLL_SAFETY_MARGIN
     try:
         while time.monotonic() < deadline:
-            # The wait may have come from an untrusted server ``slow_down``
-            # interval; never sleep past the remaining device-flow deadline
-            # (nor past DEVICE_POLL_MAX_WAIT), so a huge or erroneous interval
-            # cannot overrun the documented timeout contract. When the deadline
-            # is exhausted the loop ends and the typed timeout below is raised.
-            wait = min(wait, DEVICE_POLL_MAX_WAIT, max(0.0, deadline - time.monotonic()))
-            if wait <= 0:
+            sleep_left = min(wait, max(0.0, deadline - time.monotonic()))
+            while sleep_left > 0:
+                piece = min(sleep_left, DEVICE_POLL_MAX_WAIT, max(0.0, deadline - time.monotonic()))
+                if piece <= 0:
+                    break
+                sleep(piece)
+                sleep_left -= piece
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 break
-            sleep(wait)
             try:
                 response = http.post(
                     ACCESS_TOKEN_URL,
+                    timeout=min(_DEFAULT_TIMEOUT, remaining),
                     headers=_form_headers(),
                     content=urlencode(
                         {
