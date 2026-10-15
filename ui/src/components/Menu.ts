@@ -5,6 +5,7 @@
 
 import { Key, matchesKey, truncateToWidth, visibleWidth, type Component, type SelectItem, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { ICONS } from "../design/icons.ts";
+import { sanitizeDisplay } from "../design/text.ts";
 import { isSelectionRow, selectionBar, theme } from "../theme.ts";
 
 export type { SelectItem };
@@ -231,7 +232,12 @@ export class Menu implements Component {
 		const rows = visible.filter((item) => !isSection(item)).length;
 		const totalItems = this.items.filter((item) => !isSection(item)).length;
 		const count = theme.dim(`(${rows}/${totalItems}${this.multiSelect ? ` · ${this.checked.size} checked` : ""})`);
-		const out = [truncateToWidth(`${theme.dim(this.title)} ${count}`, content)];
+		// Titles/labels/descriptions are untrusted (session titles, recall
+		// previews, model IDs): sanitize first, then split embedded newlines
+		// into physical rows so a payload cannot corrupt the viewport.
+		const out = sanitizeDisplay(this.title)
+			.split("\n")
+			.map((line, index) => truncateToWidth(`${theme.dim(line)}${index === 0 ? ` ${count}` : ""}`, content));
 		out.push(
 			this.filter
 				? truncateToWidth(`${theme.dim("Filter:")} ${this.filter}`, content)
@@ -244,19 +250,24 @@ export class Menu implements Component {
 			// selection and cancel hint stay visible on short windows.
 			for (const item of this.visibleWindow(visible)) {
 				if (isSection(item)) {
-					out.push(truncateToWidth(theme.dim(item.label ?? item.value), content));
+					for (const line of sanitizeDisplay(item.label ?? item.value).split("\n")) {
+						out.push(truncateToWidth(theme.dim(line), content));
+					}
 					continue;
 				}
-				const label = `${this.multiSelect ? (this.checked.has(item.value) ? "[x] " : "[ ] ") : ""}${item.label ?? item.value}`;
+				const label = `${this.multiSelect ? (this.checked.has(item.value) ? "[x] " : "[ ] ") : ""}${sanitizeDisplay(item.label ?? item.value)}`;
 				const head = item.value === selected
 					? `${ICONS.selectedMarker} ${label}`
 					: `  ${label}`;
 				// Descriptions yield at narrow widths; primary labels carry actions.
 				const room = Math.max(0, content - visibleWidth(head) - 2);
-				const tail = item.description && room > 4 ? `  ${truncateToWidth(item.description, room)}` : "";
-				const row = `${head}${tail}`;
-				const padded = `${row}${" ".repeat(Math.max(0, content - visibleWidth(row)))}`;
-				out.push(item.value === selected ? selectionBar(padded, content) : padded);
+				const tail = item.description && room > 4 ? `  ${truncateToWidth(sanitizeDisplay(item.description), room)}` : "";
+				// Each embedded newline becomes its own physical row; the
+				// selection bar spans every row of the selected entry.
+				for (const row of `${head}${tail}`.split("\n")) {
+					const padded = `${row}${" ".repeat(Math.max(0, content - visibleWidth(row)))}`;
+					out.push(item.value === selected ? selectionBar(padded, content) : padded);
+				}
 			}
 		}
 		out.push(truncateToWidth(theme.dim(this.hint), content));

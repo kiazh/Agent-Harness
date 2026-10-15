@@ -248,8 +248,14 @@ export class ApprovalCard implements Component {
 		const clean = sanitizeDisplay;
 		const title = `Allow ${clean(this.details.tool ?? this.details.operation)} · ${clean(this.details.target)}?`;
 		const request = theme.dim(`request: ${clean(this.details.requestId).slice(0, 16)}`);
-		const heading = truncateToWidth(title, Math.max(0, width - visibleWidth(request) - 3));
-		const first = width >= 80 ? `${heading}${" ".repeat(Math.max(1, width - visibleWidth(heading) - visibleWidth(request)))}${request}` : truncateToWidth(title, width);
+		// Sanitize keeps newlines: a multi-line title becomes one physical row
+		// per line (request tag on the first) instead of a break inside a row.
+		const first = title.split("\n").map((line, index) => {
+			if (width < 80) return truncateToWidth(line, width);
+			const heading = truncateToWidth(line, Math.max(0, width - visibleWidth(request) - 3));
+			if (index > 0) return heading;
+			return `${heading}${" ".repeat(Math.max(1, width - visibleWidth(heading) - visibleWidth(request)))}${request}`;
+		});
 		const descriptions = ["Only this exact action", "Where supported by policy", "Do not run this action"];
 		const choices = DECISIONS.map((option, i) => {
 			const mark = i === this.selected ? "›" : " ";
@@ -259,7 +265,7 @@ export class ApprovalCard implements Component {
 		});
 		const blocked = this.isAllowBlocked();
 		const hints = this.resolving ? "Resolving…" : "↑↓ choose · Enter select · Esc deny";
-		const out = [theme.border("─".repeat(Math.max(0, width))), first, ...choices];
+		const out = [theme.border("─".repeat(Math.max(0, width))), ...first, ...choices];
 		if (this.error) out.push(theme.error(truncateToWidth(this.error, width)));
 		else if (blocked) out.push(theme.warning("Resize to review · Allow blocked"));
 		out.push(theme.dim(truncateToWidth(hints, width)));

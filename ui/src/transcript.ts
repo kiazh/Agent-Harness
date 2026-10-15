@@ -6,7 +6,7 @@
 import type { Component, Container } from "@earendil-works/pi-tui";
 import { AssistantTurn } from "./components/AssistantTurn.ts";
 import { Notice } from "./components/Notice.ts";
-import { ToolTurn } from "./components/ToolTurn.ts";
+import { ToolTurn, type ToolOutcome } from "./components/ToolTurn.ts";
 import { UserTurn } from "./components/UserTurn.ts";
 import { ACTIVITY_INTERVAL_MS, type ActivitySource, type AnimationCoordinator, type AnimationSubscription } from "./design/motion.ts";
 import type { NoticeKind } from "./features/index.ts";
@@ -15,6 +15,28 @@ import type { GatewayEvent, HistoryEntry } from "./protocol.ts";
 export interface TurnSummary {
 	tokens: number;
 	cancelled: boolean;
+}
+
+/**
+ * Map a typed streamed outcome to its rendered state. The backend
+ * `_tool_outcome` taxonomy is authoritative when present; legacy events
+ * without an outcome keep the `isError` contract unchanged. A `paused` call
+ * was NOT executed, so it uses the neutral awaiting-approval state, and a
+ * `denied` call gets its own state — never the success check.
+ */
+function toolOutcomeState(outcome: string | undefined, isError: boolean): ToolOutcome {
+	switch (outcome) {
+		case "denied":
+			return "denied";
+		case "paused":
+			return "awaiting_approval";
+		case "outcome_unknown":
+			return "outcome_unknown";
+		case "failed":
+			return "error";
+		default:
+			return isError ? "error" : "success";
+	}
 }
 
 export class Transcript {
@@ -191,7 +213,7 @@ export class Transcript {
 			const card = this.tools.get(event.id);
 			card?.settle(
 				{ text: event.result, backendTruncated: event.truncated ?? false, locallyTruncated: false },
-				event.outcome === "outcome_unknown" ? "outcome_unknown" : event.isError ? "error" : "success",
+				toolOutcomeState(event.outcome, event.isError),
 			);
 			this.toolSubs.get(event.id)?.stop();
 			this.toolSubs.delete(event.id);
