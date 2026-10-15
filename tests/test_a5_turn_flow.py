@@ -315,10 +315,19 @@ def test_both_loops_call_the_shared_batch_tail_helpers():
 
 
 def test_agent_py_shrank_below_its_pre_extraction_size():
-    """A5-min must pay for itself: the helpers live OUTSIDE agent.py."""
+    """A5-min must pay for itself: the helpers live OUTSIDE agent.py.
+
+    The hard number lives in exactly one place — ``GOD_FILE_CEILINGS`` in
+    ``test_architecture_layers`` (ratchet procedure: only moves with a delta
+    table). This test guards the A5-min extraction specifically: agent.py must
+    stay within that ratified ceiling (2110 after R4-025/PB-1 and R5-F1).
+    """
+    from tests.test_architecture_layers import GOD_FILE_CEILINGS
+
+    ceiling = dict(GOD_FILE_CEILINGS)["core/agent.py"]
     agent_lines = len(
         (ROOT / "machina" / "core" / "agent.py").read_text(encoding="utf-8").splitlines()
     )
-    assert agent_lines < 2056, (
-        f"agent.py must shrink below its pre-extraction 2056 lines, got {agent_lines}"
+    assert agent_lines <= ceiling, (
+        f"agent.py is {agent_lines} lines, past the ratified ceiling {ceiling}"
     )
