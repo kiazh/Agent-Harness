@@ -1,6 +1,8 @@
 services:
   db:
-    image: pgvector/pgvector:pg16
+    # Pinned by tag@digest (R4-095); Dependabot's docker ecosystem bumps the
+    # digest. Do not replace with a moving tag.
+    image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -55,6 +57,15 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
+      # R4-095: this mount is INERT for the compose service. `machina
+      # init`/`serve` run through the console entry point, which imports the
+      # pip-installed copy in site-packages (/app is not on sys.path for a
+      # console script) — edits to the host tree do NOT reach the running
+      # container, so rebuild the image to change runtime code. It is kept for
+      # read-only source inspection only. Caveat: ad-hoc `python -m machina…`
+      # or `python -c` run from /app DOES pick this tree up (cwd is on
+      # sys.path there); that mixed-code path is the stale-code trap this note
+      # warns about — don't rely on it for deployments.
       - ./machina:/app/machina:ro
       - ./scripts:/app/scripts:ro
       # AH-AUDIT-039a: explicit writable application home/state path with

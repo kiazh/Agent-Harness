@@ -35,7 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        # Pinned by tag@digest (R4-095); Dependabot's docker ecosystem bumps it.
+        image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -51,10 +52,10 @@ jobs:
       MACHINA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/machina_test
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 

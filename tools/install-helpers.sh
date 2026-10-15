@@ -16,6 +16,12 @@
 # a custom URL the installer must preserve.
 INSTALLER_DEFAULT_DB_URL="postgresql://postgres:postgres@localhost:5432/machina"
 
+# Base image for the docker-provisioned Postgres, pinned by tag@digest
+# (R4-095): `docker run` must not drift with a mutable tag. Bump the digest
+# (and keep the tag for operators) when upgrading; Dependabot's docker
+# ecosystem covers the same reference in ci.yml/docker-compose.
+PGVECTOR_IMAGE="pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a"
+
 # Keep curl|bash and CI logs plain. On a real terminal, show progress only
 # while a real command is running; always reveal its output if it fails.
 run_animated() (
@@ -213,18 +219,64 @@ maybe_write_db_url() {
 
 try_init() { "$MACHINA_BIN" init 2>&1; }
 
+# docker_db_container_password <container> — stdout: the container's
+# POSTGRES_PASSWORD (empty when docker inspect fails or the variable is
+# absent). The value is used for comparison/writing only and never echoed
+# to the terminal or logs by the installer.
+docker_db_container_password() {
+  docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$1" 2>/dev/null \
+    | sed -n 's/^POSTGRES_PASSWORD=//p' | head -n 1
+}
+
+# start_docker_db — provision/reuse the local machina-db container.
+# Return codes (consumed by install.sh):
+#   0 = a container is running and safe to init against
+#   1 = docker unavailable/failed; the caller may still fall back to Homebrew
+#   2 = an existing machina-db conflicts with DATABASE_URL; guidance was
+#       printed and the caller must NOT retry init or install Homebrew, which
+#       cannot repair a custom DATABASE_URL (the 60 s retry + rogue brew
+#       install INFRA-I1 flagged).
 start_docker_db() {
   command -v docker >/dev/null 2>&1 || return 1
+  local container_state="" container_password="" container_url env_url
   # AH-029: `docker ps` lists running containers only — a stopped
   # machina-db would be missed and `docker run --name` would fail with
   # "already exists". Inspect all containers (-a) and reuse the named one.
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^machina-db$'; then
-    log "machina-db already running, reusing it"
-    return 0
+    container_state="running"
+  elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^machina-db$'; then
+    container_state="stopped"
   fi
-  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^machina-db$'; then
-    log "Starting existing stopped machina-db container"
-    docker start machina-db >/dev/null || return 1
+  if [ -n "$container_state" ]; then
+    # INFRA-I1: never blindly reuse the named container. A password that
+    # differs from DATABASE_URL would make `machina init` retry for 60 s and
+    # then trigger a Homebrew install that cannot fix a custom URL. Reconcile
+    # only when the URL is the installer-owned default; otherwise refuse.
+    container_password="$(docker_db_container_password machina-db)"
+    if [ -z "$container_password" ]; then
+      warn "machina-db is $container_state but its credentials could not be read (docker inspect failed or POSTGRES_PASSWORD is unset)."
+      warn "  fix: docker rm -f machina-db, then re-run this installer"
+      return 2
+    fi
+    container_url="postgresql://postgres:${container_password}@127.0.0.1:5432/machina"
+    if db_url_is_installer_default "$ENV_FILE"; then
+      maybe_write_db_url "$container_url" "$ENV_FILE" || return 1
+      log "machina-db $container_state; reusing it and reconciling DATABASE_URL to its credentials"
+    else
+      env_url="$(env_get DATABASE_URL "$ENV_FILE")"
+      if [ "$env_url" != "$container_url" ]; then
+        warn "machina-db is $container_state but its password differs from DATABASE_URL in $ENV_FILE."
+        warn "Refusing to reuse it: init would retry for 60s and Homebrew cannot repair a custom DATABASE_URL."
+        warn "  fix A: docker rm -f machina-db, then re-run this installer (fresh container + URL)"
+        warn "  fix B: set DATABASE_URL in $ENV_FILE to the container's POSTGRES_PASSWORD (docker inspect machina-db)"
+        return 2
+      fi
+      log "machina-db $container_state; DATABASE_URL matches its credentials, reusing it"
+    fi
+    if [ "$container_state" = "stopped" ]; then
+      log "Starting existing stopped machina-db container"
+      docker start machina-db >/dev/null || return 1
+    fi
     return 0
   fi
   # AH-006: never publish Postgres beyond loopback with weak default
@@ -237,7 +289,7 @@ start_docker_db() {
   # shellcheck disable=SC2086
   docker run -d --name machina-db \
     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$DB_PASS" -e POSTGRES_DB=machina \
-    -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16 >/dev/null || return 1
+    -p 127.0.0.1:5432:5432 "$PGVECTOR_IMAGE" >/dev/null || return 1
   # Point a default DATABASE_URL at the generated credentials; a custom URL
   # is preserved by maybe_write_db_url.
   maybe_write_db_url "$DB_URL" "$ENV_FILE" || return 1

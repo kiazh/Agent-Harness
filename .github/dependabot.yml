@@ -1,7 +1,9 @@
-# INFRA-n5 (infra audit): scheduled dependency-surface review. Pairs with the
-# SHA/tag pinning guidance in the audit report — Dependabot opens PRs for
-# outdated base images, actions, PyPI and npm deps; each PR still flows through
-# the full CI (including the sandbox image build) before merge.
+# INFRA-n5 (infra audit), updated by R4-095: scheduled dependency-surface
+# review. The workflows pin every action by commit SHA and every base image by
+# tag@digest; Dependabot opens the PRs that bump those SHAs/digests (for
+# github-actions and docker it rewrites the pinned reference and refreshes the
+# trailing `# vX.Y.Z` comment — keep both halves). Each PR still flows through
+# the full CI, which now also gates `uv lock --check` before merge.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -12,7 +14,9 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    # uv.lock is the authoritative resolution; review lock drift explicitly.
+    # uv.lock is the authoritative resolution. CI runs `uv lock --check`, so a
+    # dependency bump must ship a regenerated uv.lock (`uv lock` on the branch);
+    # Dependabot-only pyproject changes that skip the lock will fail CI by design.
     open-pull-requests-limit: 5
   - package-ecosystem: npm
     directory: "/ui"

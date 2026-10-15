@@ -9,7 +9,10 @@
 # noticed. The context now matches pyproject's forced includes (machina +
 # skills). Runtime-only install: dev extras have no place in an isolation
 # image whose root filesystem is mounted read-only at run time.
-FROM python:3.11-slim
+#
+# Base image pinned by tag@digest (R4-095); Dependabot's docker ecosystem
+# bumps it. Do not replace with a moving tag.
+FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
 
 WORKDIR /build
 COPY pyproject.toml README.md ./

@@ -169,7 +169,19 @@ def main(source: Path, target: Path) -> None:
         shutil.copyfile(original, destination)
         files[relative] = hashlib.sha256(original.read_bytes()).hexdigest()
         if relative.startswith("skills/") and original.name == "SKILL.md":
-            metadata = yaml.safe_load(original.read_text().split("---", 2)[1])
+            text = original.read_text()
+            parts = text.split("---", 2)
+            if not text.startswith("---\n") or len(parts) != 3:
+                raise ValueError(f"Skill SKILL.md has no YAML frontmatter: {relative}")
+            metadata = yaml.safe_load(parts[1])
+            if (
+                not isinstance(metadata, dict)
+                or not isinstance(metadata.get("name"), str)
+                or not isinstance(metadata.get("description"), str)
+            ):
+                raise ValueError(
+                    f"Skill frontmatter must define string name/description: {relative}"
+                )
             entries.append(
                 {
                     "name": "ecc-" + metadata["name"],

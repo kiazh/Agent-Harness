@@ -56,19 +56,20 @@ machina = "machina.cli:app"
 [tool.hatch.build]
 exclude = ["**/node_modules/**", "**/__pycache__/**", ".venv*", ".env", ".env.local", ".coverage", "coverage.xml"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["machina"]
-
 # AH-030: ship built-in skills inside the wheel so non-editable installs
 # still discover SKILL.md content. Falls back to MACHINA_SKILLS_DIR
 # at runtime when overridden.
-# N5 (final pass): hatchling's force-include bypasses [tool.hatch.build]
-# exclude (verified empirically), so gitignored runtime telemetry
-# (skills/telemetry.json[.lock]) can ship in wheels built from a used
-# checkout — counters only, no secrets. Image hygiene is enforced where it
-# works: .dockerignore prunes these paths from Docker build contexts.
-[tool.hatch.build.targets.wheel.force-include]
-"skills" = "skills"
+# N5 (final pass, fixed R4-095): hatchling's force-include bypasses every
+# `exclude` (verified empirically), so gitignored runtime telemetry
+# (skills/telemetry.json[.lock]) shipped in wheels built from a used checkout.
+# The wheel target therefore selects `skills` through `packages` (normal file
+# selection honors `exclude`) instead of force-include; member paths are
+# unchanged. The sdist still force-includes `skills` wholesale (hatchling has
+# no cheap subtractive form there) and may carry the counters-only telemetry
+# file; image contexts stay clean via .dockerignore.
+[tool.hatch.build.targets.wheel]
+packages = ["machina", "skills"]
+exclude = ["skills/telemetry.json", "skills/telemetry.json.lock"]
 
 [tool.hatch.build.targets.sdist.force-include]
 "skills" = "skills"

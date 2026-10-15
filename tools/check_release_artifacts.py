@@ -81,6 +81,12 @@ def check(wheel: Path) -> None:
         ]
         if forbidden:
             raise ValueError(f"Unexpected local artifacts: {forbidden}")
+        # R4-095: runtime skill telemetry is machine-local state (counters only)
+        # and must never ship in the wheel; pyproject selects `skills` through
+        # `packages` so `exclude` applies (force-include used to bypass it).
+        leaked_telemetry = sorted(n for n in names if n.startswith("skills/telemetry.json"))
+        if leaked_telemetry:
+            raise ValueError(f"Runtime skill telemetry leaked into the wheel: {leaked_telemetry}")
         with tempfile.TemporaryDirectory(prefix="machina-release-wheel-") as directory:
             root = Path(directory).resolve()
             for member in archive.infolist():

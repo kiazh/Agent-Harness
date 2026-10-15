@@ -201,6 +201,19 @@ INSTALL_LIB="$APP_DIR/tools/install-helpers.sh"
 # can no longer redirect it), and unset means the checkout .env.
 if [ -n "${MACHINA_ENV_FILE:-}" ]; then ENV_IS_DEFAULT=0; else ENV_IS_DEFAULT=1; fi
 ENV_FILE="$(resolve_env_file "$START_DIR")"
+# --- env-file parent guard ---------------------------------------------------
+# MACHINA_ENV_FILE pointing into a missing or read-only directory used to abort
+# below with a bare bash redirection error (`: > $ENV_FILE` / `cp .env.example`)
+# and no explanation. Fail with installer guidance instead; the code between the
+# markers is exercised verbatim by the guarded probe in the R4-095 proof doc.
+ENV_PARENT="$(dirname "$ENV_FILE")"
+if [ ! -d "$ENV_PARENT" ]; then
+  die "MACHINA_ENV_FILE=$ENV_FILE cannot be used: directory $ENV_PARENT does not exist (create it, or point MACHINA_ENV_FILE at an existing directory)"
+fi
+if [ ! -w "$ENV_PARENT" ]; then
+  die "MACHINA_ENV_FILE=$ENV_FILE cannot be written: directory $ENV_PARENT is not writable"
+fi
+# --- end env-file parent guard -----------------------------------------------
 # Export the resolved absolute target: `machina init`/`doctor` below run as
 # child processes from APP_DIR, where a relative MACHINA_ENV_FILE would
 # otherwise resolve against the wrong directory (the startup dir differs).
@@ -366,6 +379,12 @@ if [ "$SKIP_INIT" = "1" ]; then
   log "Skipping machina init (--skip-init)"
 else
   log "Running machina init automatically"
+  # DOCKER_DB_RC contract (INFRA-I1): start_docker_db returns 0 when a
+  # container was started/reused safely, 1 when docker is unusable (Homebrew
+  # may still help), and 2 when the existing machina-db container conflicts
+  # with DATABASE_URL — auto-provisioning must stop there: retrying init for
+  # 60 s and then installing Homebrew Postgres cannot repair a custom URL.
+  DOCKER_DB_RC=1
   if INIT_OUTPUT="$(try_init 2>&1)"; then
     INIT_STATE="ready"
     log "Schema ready (machina init completed)"
@@ -373,31 +392,41 @@ else
     printf '%s\n' "$INIT_OUTPUT" >&2
     warn "\`machina init\` failed and auto-provisioning is off (--no-auto-db)."
     warn "Start Postgres (pgvector/pgvector:pg16), check DATABASE_URL in .env, then run: machina init"
-  elif [ "$DOCKER_DB" != "no" ] && start_docker_db && INIT_OUTPUT="$(wait_for_init 2>&1)"; then
-    INIT_STATE="ready"
-    log "Schema ready (via auto-started docker Postgres)"
-  elif start_brew_db && INIT_OUTPUT="$(wait_for_init 2>&1)"; then
-    INIT_STATE="ready"
-    log "Schema ready (via Homebrew Postgres)"
   else
-    printf '%s\n' "$INIT_OUTPUT" >&2
-    warn "\`machina init\` failed. Pick one, then re-run: machina init"
-    case "$OS_FAMILY" in
-      macos)
-        warn "  docker:  docker run -d --name machina-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=<generated> -e POSTGRES_DB=machina -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16"
-        warn "           (then set DATABASE_URL=postgresql://postgres:<generated>@127.0.0.1:5432/machina in .env, mode 0600)"
-        warn "  brew:    brew install postgresql@16 pgvector && brew services start postgresql@16"
-        warn "           createuser -s machina && createdb -O machina machina && psql -U machina -d machina -c 'CREATE EXTENSION vector;'"
-        ;;
-      windows)
-        warn "  docker (Docker Desktop): same docker run line as above"
-        warn "  native:  winget install -e --id PostgreSQL.16 (then add pgvector via StackBuilder), create the machina DB, set DATABASE_URL in .env"
-        ;;
-      *)
-        warn "  docker:  docker run -d --name machina-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=<generated> -e POSTGRES_DB=machina -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16"
-        warn "  apt:     sudo apt-get install -y postgresql postgresql-contrib (plus pgvector for your PG major), create the machina DB, set DATABASE_URL in .env"
-        ;;
-    esac
+    if [ "$DOCKER_DB" != "no" ]; then
+      DOCKER_DB_RC=0
+      start_docker_db || DOCKER_DB_RC=$?
+    fi
+    if [ "$DOCKER_DB_RC" = "2" ]; then
+      printf '%s\n' "$INIT_OUTPUT" >&2
+      warn "\`machina init\` failed and the existing machina-db container conflicts with DATABASE_URL."
+      warn "Stopping auto-provisioning: Homebrew cannot repair a custom DATABASE_URL, so no brew install is attempted."
+    elif [ "$DOCKER_DB_RC" = "0" ] && INIT_OUTPUT="$(wait_for_init 2>&1)"; then
+      INIT_STATE="ready"
+      log "Schema ready (via auto-started docker Postgres)"
+    elif start_brew_db && INIT_OUTPUT="$(wait_for_init 2>&1)"; then
+      INIT_STATE="ready"
+      log "Schema ready (via Homebrew Postgres)"
+    else
+      printf '%s\n' "$INIT_OUTPUT" >&2
+      warn "\`machina init\` failed. Pick one, then re-run: machina init"
+      case "$OS_FAMILY" in
+        macos)
+          warn "  docker:  docker run -d --name machina-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=<generated> -e POSTGRES_DB=machina -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16"
+          warn "           (then set DATABASE_URL=postgresql://postgres:<generated>@127.0.0.1:5432/machina in .env, mode 0600)"
+          warn "  brew:    brew install postgresql@16 pgvector && brew services start postgresql@16"
+          warn "           createuser -s machina && createdb -O machina machina && psql -U machina -d machina -c 'CREATE EXTENSION vector;'"
+          ;;
+        windows)
+          warn "  docker (Docker Desktop): same docker run line as above"
+          warn "  native:  winget install -e --id PostgreSQL.16 (then add pgvector via StackBuilder), create the machina DB, set DATABASE_URL in .env"
+          ;;
+        *)
+          warn "  docker:  docker run -d --name machina-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=<generated> -e POSTGRES_DB=machina -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16"
+          warn "  apt:     sudo apt-get install -y postgresql postgresql-contrib (plus pgvector for your PG major), create the machina DB, set DATABASE_URL in .env"
+          ;;
+      esac
+    fi
   fi
 fi
 

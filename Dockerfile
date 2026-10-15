@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1
 
+# Base image pinned by tag@digest (R4-095); Dependabot's docker ecosystem
+# (.github/dependabot.yml) opens the digest-bump PRs. Do not replace with a
+# moving tag.
+
 # ─── Build stage ────────────────────────────────────────────────────────────
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce AS builder
 
 WORKDIR /app
 
@@ -19,7 +23,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir .
 
 # ─── Runtime stage ───────────────────────────────────────────────────────────
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce AS runtime
 
 WORKDIR /app
 

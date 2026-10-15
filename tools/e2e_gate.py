@@ -12,10 +12,19 @@ and observed output this tool writes.
 
 Usage
 -----
-    .venv/bin/python tools/e2e_gate.py                      # all journeys
+    .venv/bin/python tools/e2e_gate.py                      # env DB must be test-like
     .venv/bin/python tools/e2e_gate.py --journeys j1,j5     # subset
+    .venv/bin/python tools/e2e_gate.py --db-url postgresql://user:pass@host:5432/machina_test
     .venv/bin/python tools/e2e_gate.py --json /tmp/gate.json
     .venv/bin/python tools/e2e_gate.py --scratch-dir /tmp/machina-e2e
+
+Database guard (R4-095, audit finding I1): the journeys write real sessions,
+chunks and memories, so the gate refuses to run when the database it would use
+is not test-like (its name does not contain "test") unless ``--db-url`` is
+passed explicitly — the flag is the consent, and it is exported to every child
+process as ``MACHINA_DATABASE_URL`` and ``DATABASE_URL``. Resolution without
+the flag reads the environment only (``MACHINA_DATABASE_URL`` then
+``DATABASE_URL``); it never guesses from config files.
 
 Exit codes: 0 = no failures (skips allowed), 1 = at least one FAIL,
 2 = usage/environment error.
@@ -196,6 +205,69 @@ def git_capture(repo: Path) -> dict:
 
 def error_hits(text: str) -> list[str]:
     return [needle for needle in ERROR_SUBSTRINGS if needle in text]
+
+
+# ---------------------------------------------------------------------------
+# Database guard (R4-095): explicit consent for non-test databases
+# ---------------------------------------------------------------------------
+
+DB_URL_ENV_VARS = ("MACHINA_DATABASE_URL", "DATABASE_URL")
+
+
+def resolve_db_url(explicit: str | None) -> tuple[str | None, str]:
+    """Return (url, source) for the database the gate will exercise.
+
+    ``--db-url`` wins. Otherwise only the environment is consulted (explicit
+    MACHINA_DATABASE_URL, then legacy DATABASE_URL) — the gate never guesses
+    from a config file it cannot show the operator.
+    """
+    if explicit and explicit.strip():
+        return explicit.strip(), "flag"
+    for name in DB_URL_ENV_VARS:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value, f"env:{name}"
+    return None, "unset"
+
+
+def database_name_from_url(url: str) -> str | None:
+    """Database name from a postgres URL (None when it is not usable)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("postgres", "postgresql"):
+        return None
+    name = (parsed.path or "").lstrip("/")
+    return name or None
+
+
+def is_test_database(name: str | None) -> bool:
+    """Fail-closed test-database predicate: the name must contain 'test'."""
+    return bool(name) and "test" in name.casefold()
+
+
+def summarize_db_url(url: str) -> str:
+    """Credential-free rendering of a database URL for logs and proofs."""
+    parsed = urlparse(url)
+    host = parsed.hostname or "?"
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"{parsed.scheme or '?'}://{host}{port}/{parsed.path.lstrip('/') or '?'}"
+
+
+def redacted_command_line(argv: list[str]) -> str:
+    """Provenance line with any --db-url value masked (it may embed a password)."""
+    parts = [sys.executable, "tools/e2e_gate.py"]
+    mask_next = False
+    for part in argv:
+        if mask_next:
+            parts.append("<redacted>")
+            mask_next = False
+        elif part == "--db-url":
+            parts.append(part)
+            mask_next = True
+        elif part.startswith("--db-url="):
+            parts.append("--db-url=<redacted>")
+        else:
+            parts.append(part)
+    return " ".join(parts)
 
 
 def new_record(jid: str) -> dict:
@@ -2772,6 +2844,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--json", dest="json_out", default=None, help="extra JSON report path")
     parser.add_argument("--venv", default=str(DEFAULT_VENV), help="repo venv directory")
     parser.add_argument(
+        "--db-url",
+        default=None,
+        help=(
+            "explicit postgres URL for the whole gate (exported to every child). "
+            "Required when the environment does not point at a test-like database"
+        ),
+    )
+    parser.add_argument(
         "--timeout", type=float, default=240.0, help="per agent/CLI command timeout (s)"
     )
     parser.add_argument(
@@ -2787,6 +2867,43 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         log(f"unknown journeys: {unknown}; valid: {list(JOURNEY_IDS)}")
         return 2
+
+    # Database guard (R4-095): never run the write-heavy journeys against a
+    # database the operator did not visibly choose. Non-test databases need the
+    # explicit --db-url consent; an unset environment is refused too.
+    db_url, db_source = resolve_db_url(args.db_url)
+    if db_url is None:
+        log(
+            "no MACHINA_DATABASE_URL/DATABASE_URL in the environment and no --db-url "
+            "given: the gate will not guess a database. Re-run with "
+            "--db-url postgresql://user:pass@host:5432/<test database>."
+        )
+        return 2
+    db_name = database_name_from_url(db_url)
+    if db_name is None:
+        log(
+            f"{db_source} is not a usable postgres URL ({summarize_db_url(db_url)}): "
+            "expected postgresql://user:pass@host:port/database"
+        )
+        return 2
+    if args.db_url is None and not is_test_database(db_name):
+        log(
+            f"refusing to run against non-test database '{db_name}' "
+            f"({summarize_db_url(db_url)}, source {db_source}): this gate writes "
+            "sessions, chunks and memories. Re-run with `--db-url <that URL>` only "
+            "if that database is the intended target."
+        )
+        return 2
+    if args.db_url is not None:
+        # Every child (CLI, API server, gateway, embedded scripts) must resolve
+        # the requested database; explicit config env wins over .env files.
+        os.environ["MACHINA_DATABASE_URL"] = db_url
+        os.environ["DATABASE_URL"] = db_url
+    log(
+        f"database: {summarize_db_url(db_url)} (source: {db_source}"
+        f"{', non-test explicitly allowed by --db-url' if not is_test_database(db_name) else ''})"
+    )
+
     venv_python = Path(args.venv).expanduser().resolve() / "bin" / "python"
     machina_bin = venv_python.parent / "machina"
     if not venv_python.is_file():
@@ -2813,11 +2930,16 @@ def main(argv: list[str] | None = None) -> int:
         "schema_version": 1,
         "tool": "tools/e2e_gate.py",
         "generated_at_utc": utc_now(),
-        "command_line": " ".join([sys.executable, "tools/e2e_gate.py", *sys.argv[1:]]),
+        "command_line": redacted_command_line(sys.argv[1:]),
         "repo_root": str(REPO_ROOT),
         "git": git_capture(REPO_ROOT),
         "venv_python": str(venv_python),
         "scratch_root": str(scratch_root),
+        "database": {
+            "source": db_source,
+            "summary": summarize_db_url(db_url),
+            "test_like": is_test_database(db_name),
+        },
         "journeys_selected": selected,
         "journeys": [],
         "summary": {"passed": 0, "failed": 0, "skipped": 0, "total": len(selected)},
