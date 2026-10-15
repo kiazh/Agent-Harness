@@ -247,9 +247,9 @@ class MemoryApprovalGate:
         values += f", ${len(params) + 1}"
         params.append(embedding_str)
 
-        insert_sql = f"INSERT INTO pending_memories ({columns}) VALUES ({values})"
+        insert_sql = f"INSERT INTO pending_memories ({columns}) VALUES ({values})"  # nosec B608 # Fixed column/placeholder fragments; values are bound parameters.
         await db.execute(
-            insert_sql,  # nosec B608 # Fixed column/placeholder fragments; values are bound parameters.
+            insert_sql,
             *params,
         )
 
@@ -308,7 +308,7 @@ class MemoryApprovalGate:
                            redactions, status, created_at, explicitly_important,
                            base_strength, embedding{space_column}
                     FROM pending_memories WHERE id = $1 FOR UPDATE
-                    """,
+                    """,  # nosec B608 # Fixed column fragments; values are bound parameters.
                     pending_id,
                 )
                 if row is None or row["status"] != ApprovalStatus.PENDING.value:
@@ -455,7 +455,7 @@ class MemoryApprovalGate:
                 FROM pending_memories
                 WHERE status = $1 AND agent_id = $2
                 ORDER BY created_at ASC FOR UPDATE
-                """,
+                """,  # nosec B608 # Fixed column fragments; values are bound parameters.
                 ApprovalStatus.PENDING.value,
                 agent_id,
             )
@@ -468,7 +468,7 @@ class MemoryApprovalGate:
                 FROM pending_memories
                 WHERE status = $1
                 ORDER BY created_at ASC FOR UPDATE
-                """,
+                """,  # nosec B608 # Fixed column fragments; values are bound parameters.
                 ApprovalStatus.PENDING.value,
             )
 
