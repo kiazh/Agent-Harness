@@ -187,7 +187,7 @@ def test_rc_line_round_trip_sh(tmp_path: Path, helpers_sh: str):
     # install.sh code only.
     proc = run_bash(script, tmp_path)
     assert proc.returncode == 0, f"rc round-trip failed:\n{proc.stdout}\n{proc.stderr}"
-    assert f"PROBE=" in proc.stdout
+    assert "PROBE=" in proc.stdout
 
 
 def test_rc_lines_byte_identical_for_normal_path(tmp_path: Path, helpers_sh: str):
