@@ -54,7 +54,7 @@ export const modeCommand: Command = {
 		const result = await host.request<ModeResult>("mode.set", params);
 		host.print(
 			sub === "full"
-				? `FULL HOST active for this session. Sensitive actions (credentials, elevation, destructive system ops) still ask. /mode revoke to leave.`
+				? `FULL HOST active for this session. Sensitive actions (credentials, elevation, destructive system ops) still ask. /approvals revoke to leave.`
 				: `Mode: ${result.mode} (backend: ${result.backend})`,
 			sub === "full" ? "warning" : "success",
 		);

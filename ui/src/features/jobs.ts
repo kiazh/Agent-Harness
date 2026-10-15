@@ -6,11 +6,12 @@ import { splitSub } from "../commands.ts";
 import { options, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
 
 /**
- * Upper bound on cursor pages scanned by prefix resolution.
- * A nextCursor that never ends (buggy or hostile gateway) must fail fast
- * instead of looping forever.
+ * Upper bound on the listing window used to resolve a prefix: the gateway's
+ * `jobs.list` has no cursor (it returns the newest page ordered by
+ * `created_at DESC`, limit <= 500), so a dead cursor loop would re-fetch the
+ * same window forever. A prefix older than the window fails honestly below.
  */
-const MAX_LIST_PAGES = 100;
+const JOB_LIST_LIMIT = 500;
 
 async function resolveJobId(host: FeatureHost, sessionId: string, idOrPrefix: string): Promise<string> {
 	// Normalize braced/URN UUID forms like sessions (Python uuid.UUID accepts them).
@@ -18,21 +19,17 @@ async function resolveJobId(host: FeatureHost, sessionId: string, idOrPrefix: st
 	if (wanted.startsWith("urn:uuid:")) wanted = wanted.slice("urn:uuid:".length);
 	if (wanted.startsWith("{") && wanted.endsWith("}")) wanted = wanted.slice(1, -1).trim();
 	if (/^[0-9a-f-]{36}$/.test(wanted)) return wanted;
-	// Paginate through jobs: a prefix must resolve even when the
-	// matching job is older than the most recent page (bounded).
-	let cursor: string | undefined;
-	const ids: string[] = [];
-	for (let page = 0; ; page++) {
-		const { jobs, nextCursor } = await host.request<{ jobs: JobInfo[] } & { nextCursor?: string }>(
-			"jobs.list",
-			{ sessionId, limit: 500, ...(cursor ? { cursor } : {}) },
+	// One bounded listing: prefix resolution scans the newest jobs only.
+	const { jobs } = await host.request<{ jobs: JobInfo[] }>(
+		"jobs.list",
+		{ sessionId, limit: JOB_LIST_LIMIT },
+	);
+	const ids = jobs.map((job) => job.id);
+	const listed = ids.some((id) => id === wanted || id.startsWith(wanted));
+	if (!listed && jobs.length >= JOB_LIST_LIMIT) {
+		throw new Error(
+			`Showing only the newest ${JOB_LIST_LIMIT} jobs; "${wanted}" was not found in that window. Use a full job id.`,
 		);
-		ids.push(...jobs.map((j) => j.id));
-		if (!nextCursor) break;
-		if (page + 1 >= MAX_LIST_PAGES) {
-			throw new Error(`Too many jobs to scan (${MAX_LIST_PAGES} pages); use a full id.`);
-		}
-		cursor = nextCursor;
 	}
 	return resolvePrefix(wanted, ids, "job");
 }

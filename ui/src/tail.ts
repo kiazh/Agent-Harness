@@ -115,8 +115,10 @@ export function bufferHiddenEvent(tail: SessionTail, event: GatewayEvent): void 
 			if (tail.completedTurns.length > MAX_TAIL_COMPLETED_TURNS) tail.completedTurns.shift();
 			// Completed work is persisted to history at completion: keep only
 			// the canonical final text as the tail's fallback and let the
-			// fetched history own the tool cards.
-			tail.blocks = tail.blocks.filter((block) => block.turnId !== event.turnId);
+			// fetched history own the tool cards. Turn-failure notices are NOT
+			// persisted, so they survive completion: dropping them here would
+			// hide the failure from a switch-back (review round 4, R4-094).
+			tail.blocks = tail.blocks.filter((block) => block.turnId !== event.turnId || block.kind === "notice");
 			if (event.text) {
 				tail.blocks.push({ kind: "assistant", turnId: event.turnId, text: event.text, completed: true });
 			}

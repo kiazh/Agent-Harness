@@ -308,11 +308,11 @@ test("W6 session delete listing refuses an endless cursor chain", async () => {
 	assert.ok(pages.requestCount() <= 101, `pagination bounded, made ${pages.requestCount()} requests`);
 });
 
-test("W6 job prefix resolution refuses an endless cursor chain", async () => {
+test("W6 job prefix resolution scans one bounded listing, never a cursor chain", async () => {
 	const pages = endlessPages("jobs.list", { jobs: [] });
 	await assert.rejects(
 		() => jobsCommand.run("on abc", makeHost(pages.request, sessionInfo("session-x"))),
-		/too many jobs/i,
+		/No job starts with/i,
 	);
-	assert.ok(pages.requestCount() <= 101, `pagination bounded, made ${pages.requestCount()} requests`);
+	assert.equal(pages.requestCount(), 1, "jobs.list has no cursor: exactly one bounded listing");
 });

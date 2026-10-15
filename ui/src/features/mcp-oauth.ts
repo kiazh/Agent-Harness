@@ -109,6 +109,9 @@ export async function authorizeConnector(host: FeatureHost, serverId: string): P
 		});
 		operation = started.operation;
 	} catch (error) {
+		// A transient start failure may leave the reviewed preview pending:
+		// release it so no dangling authorization session survives the flow.
+		void host.request("mcp.oauth.cancel", { id: serverId, sessionId, previewId: preview.previewId }).catch(() => undefined);
 		host.print(oauthErrorMessage(operationReason(error)), "error");
 		return;
 	}
@@ -122,6 +125,15 @@ export async function authorizeConnector(host: FeatureHost, serverId: string): P
 		disposed = true;
 		if (pollTimer) clearTimeout(pollTimer);
 		wakePoll?.();
+	};
+	/**
+	 * Best-effort cancel: release the server-side operation before leaving a
+	 * failure path so no authorization session keeps waiting on a browser the
+	 * user has left (review round 4, R4-094).
+	 */
+	const cancelOperation = (): void => {
+		cleanup();
+		void host.request("mcp.oauth.cancel", { id: serverId, sessionId, operationId }).catch(() => undefined);
 	};
 	const waitForPoll = (): Promise<void> => new Promise((resolve) => {
 		if (disposed) return resolve();
@@ -175,6 +187,9 @@ export async function authorizeConnector(host: FeatureHost, serverId: string): P
 				if (disposed) return;
 				const failure = permanentStatusError(error);
 				if (failure || ++unavailablePolls >= 3) {
+					// Transient failure (or typed permanent error): cancel the
+					// pending operation, never just abandon it server-side.
+					cancelOperation();
 					host.print(failure ?? "Authorization service unavailable. Start authorization again.", "error");
 					return;
 				}
@@ -200,6 +215,7 @@ export async function authorizeConnector(host: FeatureHost, serverId: string): P
 					progress.update("Waiting for browser authorization…", authorizationUrl);
 				} catch (error) {
 					if (disposed) return;
+					cancelOperation();
 					host.print(permanentStatusError(error) ?? "The login link could not be loaded. Start authorization again.", "error");
 					return;
 				}

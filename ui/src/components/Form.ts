@@ -90,7 +90,8 @@ export class TextForm implements Component {
 			return;
 		}
 		// Explicit save shortcut alongside Enter (the Editor submits on Enter).
-		if (data === "\x13") {
+		// matchesKey covers both the legacy \x13 and the Kitty CSI-u encoding.
+		if (matchesKey(data, Key.ctrl("s"))) {
 			this.save(this.getValue());
 			return;
 		}
@@ -238,7 +239,7 @@ export class SecretForm implements Component {
 			this.cancel();
 			return;
 		}
-		if (data === "\x13") {
+		if (matchesKey(data, Key.ctrl("s"))) {
 			this.attempt(this.getValue());
 			return;
 		}

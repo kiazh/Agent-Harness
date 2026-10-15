@@ -198,6 +198,12 @@ export class App implements FeatureHost {
 	// would surface as a confusing TURN_IN_PROGRESS on the next submit).
 	private static readonly IN_FLIGHT_TIMEOUT_MS = 300_000;
 
+	// `/delegate` client budget: the orchestrator enforces its own
+	// DELEGATION_TIMEOUT_SECONDS = 120s per child run (core/orchestrator.py),
+	// so the client clock must outlast that budget; a timeout equal to the
+	// server's aborts the RPC while the child is still winding down.
+	private static readonly DELEGATION_TIMEOUT_MS = 150_000;
+
 	/**
 	 * Dormant per-session state (turn binding + token totals) for the last N
 	 * sessions visited. Older sessions are forgotten so a long-lived UI with
@@ -324,7 +330,8 @@ export class App implements FeatureHost {
 
 	// ─── FeatureHost ─────────────────────────────────────────────────────────
 	async request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-		const result = await this.client.request<T>(method, params, 120_000);
+		const timeout = method === "agents.run" ? App.DELEGATION_TIMEOUT_MS : 120_000;
+		const result = await this.client.request<T>(method, params, timeout);
 		if (["mode.get", "mode.set", "mode.revoke"].includes(method)) {
 			const mode = (result as { mode?: string }).mode;
 			if (typeof mode === "string") this.footer.mode = mode;
@@ -391,6 +398,16 @@ export class App implements FeatureHost {
 	}
 
 	switchTo(session: SessionInfo, history: HistoryEntry[]): void {
+		if (this.current?.id === session.id) {
+			// Same-id re-resume of the visible session (`/resume <current>`,
+			// picking the current row in a session list): the fetched history
+			// cannot contain the in-flight turn, so clearing and replaying here
+			// would erase live output and strand running-tool completions
+			// (review round 4, R4-094). Refresh the metadata only.
+			this.updateSession(session);
+			this.tui.requestRender();
+			return;
+		}
 		if (this.current) this.sessionTokensById.set(this.current.id, this.sessionTokens);
 		// Consume this session's hidden-session tail (buffered events that
 		// arrived while it was not visible). Merge rule (PINNED, tail.ts):

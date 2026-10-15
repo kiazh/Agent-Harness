@@ -120,6 +120,79 @@ interface EditorPopupLayout {
 	renderedAutocompleteHeight: number;
 }
 
+/** A bounded view of the editor's rendered rows plus its row mapping. */
+export interface ComposerWindow {
+	/** Rendered rows, popup first when present; marker rows included. */
+	rows: string[];
+	/** Native body rows before windowing (excludes the popup). */
+	bodyRows: number;
+	/** First native body row index included in the window. */
+	start: number;
+	/** Visible native body rows (excludes marker rows). */
+	contentRows: number;
+	/** 1 when the window opens with an `↑ N more` marker row. */
+	markerAbove: 0 | 1;
+}
+
+/** Window start that keeps the cursor row in view with trailing preference. */
+function windowStart(bodyRows: number, contentRows: number, at: number): number {
+	return Math.max(0, Math.min(bodyRows - contentRows, at - contentRows + 1));
+}
+
+/**
+ * Bound the editor rows around the real cursor instead of clipping the tail:
+ * the cursor row stays visible with preference for trailing context, while
+ * hidden draft rows are disclosed with the same `↑ N more` / `↓ N more`
+ * markers the editor's own borders use (review round 4, R4-094). Autocomplete
+ * popup rows (already moved above the input) are preserved. The returned
+ * mapping lets the mouse handler translate screen rows back to editor-native
+ * rows across the window start and marker rows.
+ */
+export function composerWindow(rows: string[], budget: number, popupHeight = 0): ComposerWindow {
+	const popup = popupHeight > 0 ? rows.slice(0, popupHeight) : [];
+	const body = popupHeight > 0 ? rows.slice(popupHeight) : rows;
+	if (body.length <= budget) {
+		return { rows: [...popup, ...body], bodyRows: body.length, start: 0, contentRows: body.length, markerAbove: 0 };
+	}
+	const cap = Math.max(1, budget);
+	const cursor = body.findIndex((line) => line.includes(CURSOR_MARKER) || line.includes("\x1b[7m"));
+	const at = cursor < 0 ? body.length - 1 : cursor;
+	if (cap <= 2) {
+		// No room for a marker next to the cursor row: keep the cursor row.
+		const start = windowStart(body.length, cap, at);
+		return { rows: [...popup, ...body.slice(start, start + cap)], bodyRows: body.length, start, contentRows: cap, markerAbove: 0 };
+	}
+	// One probing window first: blank border rows never justify a marker, so
+	// reclaim their budget for draft rows when nothing textual is hidden.
+	const probe = windowStart(body.length, cap, at);
+	const probeAbove = body.slice(0, probe).some((line) => line !== "");
+	const probeBelow = body.slice(probe + cap).some((line) => line !== "");
+	const markerCount = (probeAbove ? 1 : 0) + (probeBelow ? 1 : 0);
+	if (markerCount === 0) {
+		return { rows: [...popup, ...body.slice(probe, probe + cap)], bodyRows: body.length, start: probe, contentRows: cap, markerAbove: 0 };
+	}
+	const content = cap - markerCount;
+	const start = windowStart(body.length, content, at);
+	const end = start + content;
+	const hiddenAbove = body.slice(0, start).filter((line) => line !== "").length;
+	const hiddenBelow = body.slice(end).filter((line) => line !== "").length;
+	const out: string[] = [];
+	const markerAbove = hiddenAbove > 0 ? 1 : 0;
+	if (markerAbove) out.push(theme.muted(`↑ ${hiddenAbove} more`));
+	out.push(...body.slice(start, end));
+	if (hiddenBelow > 0) out.push(theme.muted(`↓ ${hiddenBelow} more`));
+	return { rows: [...popup, ...out], bodyRows: body.length, start, contentRows: content, markerAbove };
+}
+
+/**
+ * Bound rendered editor rows around the real cursor instead of clipping the
+ * tail: the cursor row stays visible with preference for trailing context.
+ * Autocomplete popup rows (already moved above the input) are preserved.
+ */
+export function windowAroundCursor(rows: string[], budget: number, popupHeight = 0): string[] {
+	return composerWindow(rows, budget, popupHeight).rows;
+}
+
 /**
  * Move trailing popup lines above the input block, Codex style. The Editor
  * renders `[top, text, bottom, ...popup]`; the composer shows
@@ -139,6 +212,8 @@ export function popAbove(lines: string[], popupHeight: number): string[] {
 export class ComposerInput extends Editor {
     onPaste?: (text: string) => boolean;
     onSubmitBlocked?: () => boolean;
+	/** ComposerBox's editable-row budget for the draft window (setMaxRows). */
+	windowRows: number = LIMITS.composerMaxRows;
     private attachmentPaste: string | undefined;
 
     override handleInput(data: string): void {
@@ -183,14 +258,21 @@ export class ComposerInput extends Editor {
 
 	override handleMouse(event: TuiMouseEvent): ReturnType<Editor["handleMouse"]> {
 		const { renderedAutocompleteHeight: popupHeight } = this as unknown as EditorPopupLayout;
-		if (!(popupHeight > 0)) return super.handleMouse(event);
-		// The popup is drawn above the input: map rows back to the
-		// Editor-native coordinates before delegating.
-		const total = this.render(event.width).length;
-		const textBlock = total - popupHeight;
-		if (textBlock <= 0) return super.handleMouse(event);
+		const window = composerWindow(this.render(event.width), this.windowRows, popupHeight);
+		const clipped = window.start > 0 || window.contentRows !== window.bodyRows;
+		if (!(popupHeight > 0) && !clipped) return super.handleMouse(event);
+		// The popup is drawn above the input and the outer window may have
+		// sliced body rows: map the clicked row back to the Editor-native
+		// coordinates before delegating.
 		const popupCommand = event.y < popupHeight && /^\/[\w-]*$/.test(this.getText().trim());
-		const y = event.y < popupHeight ? event.y + textBlock : event.y - popupHeight;
+		let y: number;
+		if (event.y < popupHeight) {
+			y = window.bodyRows + event.y;
+		} else {
+			const contentIndex = event.y - popupHeight - window.markerAbove;
+			if (contentIndex < 0 || contentIndex >= window.contentRows) return undefined; // `↑/↓ more` marker row
+			y = popupHeight + window.start + contentIndex;
+		}
 		const result = super.handleMouse({ ...event, y });
 		// Picker-first actions open as soon as the command is selected.
 		if (popupCommand && !this.isShowingAutocomplete() && ["/delegate", "/delete"].includes(this.getText().trim())) {
@@ -202,22 +284,6 @@ export class ComposerInput extends Editor {
 
 /** Muted composer placeholder (the Editor cannot render its own). */
 export const COMPOSER_PLACEHOLDER = "Ask anything, or type / for commands.";
-
-/**
- * Bound rendered editor rows around the real cursor instead of clipping the
- * tail: the cursor row stays visible with preference for trailing context.
- * Autocomplete popup rows (already moved above the input) are preserved.
- */
-export function windowAroundCursor(rows: string[], budget: number, popupHeight = 0): string[] {
-	const popup = popupHeight > 0 ? rows.slice(0, popupHeight) : [];
-	const body = popupHeight > 0 ? rows.slice(popupHeight) : rows;
-	if (body.length <= budget) return [...popup, ...body];
-	const cap = Math.max(1, budget);
-	const cursor = body.findIndex((line) => line.includes(CURSOR_MARKER) || line.includes("\x1b[7m"));
-	const at = cursor < 0 ? body.length - 1 : cursor;
-	const start = Math.max(0, Math.min(body.length - cap, at - cap + 1));
-	return [...popup, ...body.slice(start, start + cap)];
-}
 
 /**
  * The app's fullscreen layout, Codex style: the transcript scrolls in the
@@ -248,7 +314,6 @@ export function createLayout(transcript: Component, composer: Component, footer:
  */
 export class ComposerBox extends Box {
 	readonly editor: ComposerInput;
-	private maxRows: number = LIMITS.composerMaxRows;
 	private degradedMode = false;
 
 	constructor(tui: TUI, editorTheme: EditorTheme, options?: EditorOptions) {
@@ -259,7 +324,7 @@ export class ComposerBox extends Box {
 
 	/** Viewport-derived editable-row budget (shell density, max 8). */
 	setMaxRows(rows: number): void {
-		this.maxRows = Math.max(1, rows);
+		this.editor.windowRows = Math.max(1, rows);
 	}
 
 	/** Safe degraded mode: draft preserved, editing deferred until resize. */
@@ -288,11 +353,11 @@ export class ComposerBox extends Box {
 		let body: string[];
 		if (this.editor.getText() === "") {
 			const placeholder = fill(theme.muted(truncateToWidth(`> ${COMPOSER_PLACEHOLDER}`, inner)));
-			body = this.maxRows >= 3 ? [fill(""), placeholder, fill("")] : [placeholder];
+			body = this.editor.windowRows >= 3 ? [fill(""), placeholder, fill("")] : [placeholder];
 		} else {
 			const rendered = this.editor.render(inner);
 			const { renderedAutocompleteHeight: popupHeight } = this.editor as unknown as EditorPopupLayout;
-			body = windowAroundCursor(rendered, this.maxRows, popupHeight).map((line) => fill(line));
+			body = composerWindow(rendered, this.editor.windowRows, popupHeight).rows.map((line) => fill(line));
 		}
 		const total = Math.max(0, width);
 		return body.map((line) => truncateToWidth(`${bar} ${line}`, total));

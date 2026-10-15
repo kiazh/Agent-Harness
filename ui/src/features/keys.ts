@@ -18,7 +18,9 @@ import { splitSub } from "../commands.ts";
 import { confirm, options, type Command, type FeatureHost } from "./types.ts";
 
 // Mirrors PROVIDER_KEYS + MANAGED_ENV_KEYS in machina/security/env_file.py and
-// machina/gateway/features/secrets.py (used for completions when offline).
+// machina/gateway/features/secrets.py: `secrets.set` refuses anything outside
+// that allowlist (plus derived MACHINA_PROVIDER_<NAME>_API_KEY rows, which
+// arrive via providers.list), so completions must not suggest more.
 const KNOWN_KEYS: Array<[string, string]> = [
 	["OPENROUTER_API_KEY", "OpenRouter (cloud models, default provider)"],
 	["OPENAI_API_KEY", "OpenAI (GPT models, embeddings)"],
@@ -29,9 +31,6 @@ const KNOWN_KEYS: Array<[string, string]> = [
 	["TOGETHER_API_KEY", "Together AI (open models)"],
 	["DEEPSEEK_API_KEY", "DeepSeek models"],
 	["XAI_API_KEY", "xAI (Grok models)"],
-	["OPENCODE_API_KEY", "OpenCode Zen models (free tier included)"],
-	["CUSTOM_API_KEY", "Generic OpenAI-compatible endpoint key (optional for local servers)"],
-	["CUSTOM_BASE_URL", "Generic OpenAI-compatible endpoint (e.g. OpenCode Zen, local vLLM)"],
 	["COHERE_API_KEY", "Cohere (reranking)"],
 	["DATABASE_URL", "PostgreSQL connection string"],
 	["SEARXNG_URL", "Self-hosted SearXNG for web search"],

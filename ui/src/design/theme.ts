@@ -3,7 +3,8 @@
 // values; card backgrounds and borders are derived from each theme's
 // background + ink with mixColors, the way Codex derives subtle surface
 // elevations. The composer fill stays a neutral lift (Codex
-// backgroundElement); selection rows paint accent bg with background fg.
+// backgroundElement); selection rows paint accent bg with a derived,
+// contrast-checked ink token (>= 4.5:1; see selectionInk).
 //
 // Style functions resolve the *current* skin lazily, so `setSkin()` recolors
 // the whole UI without a restart. The choice persists via `config.theme`.
@@ -14,10 +15,13 @@ import {
 	type MarkdownTheme,
 	type SelectListTheme,
 	backgroundAnsi,
+	colorToHex,
+	colorToRgb,
 	foregroundAnsi,
 	getTerminalColorMode,
 	mixColors,
 	parseColor,
+	rgbColor,
 	styleTextWithAnsi,
 	type TextAttributes,
 	visibleWidth,
@@ -619,23 +623,81 @@ const skinColors: Record<string, Record<PaletteName, Color>> = Object.fromEntrie
 	}),
 );
 
-const skinNeutral: Record<string, Color> = Object.fromEntries(
-	Object.entries(SKINS).map(([name, def]) => [name, parseColor(def.base.neutral)]),
-);
-
 let currentSkin = "codex";
 
 function colors(): Record<PaletteName, Color> {
 	return skinColors[currentSkin] ?? skinColors["default"]!;
 }
 
-function background(): Color {
-	return skinNeutral[currentSkin] ?? skinNeutral["default"]!;
+/** WCAG relative luminance of a concrete color (0..1). */
+function relativeLuminance(color: Color): number {
+	const { r, g, b } = colorToRgb(color);
+	const channel = (value: number): number => {
+		const v = value / 255;
+		return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+	};
+	return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
 }
 
-/** Selected-row fill, Codex style: accent bg with background fg. */
+/** WCAG contrast ratio between two colors (1..21). */
+function contrastRatio(first: Color, second: Color): number {
+	const a = relativeLuminance(first);
+	const b = relativeLuminance(second);
+	const [high, low] = a >= b ? [a, b] : [b, a];
+	return (high + 0.05) / (low + 0.05);
+}
+
+/** Selected-row fill: the skin's accent; codex keeps its own selection fill. */
+function selectionFillColor(name: string): Color {
+	return name === "codex" ? parseColor(CODEX_SEMANTIC_START.selection) : parseColor(SKINS[name]!.base.accent);
+}
+
+/**
+ * Selected-row ink for a skin: the surface color when it already clears
+ * 4.5:1 over the fill (unchanged look for passing skins), otherwise pure
+ * black/white — the better of the two is always >= 4.58:1. Cobalt2 (3.62:1)
+ * and solarized (4.08:1) previously failed with the surface ink; every skin
+ * now meets WCAG AA on selected rows (review round 4, R4-094).
+ */
+function selectionInkColor(name: string): Color {
+	const fill = selectionFillColor(name);
+	const def = SKINS[name]!;
+	if (name === "codex") return parseColor(def.base.text);
+	const surface = parseColor(def.base.neutral);
+	if (contrastRatio(surface, fill) >= 4.5) return surface;
+	const black = rgbColor(0, 0, 0);
+	const white = rgbColor(255, 255, 255);
+	return contrastRatio(black, fill) >= contrastRatio(white, fill) ? black : white;
+}
+
+const skinSelectionFill: Record<string, Color> = Object.fromEntries(
+	SKIN_NAMES.map((name) => [name, selectionFillColor(name)]),
+);
+const skinSelectionInk: Record<string, Color> = Object.fromEntries(
+	SKIN_NAMES.map((name) => [name, selectionInkColor(name)]),
+);
+
+function selectionColors(): { ink: Color; fill: Color } {
+	return {
+		ink: skinSelectionInk[currentSkin] ?? skinSelectionInk["default"]!,
+		fill: skinSelectionFill[currentSkin] ?? skinSelectionFill["default"]!,
+	};
+}
+
+/** Selected-row ink hex for a skin (>= 4.5:1 on the selection fill). */
+export function selectionInk(name: string = currentSkin): string {
+	return colorToHex(skinSelectionInk[name] ?? skinSelectionInk["default"]!);
+}
+
+/** Selected-row fill hex for a skin (accent bg; codex uses its own fill). */
+export function selectionFill(name: string = currentSkin): string {
+	return colorToHex(skinSelectionFill[name] ?? skinSelectionFill["default"]!);
+}
+
+/** Selected-row fill, Codex style: accent bg with a contrast-checked ink. */
 function selectedRow(text: string): string {
-	return styleTextWithAnsi(text, foregroundAnsi(currentSkin === "codex" ? colors().text : background(), mode), backgroundAnsi(currentSkin === "codex" ? parseColor(CODEX_SEMANTIC_START.selection) : colors().accent, mode), {
+	const { ink, fill } = selectionColors();
+	return styleTextWithAnsi(text, foregroundAnsi(ink, mode), backgroundAnsi(fill, mode), {
 		bold: true,
 	});
 }
@@ -687,7 +749,8 @@ export function isSelectionRow(line: string): boolean {
 export function selectionBar(line: string, width: number): string {
 	const stripped = stripBackground(line);
 	const padded = `${stripped}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
-	return styleTextWithAnsi(padded, foregroundAnsi(currentSkin === "codex" ? colors().text : background(), mode), backgroundAnsi(currentSkin === "codex" ? parseColor(CODEX_SEMANTIC_START.selection) : colors().accent, mode), {
+	const { ink, fill } = selectionColors();
+	return styleTextWithAnsi(padded, foregroundAnsi(ink, mode), backgroundAnsi(fill, mode), {
 		bold: true,
 	});
 }
