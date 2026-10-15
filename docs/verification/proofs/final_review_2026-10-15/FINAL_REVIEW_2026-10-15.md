@@ -18,10 +18,10 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 |---|---|---|---|
 | F01 | P1c | Dir-fd write chain: ancestor swap between containment check and lstat/open | FIXED 56f8ad3 |
 | F02 | P1 | Cancelling a tool batch loses records of already-completed effects | LANE (core) |
-| F03 | P2 | Failed connector rollback clobbers a newer concurrent config | LANE (connectors) |
-| F04 | P2 | Agent mcp_connect can launch a stdio connector in sandbox mode | LANE (connectors) |
-| F05 | P2 | Connector store flock acquired synchronously in async paths | LANE (connectors) |
-| F06 | P2 | OAuth refresh lock-order inversion | LANE (connectors) |
+| F03 | P2 | Failed connector rollback clobbers a newer concurrent config | FIXED 50efd64 |
+| F04 | P2 | Agent mcp_connect can launch a stdio connector in sandbox mode | FIXED 50efd64 |
+| F05 | P2 | Connector store flock acquired synchronously in async paths | FIXED 50efd64 |
+| F06 | P2 | OAuth refresh lock-order inversion | FIXED 50efd64 |
 | F07 | P2 | HTTP streaming drops growth/RSI context between generator steps | FIXED 2edea07 |
 | F08 | P2 | Shared RAG pipelines keep stale embedding credentials / failed selection | FIXED bdea3a3 |
 | F09 | P2 | CLI config-set --persist writes the old value back via env shadow | FIXED 8864af1 |
@@ -74,13 +74,13 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | P8 | P2 | Gateway global mode writes shadowed by MACHINA_EXECUTION_MODE | FIXED d1438e8 |
 | P9 | P3 | Gateway global `mode.revoke` not persisted | FIXED d1438e8 |
 | P10 | P3 | HTTP SSE v2 `tool.complete.isError` always false | FIXED 08a8f0e |
-| P11 | P3 | Source-text assertion test (r5_011_013) | BATCH-3 |
+| P11 | P3 | Source-text assertion test (r5_011_013) | FIXED c0f7f6f* |
 
 ## E. Connectors / memory
 
 | ID | Sev | Finding | Status |
 |---|---|---|---|
-| N1 | P2 | Screener charges nested counts, not atom/body size (`(<193ch>){10000}` compile bomb) | LANE (connectors) |
+| N1 | P2 | Screener charges nested counts, not atom/body size | FIXED 50efd64 |
 | N2 | P3 | `OAuthCoordinator.forget()` ignores its owner argument | DEFERRED (route enforces; defense-in-depth) |
 | N3 | P3 | Completed-logout tombstone window can resurrect a grant | DEFERRED (cancel-first guard makes it narrow) |
 | N4 | P3 | Streaming redactor flush drops withheld PEM prefix | FIXED 08a8f0e |
@@ -95,7 +95,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | T2 | P2 | (see F13) | FIXED 56f8ad3 |
 | T3 | P2 | `read_file` reads to EOF for small pages (regression) | FIXED 56f8ad3 |
 | T4 | P2 | `_atomic_write_file` duplicates `_atomic_write_file_at` | FIXED 56f8ad3 |
-| T5 | P3 | Skill-install writes still detach via bare to_thread | BATCH-3 |
+| T5 | P3 | Skill-install writes still detach via bare to_thread | FIXED c0f7f6f* |
 | T6 | P3 | `_fsync_dir_best_effort` duplicates env_file's helper | DEFERRED (hoist with atomic-write consolidation) |
 
 ## G. RAG / skills / research / db
@@ -139,7 +139,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 |---|---|---|---|
 | A1 | P2 | URL-redaction primitive lives in provider/audit but is consumed by rag/observability (layering) | DEFERRED (documented; hoist to a leaf module when redaction layers consolidate) |
 | A2 | P2 | store_fence is not the single fence (providers + oauth_store variants) | PARTIAL: providers delegates 5100624; oauth_store DEFERRED |
-| A3 | P3 | AuditPersistence start/stop asymmetry; conftest pokes privates | BATCH-3 (add reset() API; use in conftest) |
+| A3 | P3 | AuditPersistence start/stop asymmetry; conftest pokes privates | FIXED c0f7f6f* (reset() API; conftest uses it) |
 | A4 | P3 | Compaction keyset still `(created_at,id)` (documented residual) | DEFERRED (state boundary explicitly) |
 | A5 | P3 | Deferred-import census prose says 688, tree is 687 | DEFERRED (slack, not inflation) |
 | A6 | Q | Two new tests pin privates/literals | DEFERRED |
