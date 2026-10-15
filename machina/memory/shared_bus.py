@@ -8,6 +8,7 @@ from typing import Literal
 
 from machina.core.provider import audit_log
 from machina.db.connection import db, parse_command_count
+from machina.memory.approval import PendingMemory
 from machina.memory.identity import MemoryProvenance, identity_gate
 from machina.memory.models import MemoryEntry
 from machina.memory.store import memory_store
@@ -132,6 +133,10 @@ class SharedMemoryBus:
                             # must not re-route it to pending.
                             bypass_approval=True,
                         )
+                        if isinstance(copy, PendingMemory):
+                            # Unreachable by construction (bypass_approval):
+                            # fail loudly instead of caching a bogus receipt.
+                            raise RuntimeError("shared delivery requires a durable write")
                         status = "quarantined" if copy.quarantined else "accepted"
                         reason = (
                             "recipient validation changed during delivery"

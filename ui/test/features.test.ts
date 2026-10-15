@@ -527,6 +527,27 @@ test("/memory add parses an optional category prefix", async () => {
 	assert.equal(host.calls[1]!.params.content, "note: not a category");
 });
 
+test("/memory add reports an approval-queued write as pending, not remembered", async () => {
+	const host = new FakeHost();
+	host.responses["memory.add"] = {
+		status: "pending",
+		pending: {
+			id: "abcdef12-3456-7890-abcd-ef1234567890",
+			content: "staged fact",
+			category: "fact",
+			importance: 0.5,
+			redactions: [],
+			status: "pending",
+			createdAt: null,
+		},
+	};
+	await run("/memory add staged fact", host);
+	assert.equal(host.last().kind, "warning");
+	assert.match(host.last().text, /Pending approval/);
+	assert.match(host.last().text, /abcdef12/);
+	assert.doesNotMatch(host.last().text, /Remembered/);
+});
+
 test("/memory forget resolves an id prefix", async () => {
 	const host = new FakeHost();
 	host.responses["memory.list"] = { memories: [{ id: "aaaa1111-x" }, { id: "bbbb2222-y" }], total: 2 };

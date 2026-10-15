@@ -1,0 +1,17 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/devtools_seed_2026-10-15/harness-clone
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 6 items
+
+tests/test_holistic_h07_memory_outcome.py::test_store_add_returns_pending_outcome_under_approval PASSED [ 16%]
+tests/test_holistic_h07_memory_outcome.py::test_store_add_stored_arms_stay_memory_entries PASSED [ 33%]
+tests/test_holistic_h07_memory_outcome.py::test_remember_tool_reports_pending_approval PASSED [ 50%]
+tests/test_holistic_h07_memory_outcome.py::test_gateway_memory_add_reports_pending PASSED [ 66%]
+tests/test_holistic_h07_memory_outcome.py::test_consolidator_excludes_approval_queued_writes PASSED [ 83%]
+tests/test_holistic_h07_memory_outcome.py::test_api_memory_create_reports_pending PASSED [100%]
+
+============================== 6 passed in 0.71s ===============================

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from machina.core.config import config
 from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, OPERATION_FAILED, RpcError
 from machina.gateway.features._common import MEMORY_CATEGORIES, _int, _memory, _pending, _str, _uuid
+from machina.memory.approval import PendingMemory
 
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
@@ -76,7 +77,12 @@ async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Add a memory."""
+    """Add a memory.
+
+    H07: a write queued by the approval gate returns
+    ``{"status": "pending", "pending": {...}}`` — the pending record, never a
+    stored-shaped memory. Direct writes keep the ``memory`` payload.
+    """
     gw.require_db()
     from machina.memory.store import memory_store
 
@@ -88,7 +94,7 @@ async def memory_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     ):
         raise RpcError(INVALID_PARAMS, "importance must be a number between 0 and 1")
     session = await gw.get_session(params) if params.get("sessionId") else None
-    memory = await memory_store.add(
+    result = await memory_store.add(
         session_id=session.id if session else None,
         agent_id=session.agent_id if session else config.get("agent_id"),
         content=_str(params, "content", max_len=5000),
@@ -96,7 +102,9 @@ async def memory_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         importance=float(importance),
         explicitly_important=True,
     )
-    return {"memory": _memory(memory)}
+    if isinstance(result, PendingMemory):
+        return {"status": "pending", "pending": _pending(result)}
+    return {"status": "stored", "memory": _memory(result)}
 
 
 async def memory_share(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

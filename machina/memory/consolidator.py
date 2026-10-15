@@ -18,6 +18,7 @@ from machina.core.context import NULL_EVENT_SEQ_ASC, context_manager
 from machina.core.models import ContextChunk
 from machina.core.provider import LLMProvider, audit_log
 from machina.db.lazy import LazyDb
+from machina.memory.approval import PendingMemory
 from machina.memory.models import MemoryEntry
 from machina.memory.scorer import ImportanceScorer
 from machina.memory.store import MemoryStore, memory_store
@@ -32,7 +33,8 @@ db = LazyDb()
 class ConsolidationResult:
     """Typed consolidation outcome (AH-AUDIT-037).
 
-    status: "complete" (all writes durable — checkpoint valid),
+    status: "complete" (all writes durable or queued for approval —
+    checkpoint valid),
     "empty" (successful extraction with zero memories — checkpoint valid,
     the range was fully processed), "partial" (some writes failed —
     checkpoint None, the range stays retryable), "failed" (extraction
@@ -484,6 +486,7 @@ class MemoryConsolidator:
 
         # Step 5: Write new memories
         written: list[MemoryEntry] = []
+        pending_approval = 0
         write_failures = 0
         for memory in new_memories:
             try:
@@ -497,7 +500,14 @@ class MemoryConsolidator:
                     explicitly_important=memory.explicitly_important,
                     base_strength=memory.base_strength,
                 )
-                written.append(entry)
+                if isinstance(entry, PendingMemory):
+                    # H07: approval-routed writes are queued, not durable;
+                    # they must not masquerade as written MemoryEntry rows.
+                    # The submission itself succeeded, so the checkpoint may
+                    # advance (re-running would duplicate the queued rows).
+                    pending_approval += 1
+                else:
+                    written.append(entry)
             except Exception as e:
                 write_failures += 1
                 logger.exception("Failed to write memory: %s", e)
@@ -509,14 +519,17 @@ class MemoryConsolidator:
             chunks_processed=len(chunks),
             candidates_extracted=len(candidates),
             new_memories_written=len(written),
+            pending_approval=pending_approval,
         )
 
         logger.info(
-            "Consolidated session %s: %d chunks → %d candidates → %d new memories",
+            "Consolidated session %s: %d chunks → %d candidates → %d new memories"
+            " (%d pending approval)",
             session_id,
             len(chunks),
             len(candidates),
             len(written),
+            pending_approval,
         )
         if write_failures:
             # Partial persistence: no checkpoint — retry stays idempotent
@@ -600,6 +613,7 @@ class MemoryConsolidator:
             new_memories.append(memory)
 
         written: list[MemoryEntry] = []
+        pending_approval = 0
         for memory in new_memories:
             try:
                 entry = await self.store.add(
@@ -612,10 +626,20 @@ class MemoryConsolidator:
                     explicitly_important=memory.explicitly_important,
                     base_strength=memory.base_strength,
                 )
-                written.append(entry)
+                if isinstance(entry, PendingMemory):
+                    # H07: queued for approval, not a durable write.
+                    pending_approval += 1
+                else:
+                    written.append(entry)
             except Exception as e:
                 logger.exception("Failed to write memory: %s", e)
 
+        if pending_approval:
+            logger.info(
+                "Consolidated %d memories from text; %d routed to approval",
+                len(written),
+                pending_approval,
+            )
         return written
 
     def _format_conversation(self, chunks: list[ContextChunk]) -> str:

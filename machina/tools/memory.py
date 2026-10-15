@@ -7,6 +7,7 @@ import uuid
 
 from machina.core.exceptions import ToolError, ValidationError
 from machina.core.provider import audit_log
+from machina.memory.approval import PendingMemory
 from machina.memory.retriever import MemoryRetriever
 from machina.memory.store import memory_store
 from machina.tools.agents import active_agent_scope, current_agent_id, current_session_id
@@ -57,7 +58,8 @@ async def remember(
         session_id: Optional session ID to associate with.
 
     Returns:
-        Confirmation string with memory ID.
+        Confirmation string naming the durable memory id, or the pending id
+        when the approval gate queued the write (H07).
     """
     try:
         # Validate category
@@ -83,7 +85,7 @@ async def remember(
                     raise ValidationError(f"Invalid session_id '{session_id}'") from None
 
         # Create and store memory
-        entry = await memory_store.add(
+        result = await memory_store.add(
             session_id=sid,
             agent_id=agent_id,
             content=content,
@@ -92,17 +94,31 @@ async def remember(
             explicitly_important=True,
         )
 
+        if isinstance(result, PendingMemory):
+            # H07: the id is a pending id, not a memory id — never claim stored.
+            audit_log(
+                "memory_remember",
+                pending_id=str(result.id),
+                agent_id=agent_id,
+                category=category,
+                importance=importance,
+            )
+            return (
+                f"Memory pending approval: [{result.id}] ({category}, "
+                f"importance={importance:.2f}) {content[:100]} — not stored or "
+                f"recallable until approved; review with "
+                f"`machina memory-approve {result.id}`."
+            )
+
         audit_log(
             "memory_remember",
-            memory_id=str(entry.id),
+            memory_id=str(result.id),
             agent_id=agent_id,
             category=category,
             importance=importance,
         )
 
-        return (
-            f"Memory stored: [{entry.id}] ({category}, importance={importance:.2f}) {content[:100]}"
-        )
+        return f"Memory stored: [{result.id}] ({category}, importance={importance:.2f}) {content[:100]}"
 
     except Exception as e:
         logger.error("Failed to store memory: %s", e)

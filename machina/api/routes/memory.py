@@ -10,20 +10,26 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from machina.api.auth import require_api_key
 from machina.api.routes.models import CreateMemoryRequest, CreatePersonaMemoryRequest
 from machina.core.session import session_manager
+from machina.memory.approval import PendingMemory
 
 router = APIRouter()
 
 
 @router.post("/api/v1/memory", dependencies=[Depends(require_api_key)])
 async def create_memory(req: CreateMemoryRequest) -> dict[str, Any]:
-    """Create a new memory entry in the store."""
+    """Create a new memory entry in the store.
+
+    H07: when the approval gate queues the write, the response carries the
+    pending identity instead of a stored-shaped memory. Direct writes keep
+    the ``memory`` payload.
+    """
     from machina.memory.store import memory_store
 
     if req.category not in {"preference", "decision", "fact", "event", "transient"}:
         raise HTTPException(400, "invalid memory category")
     if req.sessionId is not None and await session_manager.get(req.sessionId) is None:
         raise HTTPException(404, "session not found")
-    entry = await memory_store.add(
+    result = await memory_store.add(
         session_id=req.sessionId,
         agent_id=req.agent,
         content=req.content,
@@ -31,7 +37,17 @@ async def create_memory(req: CreateMemoryRequest) -> dict[str, Any]:
         importance=req.importance,
         explicitly_important=True,
     )
-    return {"memory": {"id": str(entry.id), "content": entry.content, "category": entry.category}}
+    if isinstance(result, PendingMemory):
+        return {
+            "status": "pending",
+            "pendingId": str(result.id),
+            "content": result.content,
+            "category": result.category,
+        }
+    return {
+        "status": "stored",
+        "memory": {"id": str(result.id), "content": result.content, "category": result.category},
+    }
 
 
 @router.post("/api/v1/persona-memory", dependencies=[Depends(require_api_key)])

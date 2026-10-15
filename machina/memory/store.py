@@ -10,7 +10,7 @@ import importlib as _importlib
 import logging
 import sys as _sys
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from machina.core.provider import audit_log
 from machina.core.serialization import embedding_to_str, str_to_embedding
@@ -21,6 +21,11 @@ from machina.memory.models import MemoryEntry
 from machina.memory.redaction import SecretRedactor
 from machina.observability.diagnostics import record_failure
 from machina.security.secrets import get_secret
+
+if TYPE_CHECKING:
+    # Annotation-only: ``approval`` imports ``memory_store`` at module level,
+    # so the runtime binding stays behind the ``_approval_gate`` seam below.
+    from machina.memory.approval import PendingMemory
 
 __all__ = ["MemoryStore", "memory_store"]
 
@@ -106,18 +111,20 @@ class MemoryStore:
         source_agent: str | None = None,
         parent_memory_id: uuid.UUID | None = None,
         bypass_approval: bool = False,
-    ) -> MemoryEntry:
+    ) -> MemoryEntry | PendingMemory:
         """Add a new memory entry. Secrets are redacted before storage.
 
-        When the approval gate is enabled (``memory_approval_enabled`` config
-        or an explicitly enabled gate), the write is routed to
-        ``pending_memories`` instead of ``memories`` and the returned entry
-        mirrors the pending record (its ``id`` is the pending id) — it is not
-        yet durable; ``approve()``/``reject()`` complete the flow. Internal
-        completions of that flow (``approve``/``approve_all``), and the
-        shared-bus delivery copy, pass ``bypass_approval=True``: they own
+        Returns ``MemoryEntry`` for a durable write. When the approval gate is
+        enabled (``memory_approval_enabled`` config or an explicitly enabled
+        gate), the write is routed to ``pending_memories`` instead and the
+        returned ``PendingMemory`` names that pending row: its ``id`` is the
+        pending id (not a memory id — not recallable, updatable, or shareable
+        yet) and its ``memory_id`` becomes the durable memory id once
+        ``approve()`` completes the flow. The two ids are distinct (H07).
+        Internal completions of that flow (``approve``/``approve_all``), and
+        the shared-bus delivery copy, pass ``bypass_approval=True``: they own
         their durable write semantics (an open transaction / a receipt that
-        must reference the real copy).
+        must reference the real copy) and always receive a ``MemoryEntry``.
 
         The IdentityGate validates the memory against the agent's belief
         model before storage. If validation fails, the memory is still
@@ -147,17 +154,7 @@ class MemoryStore:
                     pending.id,
                     agent_id,
                 )
-                return MemoryEntry(
-                    id=pending.id,
-                    session_id=session_id,
-                    agent_id=agent_id,
-                    content=pending.content,
-                    category=category,
-                    importance=importance,
-                    embedding=embedding,
-                    explicitly_important=explicitly_important,
-                    base_strength=base_strength,
-                )
+                return pending
 
         # Redact secrets from content before storing
         redaction_result = self._redactor.redact(content)

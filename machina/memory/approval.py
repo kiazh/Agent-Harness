@@ -329,6 +329,11 @@ class MemoryApprovalGate:
                     # Completing an approved row must never re-enter the gate.
                     bypass_approval=True,
                 )
+                if isinstance(memory, PendingMemory):
+                    # Unreachable by construction: bypass_approval never
+                    # re-enters the gate. Fail loudly instead of binding a
+                    # pending id as this flow's completed memory_id (H07).
+                    raise RuntimeError("approval completion produced a pending write")
                 await conn.execute(
                     """
                     UPDATE pending_memories
@@ -495,6 +500,10 @@ class MemoryApprovalGate:
                 # Completing approved rows must never re-enter the gate.
                 bypass_approval=True,
             )
+            if isinstance(memory, PendingMemory):
+                # Unreachable by construction (bypass_approval): fail loudly
+                # instead of publishing a pending id as an approved memory_id.
+                raise RuntimeError("approval completion produced a pending write")
             memory_ids.append(memory.id)
 
         # Single batch UPDATE to mark all pending records as approved

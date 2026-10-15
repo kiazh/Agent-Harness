@@ -97,11 +97,27 @@ export const memoryCommand: Command = {
 					category = match[1]!.toLowerCase();
 					text = match[2]!;
 				}
-				const { memory } = await host.request<{ memory: MemoryInfo }>("memory.add", {
+				const response = await host.request<{
+					status?: string;
+					memory?: MemoryInfo;
+					pending?: PendingMemoryInfo;
+				}>("memory.add", {
 					content: text,
 					category,
 					sessionId: host.session()?.id,
 				});
+				if (response.status === "pending" && response.pending) {
+					// H07: an approval-queued write is not stored — never claim
+					// it was remembered from the pending id.
+					const pending = response.pending;
+					host.print(
+						`Pending approval (${pending.category}, ${shortId(pending.id)}). Review with /memory pending, then /memory approve ${shortId(pending.id)}.`,
+						"warning",
+					);
+					return;
+				}
+				const memory = response.memory;
+				if (!memory) throw new Error("memory.add did not return a stored memory.");
 				host.print(`Remembered (${memory.category}, ${shortId(memory.id)}).`, "success");
 				return;
 			}

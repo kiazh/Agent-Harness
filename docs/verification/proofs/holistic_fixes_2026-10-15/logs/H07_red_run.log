@@ -1,0 +1,143 @@
+F.FFF                                                                    [100%]
+=================================== FAILURES ===================================
+____________ test_store_add_returns_pending_outcome_under_approval _____________
+
+db_pool = <machina.db.connection.Database object at 0x10d622fd0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d2869e0>
+
+    async def test_store_add_returns_pending_outcome_under_approval(db_pool, monkeypatch):
+        """The pending arm is a PendingMemory: pending id now, approved id later."""
+        from machina.memory.approval import ApprovalStatus, PendingMemory, memory_approval_gate
+        from machina.memory.models import MemoryEntry
+        from machina.memory.store import MemoryStore
+    
+        _enable_approval(monkeypatch, db_pool)
+        agent_id = f"h07-pending-{uuid.uuid4()}"
+        store = MemoryStore()
+        try:
+            outcome = await store.add(None, agent_id, "Release notes stay concise", "preference")
+    
+            # Discriminated from the result type: not a stored-entry lookalike.
+>           assert isinstance(outcome, PendingMemory)
+E           AssertionError: assert False
+E            +  where False = isinstance(MemoryEntry(id=UUID('4e05266e-51f2-4f84-907e-2f39cb48c95f'), session_id=None, agent_id='h07-pending-93681510-99b4-4b56..., last_accessed=None, access_count=0, embedding=None, explicitly_important=False, base_strength=1.0, quarantined=False), <class 'machina.memory.approval.PendingMemory'>)
+
+tests/test_holistic_h07_memory_outcome.py:58: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 15:21:07,951 [AUDIT] {"timestamp": 1792092067.9514492, "event": "memory_pending_create", "pending_id": "4e05266e-51f2-4f84-907e-2f39cb48c95f", "agent_id": "h07-pending-93681510-99b4-4b56-a098-3f91edfd5137", "category": "preference", "redactions": []}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792092067.9514492, "event": "memory_pending_create", "pending_id": "4e05266e-51f2-4f84-907e-2f39cb48c95f", "agent_id": "h07-pending-93681510-99b4-4b56-a098-3f91edfd5137", "category": "preference", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_________________ test_remember_tool_reports_pending_approval __________________
+
+db_pool = <machina.db.connection.Database object at 0x10d82c8a0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d7da850>
+
+    async def test_remember_tool_reports_pending_approval(db_pool, monkeypatch):
+        """``remember`` must not claim "Memory stored" while the write is pending."""
+        from machina.tools.memory import remember
+    
+        _enable_approval(monkeypatch, db_pool)
+        agent_id = f"h07-remember-{uuid.uuid4()}"
+        try:
+            message = await remember(
+                content="The staging database resets every night",
+                category="fact",
+                agent_id=agent_id,
+            )
+>           assert "Memory stored" not in message
+E           AssertionError: assert 'Memory stored' not in 'Memory stor... every night'
+E             
+E             'Memory stored' is contained here:
+E               Memory stored: [7aca476c-d5f7-4026-8a3e-e2fb87f0ff28] (fact, importance=0.50) The staging database resets every night
+E             ? +++++++++++++
+
+tests/test_holistic_h07_memory_outcome.py:148: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 15:21:08,090 [AUDIT] {"timestamp": 1792092068.090813, "event": "memory_pending_create", "pending_id": "7aca476c-d5f7-4026-8a3e-e2fb87f0ff28", "agent_id": "h07-remember-4948b1dd-5e42-4573-bf69-a4bd9ccaefd2", "category": "fact", "redactions": []}
+2026-10-15 15:21:08,091 [AUDIT] {"timestamp": 1792092068.091179, "event": "memory_remember", "memory_id": "7aca476c-d5f7-4026-8a3e-e2fb87f0ff28", "agent_id": "h07-remember-4948b1dd-5e42-4573-bf69-a4bd9ccaefd2", "category": "fact", "importance": 0.5}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792092068.090813, "event": "memory_pending_create", "pending_id": "7aca476c-d5f7-4026-8a3e-e2fb87f0ff28", "agent_id": "h07-remember-4948b1dd-5e42-4573-bf69-a4bd9ccaefd2", "category": "fact", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792092068.091179, "event": "memory_remember", "memory_id": "7aca476c-d5f7-4026-8a3e-e2fb87f0ff28", "agent_id": "h07-remember-4948b1dd-5e42-4573-bf69-a4bd9ccaefd2", "category": "fact", "importance": 0.5}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+___________________ test_gateway_memory_add_reports_pending ____________________
+
+db_pool = <machina.db.connection.Database object at 0x10df42690>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d23fd90>
+
+    async def test_gateway_memory_add_reports_pending(db_pool, monkeypatch):
+        """RPC ``memory.add`` exposes the pending write under a pending discriminant."""
+        from machina.gateway.features.memory import memory_add
+    
+        _enable_approval(monkeypatch, db_pool)
+        tag = f"h07-gateway-{uuid.uuid4().hex[:12]}"
+    
+        class _GatewayStub:
+            def require_db(self) -> None:
+                pass
+    
+        try:
+            response = await memory_add(
+                _GatewayStub(), {"content": f"{tag} fact", "category": "fact"}
+            )
+>           assert response["status"] == "pending"
+                   ^^^^^^^^^^^^^^^^^^
+E           KeyError: 'status'
+
+tests/test_holistic_h07_memory_outcome.py:188: KeyError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 15:21:08,156 [AUDIT] {"timestamp": 1792092068.156399, "event": "memory_pending_create", "pending_id": "8cd947b7-6287-48c4-b2ab-a9b435c69b69", "agent_id": "harness", "category": "fact", "redactions": []}
+------------------------------ Captured log call -------------------------------
+INFO     machina.gateway.server:server.py:123 Gateway logging initialized: /Users/shadow/.machina/logs/gateway.log
+INFO     machina.audit:audit.py:244 {"timestamp": 1792092068.156399, "event": "memory_pending_create", "pending_id": "8cd947b7-6287-48c4-b2ab-a9b435c69b69", "agent_id": "harness", "category": "fact", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+____________________ test_api_memory_create_reports_pending ____________________
+
+db_pool = <machina.db.connection.Database object at 0x10df0f240>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10dd29a90>
+
+    async def test_api_memory_create_reports_pending(db_pool, monkeypatch):
+        """HTTP ``POST /api/v1/memory`` must not return a stored-shaped memory."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+    
+        from httpx import ASGITransport, AsyncClient
+    
+        from machina.api.app import create_app
+    
+        _enable_approval(monkeypatch, db_pool)
+        monkeypatch.setenv("MACHINA_API_KEY", "h07-test-key")
+        agent_id = f"h07-api-{uuid.uuid4()}"
+    
+        with (
+            patch("machina.api.app.db.connect", new_callable=AsyncMock),
+            patch("machina.api.app.db.close", new_callable=AsyncMock),
+        ):
+            app = create_app()
+            app.state._rpc_gateway = MagicMock()
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post(
+                    "/api/v1/memory",
+                    headers={"Authorization": "Bearer h07-test-key"},
+                    json={"content": "API pending fact", "category": "fact", "agent": agent_id},
+                )
+        try:
+            assert response.status_code == 200
+            body = response.json()
+>           assert body["status"] == "pending"
+                   ^^^^^^^^^^^^^^
+E           KeyError: 'status'
+
+tests/test_holistic_h07_memory_outcome.py:234: KeyError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 15:21:08,315 [AUDIT] {"timestamp": 1792092068.315486, "event": "memory_pending_create", "pending_id": "4812d884-5885-49cf-a965-62990e9dde9c", "agent_id": "h07-api-98a7b878-7816-4c1b-b481-daeec7e39009", "category": "fact", "redactions": []}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792092068.315486, "event": "memory_pending_create", "pending_id": "4812d884-5885-49cf-a965-62990e9dde9c", "agent_id": "h07-api-98a7b878-7816-4c1b-b481-daeec7e39009", "category": "fact", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+=========================== short test summary info ============================
+FAILED tests/test_holistic_h07_memory_outcome.py::test_store_add_returns_pending_outcome_under_approval
+FAILED tests/test_holistic_h07_memory_outcome.py::test_remember_tool_reports_pending_approval
+FAILED tests/test_holistic_h07_memory_outcome.py::test_gateway_memory_add_reports_pending
+FAILED tests/test_holistic_h07_memory_outcome.py::test_api_memory_create_reports_pending
+4 failed, 1 passed in 1.02s

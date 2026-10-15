@@ -1,0 +1,12 @@
+typecheck: clean
+ℹ tests 507
+ℹ suites 0
+ℹ pass 501
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 6
+ℹ todo 0
+ℹ duration_ms 2661.324208
+> eslint src/ test/ --ext .ts
+
+eslint: clean

@@ -1,0 +1,65 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_consolidator_excludes_approval_queued_writes _______________
+
+    async def test_consolidator_excludes_approval_queued_writes():
+        """Queued-for-approval writes must not masquerade as durable entries."""
+        from machina.memory.approval import ApprovalStatus, PendingMemory
+        from machina.memory.consolidator import MemoryConsolidator
+        from machina.memory.models import MemoryEntry
+    
+        candidate = MemoryEntry(
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="h07-consolidator",
+            content="Queued consolidation fact",
+            category="fact",
+            importance=0.9,
+        )
+        queued_ids: list[uuid.UUID] = []
+    
+        class _ApprovalRoutedStore:
+            async def search(self, **kwargs):
+                return []
+    
+            async def search_by_embedding(self, **kwargs):
+                return []
+    
+            async def update_access(self, *args, **kwargs):
+                raise AssertionError("no dedup access bump expected")
+    
+            async def add(self, **kwargs):
+                pending_id = uuid.uuid4()
+                queued_ids.append(pending_id)
+                return PendingMemory(
+                    id=pending_id,
+                    memory_id=None,
+                    content=kwargs["content"],
+                    category=kwargs["category"],
+                    importance=kwargs["importance"],
+                    agent_id=kwargs["agent_id"],
+                    status=ApprovalStatus.PENDING,
+                )
+    
+        consolidator = MemoryConsolidator(store=_ApprovalRoutedStore())
+    
+        async def fake_extract(*args, **kwargs):
+            return [candidate]
+    
+        consolidator._extract_memories = fake_extract
+        written = await consolidator.consolidate_from_text(
+            "The user queued a fact", agent_id="h07-consolidator"
+        )
+    
+        assert queued_ids  # the write reached the store
+>       assert written == []  # ...and is not reported as a durable entry
+        ^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert [PendingMemor...view_note='')] == []
+E         
+E         Left contains one more item: PendingMemory(id=UUID('36a54cfe-82b0-45c1-bc50-b1b17233335e'), memory_id=None, content='Queued consolidation fact', ca...at=datetime.datetime(2026, 10, 15, 19, 28, 10, 784956, tzinfo=datetime.timezone.utc), reviewed_at=None, review_note='')
+E         Use -v to get more diff
+
+tests/test_holistic_h07_memory_outcome.py:256: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_holistic_h07_memory_outcome.py::test_consolidator_excludes_approval_queued_writes
+1 failed in 0.30s
