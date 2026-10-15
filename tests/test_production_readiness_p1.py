@@ -507,11 +507,9 @@ async def test_document_count_distinct_sources(db_pool, monkeypatch):
     monkeypatch.setattr(ctxmod, "db", db_pool)
     monkeypatch.setattr(sessmod, "db", db_pool)
     monkeypatch.setattr("machina.services.db", db_pool)
-    from machina.core.context import context_manager
     from machina.core.session import SessionManager
 
     # Bind manager's db too (imported reference)
-    monkeypatch.setattr(context_manager, "_pending", [])
     sm = SessionManager()
     # SessionManager uses global db; patch its module
     import machina.core.session as smmod

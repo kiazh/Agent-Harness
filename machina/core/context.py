@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import inspect
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -162,9 +161,8 @@ def _search_text_for(payload: dict[str, Any]) -> str | None:
 class ContextManager:
     """CRUD for context chunks stored as MessagePack with batch insert support."""
 
-    def __init__(self, batch_size: int = 50, cache_size: int = 128) -> None:
-        self._batch_size = batch_size
-        self._pending: list[dict[str, Any]] = []
+    def __init__(self) -> None:
+        pass
 
     async def add_chunk(
         self,
@@ -905,83 +903,35 @@ class ContextManager:
         later turn would resurrect pre-wipe images. (Compaction paths keep
         the cache intentionally; only the explicit wipe clears it.) Both
         deletes share one transaction, so a failure can never leave the
-        chunks deleted but the image cache still serving them. Test doubles
-        without a usable acquire()/transaction() protocol fall back to the
-        legacy sequential deletes.
+        chunks deleted but the image cache still serving them.
         """
         from machina.db.connection import parse_command_count
 
-        count = 0
-        transactional = True
-        try:
-            acquire_cm = db.acquire()
-            if inspect.iscoroutine(acquire_cm):
-                # AsyncMock doubles expose acquire() but return a coroutine,
-                # not an async context manager; close it before falling back
-                # (avoids an un-awaited-coroutine warning).
-                acquire_cm.close()
-                raise TypeError("acquire() returned a coroutine double")
-            async with acquire_cm as conn:
-                transaction_cm = conn.transaction()
-                if inspect.iscoroutine(transaction_cm):
-                    # Same mock-double case one level down (conn is an
-                    # AsyncMock whose transaction() returns a coroutine).
-                    transaction_cm.close()
-                    raise TypeError("transaction() returned a coroutine double")
-                async with transaction_cm:
-                    result = await conn.execute(
-                        "DELETE FROM context_chunks WHERE session_id = $1",
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                result = await conn.execute(
+                    "DELETE FROM context_chunks WHERE session_id = $1",
+                    session_id,
+                )
+                count = parse_command_count(result)
+                try:
+                    has_image_table = await conn.fetchval(
+                        "SELECT to_regclass('session_image_context') IS NOT NULL"
+                    )
+                except Exception:
+                    # Catalog probe failed: attempt the delete and let the
+                    # missing-relation handling below decide.
+                    has_image_table = True
+                if has_image_table:
+                    await conn.execute(
+                        "DELETE FROM session_image_context WHERE session_id = $1",
                         session_id,
                     )
-                    count = parse_command_count(result)
-                    try:
-                        has_image_table = await conn.fetchval(
-                            "SELECT to_regclass('session_image_context') IS NOT NULL"
-                        )
-                    except Exception:
-                        # Doubles without fetchval: attempt the delete and let
-                        # the missing-relation handling decide.
-                        has_image_table = True
-                    if has_image_table:
-                        await conn.execute(
-                            "DELETE FROM session_image_context WHERE session_id = $1",
-                            session_id,
-                        )
-                    else:
-                        logger.warning(
-                            "session_image_context missing while wiping session %s",
-                            session_id,
-                        )
-        except (TypeError, AttributeError) as exc:
-            # Unit-test doubles: MagicMock/AsyncMock expose acquire() but the
-            # returned object is not an async context manager chain. Keep the
-            # legacy sequential path so those doubles remain usable.
-            transactional = False
-            logger.warning(
-                "delete_chunks transactional path unavailable for session %s (%s); "
-                "using sequential deletes",
-                session_id,
-                type(exc).__name__,
-            )
-        if not transactional:
-            result = await db.execute(
-                "DELETE FROM context_chunks WHERE session_id = $1",
-                session_id,
-            )
-            count = parse_command_count(result)
-            try:
-                await db.execute(
-                    "DELETE FROM session_image_context WHERE session_id = $1",
-                    session_id,
-                )
-            except Exception as exc:
-                if not _is_missing_image_relation(exc):
-                    raise
-                logger.warning(
-                    "session_image_context missing while wiping session %s",
-                    session_id,
-                    exc_info=True,
-                )
+                else:
+                    logger.warning(
+                        "session_image_context missing while wiping session %s",
+                        session_id,
+                    )
         _NO_LEGACY_IMAGES.difference_update(
             {key for key in _NO_LEGACY_IMAGES if key[0] == session_id}
         )

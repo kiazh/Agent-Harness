@@ -149,29 +149,16 @@ class ContextCompressor:
     def __init__(self, config: CompressionConfig | None = None) -> None:
         self.config = config or CompressionConfig()
 
-    def compress(
+    def _plan_compression(
         self,
         chunks: list[ContextChunk],
-        session_id: uuid.UUID,
-        agent_id: str,
-        llm_provider: Any = None,
-        checkpoint: dict[str, Any] | None = None,
-    ) -> CompressionResult:
-        """Compress a list of context chunks.
+        checkpoint: dict[str, Any] | None,
+    ) -> CompressionResult | tuple[list[ContextChunk], list[ContextChunk], dict | None, int]:
+        """Shared preamble of :meth:`compress` and :meth:`acompress`.
 
-        Strategy:
-        1. Identify tool_call/result pairs and keep them together
-        2. Preserve the most recent N chunks uncompressed
-        3. Compress older chunks using LLM summarization or truncation
-        4. Return the compressed chunk list
-
-        Sync compatibility: when called without a running event loop this
-        runs summarization inline; when called from async code prefer
-        :meth:`acompress` which awaits directly without blocking the loop
-        (AH-011).
-
-        When *checkpoint* is given it is validated (incomplete rejected)
-        and persisted alongside the free-form summary.
+        Returns a short-circuit :class:`CompressionResult` for the empty and
+        nothing-to-compress cases, else the ``(recent, old, checkpoint,
+        original_tokens)`` plan for the caller to compress.
         """
         if not chunks:
             return CompressionResult(
@@ -205,35 +192,96 @@ class ContextCompressor:
         checked_checkpoint = validate_checkpoint(checkpoint) if checkpoint is not None else None
 
         recent_chunks, old_chunks = self._split_preserve_recent(chunks, preserve_count)
+        return (recent_chunks, old_chunks, checked_checkpoint, original_tokens)
 
-        # Compress old chunks
-        if self.config.llm_summarize and llm_provider is not None:
-            try:
-                compressed = _run_awaitable(
-                    self._llm_summarize(
-                        old_chunks, session_id, agent_id, llm_provider, checked_checkpoint
-                    )
-                )
-                method = "llm_summarize"
-            except Exception as exc:
-                record_failure("compression.llm_summarize", exc)
-                try:
-                    compressed = self._truncate_compress(old_chunks, session_id, agent_id)
-                    method = "truncate"
-                except Exception as exc:
-                    # If all compression fails, preserve original chunks to avoid context loss
-                    record_failure("compression.truncate", exc)
-                    compressed = old_chunks
-                    method = "none"
-        else:
+    def _compress_old(
+        self,
+        old_chunks: list[ContextChunk],
+        session_id: uuid.UUID,
+        agent_id: str,
+        summarizer: Any,
+    ) -> tuple[list[ContextChunk], str]:
+        """Compress *old_chunks* via the sync path (LLM + fallback ladder).
+
+        *summarizer* is a zero-arg callable running ``_llm_summarize``
+        through the thread-pool bridge; on failure the shared
+        :meth:`_truncate_old` ladder below applies.
+        """
+        try:
+            compressed = summarizer()
+            method = "llm_summarize"
+        except Exception as exc:
+            record_failure("compression.llm_summarize", exc)
             try:
                 compressed = self._truncate_compress(old_chunks, session_id, agent_id)
                 method = "truncate"
             except Exception as exc:
-                # If truncation fails, preserve original chunks to avoid context loss
+                # If all compression fails, preserve original chunks to avoid context loss
                 record_failure("compression.truncate", exc)
                 compressed = old_chunks
                 method = "none"
+        return compressed, method
+
+    def _truncate_old(
+        self,
+        old_chunks: list[ContextChunk],
+        session_id: uuid.UUID,
+        agent_id: str,
+    ) -> tuple[list[ContextChunk], str]:
+        """Compress *old_chunks* without an LLM (shared truncate ladder)."""
+        try:
+            compressed = self._truncate_compress(old_chunks, session_id, agent_id)
+            method = "truncate"
+        except Exception as exc:
+            # If truncation fails, preserve original chunks to avoid context loss
+            record_failure("compression.truncate", exc)
+            compressed = old_chunks
+            method = "none"
+        return compressed, method
+
+    def compress(
+        self,
+        chunks: list[ContextChunk],
+        session_id: uuid.UUID,
+        agent_id: str,
+        llm_provider: Any = None,
+        checkpoint: dict[str, Any] | None = None,
+    ) -> CompressionResult:
+        """Compress a list of context chunks.
+
+        Strategy:
+        1. Identify tool_call/result pairs and keep them together
+        2. Preserve the most recent N chunks uncompressed
+        3. Compress older chunks using LLM summarization or truncation
+        4. Return the compressed chunk list
+
+        Sync compatibility: when called without a running event loop this
+        runs summarization inline; when called from async code prefer
+        :meth:`acompress` which awaits directly without blocking the loop
+        (AH-011).
+
+        When *checkpoint* is given it is validated (incomplete rejected)
+        and persisted alongside the free-form summary.
+        """
+        plan = self._plan_compression(chunks, checkpoint)
+        if isinstance(plan, CompressionResult):
+            return plan
+        recent_chunks, old_chunks, checked_checkpoint, original_tokens = plan
+
+        # Compress old chunks
+        if self.config.llm_summarize and llm_provider is not None:
+            compressed, method = self._compress_old(
+                old_chunks,
+                session_id,
+                agent_id,
+                lambda: _run_awaitable(
+                    self._llm_summarize(
+                        old_chunks, session_id, agent_id, llm_provider, checked_checkpoint
+                    )
+                ),
+            )
+        else:
+            compressed, method = self._truncate_old(old_chunks, session_id, agent_id)
 
         return self._finalize_result(
             compressed,
@@ -259,30 +307,10 @@ class ContextCompressor:
         Same contract as :meth:`compress` but never blocks the event loop
         with ``Future.result()`` on a worker thread.
         """
-        if not chunks:
-            return CompressionResult(
-                compressed_chunks=[],
-                original_count=0,
-                original_tokens=0,
-                compressed_tokens=0,
-                compression_ratio=0.0,
-                method="none",
-            )
-        original_tokens = sum(c.token_count for c in chunks)
-        if original_tokens == 0:
-            original_tokens = sum(get_token_count(str(c.payload)) for c in chunks)
-        preserve_count = self.config.preserve_recent
-        if len(chunks) <= preserve_count:
-            return CompressionResult(
-                compressed_chunks=chunks,
-                original_count=0,
-                original_tokens=original_tokens,
-                compressed_tokens=original_tokens,
-                compression_ratio=1.0,
-                method="none",
-            )
-        recent_chunks, old_chunks = self._split_preserve_recent(chunks, preserve_count)
-        checked_checkpoint = validate_checkpoint(checkpoint) if checkpoint is not None else None
+        plan = self._plan_compression(chunks, checkpoint)
+        if isinstance(plan, CompressionResult):
+            return plan
+        recent_chunks, old_chunks, checked_checkpoint, original_tokens = plan
         if self.config.llm_summarize and llm_provider is not None:
             try:
                 compressed = await self._llm_summarize(
@@ -291,21 +319,9 @@ class ContextCompressor:
                 method = "llm_summarize"
             except Exception as exc:
                 record_failure("compression.llm_summarize", exc)
-                try:
-                    compressed = self._truncate_compress(old_chunks, session_id, agent_id)
-                    method = "truncate"
-                except Exception as exc:
-                    record_failure("compression.truncate", exc)
-                    compressed = old_chunks
-                    method = "none"
+                compressed, method = self._truncate_old(old_chunks, session_id, agent_id)
         else:
-            try:
-                compressed = self._truncate_compress(old_chunks, session_id, agent_id)
-                method = "truncate"
-            except Exception as exc:
-                record_failure("compression.truncate", exc)
-                compressed = old_chunks
-                method = "none"
+            compressed, method = self._truncate_old(old_chunks, session_id, agent_id)
         return self._finalize_result(
             compressed,
             recent_chunks,

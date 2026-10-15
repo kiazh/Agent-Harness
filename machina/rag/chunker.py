@@ -412,7 +412,6 @@ class RecursiveCharacterTextSplitter:
                 overlap_text = overlap_text[best_idx:]
 
             base_meta = dict(chunks[i].metadata)
-            base_meta["overlap_offset"] = max(0, len(prev_text) - len(overlap_text))
 
             if len(current_text) >= max_chars:
                 # Current chunk already fills the hard limit: emit it with a

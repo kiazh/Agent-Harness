@@ -1036,11 +1036,19 @@ class TestContextManagerMocked:
             assert context[0]["type"] == "user_message"
 
     async def test_delete_chunks(self):
-        """Test deleting context chunks."""
+        """Test deleting context chunks (single transaction, image cache too)."""
         with patch("machina.core.context.db") as mock_db:
-            mock_db.execute = AsyncMock(return_value="DELETE 5")
+            connection = MagicMock()
+            connection.execute = AsyncMock(side_effect=["DELETE 5", "DELETE 1"])
+            connection.fetchval = AsyncMock(return_value=True)
+            connection.transaction = MagicMock()
+            mock_db.acquire.return_value.__aenter__.return_value = connection
             count = await context_manager.delete_chunks(uuid.uuid4())
             assert count == 5
+            assert connection.transaction.call_count == 1
+            statements = [call.args[0] for call in connection.execute.await_args_list]
+            assert any("DELETE FROM context_chunks" in s for s in statements)
+            assert any("DELETE FROM session_image_context" in s for s in statements)
 
     async def test_get_token_usage(self):
         """Test getting token usage."""
@@ -1378,7 +1386,7 @@ class TestReActAgent:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=mock_provider, max_iterations=5)
+                agent = ReActAgent(provider=mock_provider)
                 response = await agent.run(mock_session.id, "test message", verbose=False)
 
                 assert response.content == "Test response"
@@ -1424,7 +1432,7 @@ class TestReActAgent:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=mock_provider, max_iterations=5)
+                agent = ReActAgent(provider=mock_provider)
                 response = await agent.run(mock_session.id, "test message", verbose=False)
 
                 assert response.content == "Final answer"

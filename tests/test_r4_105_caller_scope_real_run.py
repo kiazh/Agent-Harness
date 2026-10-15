@@ -94,7 +94,6 @@ def probe_tools():
     for name in names:
         registry._tools.pop(name, None)
     registry._definitions_cache = None
-    registry._result_cache.clear()
 
 
 class _TwoStepProvider:

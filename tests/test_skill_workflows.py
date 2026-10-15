@@ -229,7 +229,15 @@ def test_local_trigger_is_an_automatically_loaded_anchor(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resource_integrity_is_not_bypassed_by_tool_result_cache(tmp_path, monkeypatch):
+async def test_resource_integrity_detects_tampered_bundle(tmp_path, monkeypatch):
+    """A tampered skill bundle is detected on re-read (R4-096: no result cache).
+
+    (Previously named `..._bypassed_by_tool_result_cache`: `skill_resource`
+    declares `skill.read` effects and was never cached, so the second
+    `registry.execute` always re-read the bundle. The TTL cache has been
+    removed entirely; this test still drives the real `registry.execute`
+    seam and asserts the integrity mismatch surfaces on re-read.)
+    """
     import shutil
 
     import machina.skills.registry as module

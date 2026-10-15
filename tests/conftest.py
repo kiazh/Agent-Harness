@@ -119,17 +119,9 @@ def reset_singletons(monkeypatch):
     # or no DSN at all (DB-backed tests then skip).
     db.dsn = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
 
-    from machina.core.context import context_manager
-
-    context_manager._pending.clear()
-
     from machina.core.session import session_manager
 
     session_manager._cache.clear()
-
-    from machina.tools.base import registry
-
-    registry._result_cache.clear()
 
     from machina.core import provider as provider_module
 

@@ -111,17 +111,13 @@ class FailingClient:
 
 def test_management_tools_registered_with_review_effects():
     import machina.tools.mcp  # noqa: F401 — registers the MCP tool surface
-    from machina.tools.base import _cache_policy, registry
+    from machina.tools.base import registry
 
     connect = registry.get_tool("mcp_connect")
     disconnect = registry.get_tool("mcp_disconnect")
     assert connect is not None and disconnect is not None
     assert connect.effects == ("net", "exec")
     assert disconnect.effects == ("fs.write",)
-    # Declared mutating effects also make the tools uncacheable and
-    # cache-flushing even outside the explicit permission branch.
-    assert _cache_policy(connect) == (False, True)
-    assert _cache_policy(disconnect) == (False, True)
     assert "approval" in connect.description.lower()
     assert "approval" in disconnect.description.lower()
 

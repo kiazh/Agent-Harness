@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 import uuid
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -338,15 +337,17 @@ class TestAuthDisabledBypass:
             assert exc_info.value.status_code == 401
 
 
-# ─── Bug 4: _RpcGateway._responses unbounded growth ─────────────────────────
+# ─── Bug 4: _RpcGateway._responses cannot grow ───────────────────────────────
 
 
 class TestRpcGatewayTTL:
     """_RpcGateway._responses must not grow unboundedly — via the call site.
 
-    The cleanup runs at the top of ``_RpcGateway.call()``, so these tests
-    drive ``gw.call()`` and age the pending entries instead of poking
-    ``_cleanup_old_responses`` directly.
+    R4-096: the TTL sweep (``_RESPONSE_TTL_SECONDS`` /
+    ``_cleanup_old_responses``) was dead code — ``call()`` pops its own
+    response synchronously, so no entry can outlive its call. These tests
+    drive ``gw.call()`` and assert the pending dict is always empty
+    afterwards, with no TTL machinery left behind.
     """
 
     @staticmethod
@@ -360,17 +361,18 @@ class TestRpcGatewayTTL:
             gw = _RpcGateway()
         return gw, fake
 
-    @staticmethod
-    def _age(entry_id: int, gw) -> None:
-        """Backdate a captured entry beyond the TTL."""
-        gw._response_timestamps[entry_id] = time.monotonic() - (gw._RESPONSE_TTL_SECONDS + 1)
+    async def test_no_ttl_machinery_remains(self):
+        """The dead TTL sweep is gone: no timestamps, no cleanup helper."""
+        gw, _ = self._build_gateway()
+        assert not hasattr(gw, "_RESPONSE_TTL_SECONDS")
+        assert not hasattr(gw, "_response_timestamps")
+        assert not hasattr(gw, "_cleanup_old_responses")
+        assert not hasattr(gw, "_id_lock")
+        await gw.close()
 
-    async def test_stale_entry_cleaned_up_by_next_call(self):
-        """An expired pending response is swept by the next call's cleanup."""
+    async def test_responses_dict_empty_after_call(self):
+        """A completed call leaves nothing pending — nothing to expire."""
         gw, fake = self._build_gateway()
-        stale_id = 999
-        gw._responses[stale_id] = {"jsonrpc": "2.0", "id": stale_id, "result": {}}
-        self._age(stale_id, gw)
 
         async def handle_line(line):
             frame = json.loads(line)
@@ -381,50 +383,40 @@ class TestRpcGatewayTTL:
         result = await gw.call("session.list", {})
 
         assert result == {"ok": True}
-        assert stale_id not in gw._responses
-        assert stale_id not in gw._response_timestamps
+        assert gw._responses == {}
         await gw.close()
 
     async def test_responses_dict_does_not_grow_unboundedly(self):
-        """Unanswered responses expire; 100 calls leave one aged entry, not 100."""
+        """100 answered calls leave zero pending entries, not 100."""
         gw, fake = self._build_gateway()
 
         async def handle_line(line):
             frame = json.loads(line)
             rid = frame["id"]
             gw._capture({"jsonrpc": "2.0", "id": rid, "result": {"id": rid}})
-            # Simulate a response the caller never claimed: mismatched id,
-            # aged beyond the TTL by the time the next call's cleanup runs.
-            stray = rid + 1000
-            gw._responses[stray] = {"jsonrpc": "2.0", "id": stray, "result": {}}
-            self._age(stray, gw)
 
         fake.handle_line = handle_line
 
         for _ in range(100):
             await gw.call("test.method", {})
 
-        # Without call-site cleanup the dict would hold all 100 strays.
-        assert len(gw._responses) == 1
-        assert 1100 in gw._responses
+        assert gw._responses == {}
+        assert gw._next_id == 100
         await gw.close()
 
-    async def test_ttl_cleanup_keeps_recent_entries(self):
-        """Cleanup is TTL-bounded: a recent pending entry survives the call."""
+    async def test_unanswered_call_raises_and_leaves_nothing_pending(self):
+        """A backend that never responds raises RpcError with no residue."""
+        from machina.gateway.errors import RpcError
+
         gw, fake = self._build_gateway()
-        recent_id = 999
-        gw._responses[recent_id] = {"jsonrpc": "2.0", "id": recent_id, "result": {}}
-        gw._response_timestamps[recent_id] = time.monotonic()
 
         async def handle_line(line):
-            frame = json.loads(line)
-            gw._capture({"jsonrpc": "2.0", "id": frame["id"], "result": {"ok": True}})
+            return None
 
         fake.handle_line = handle_line
 
-        result = await gw.call("session.list", {})
+        with pytest.raises(RpcError):
+            await gw.call("session.list", {})
 
-        assert result == {"ok": True}
-        assert recent_id in gw._responses
-        assert recent_id in gw._response_timestamps
+        assert gw._responses == {}
         await gw.close()

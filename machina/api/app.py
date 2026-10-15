@@ -90,26 +90,19 @@ class _RpcGateway:
     frames. We capture the last frame with a matching ``id`` so the HTTP
     layer can return it to the client.
 
-    Thread safety: uses an ``asyncio.Lock`` to protect ``_next_id`` increment
-    and ``_responses`` dict access, making it safe for concurrent use across
-    multiple HTTP requests.
+    Thread safety: an ``asyncio.Lock`` guards ``_next_id`` assignment so
+    concurrent HTTP requests each get a unique id and receive only their
+    own response.
 
-    TTL cleanup: entries in ``_responses`` that are older than
-    ``_RESPONSE_TTL_SECONDS`` are automatically cleaned up to prevent
-    unbounded growth when responses never arrive.
+    No TTL bookkeeping: ``call()`` pops its own response synchronously
+    after ``handle_line`` returns, so ``_responses`` is empty whenever no
+    call is in flight and cannot grow (R4-096 removed the dead TTL sweep).
     """
-
-    _RESPONSE_TTL_SECONDS = 60.0
 
     def __init__(self) -> None:
         self._responses: dict[int, dict[str, Any]] = {}
-        self._response_timestamps: dict[int, float] = {}
         self._next_id = 0
         self._lock = asyncio.Lock()
-        # Alias kept for backwards compatibility. It is held only around id
-        # assignment below — never across ``handle_line`` — so concurrent RPCs
-        # are not serialized behind one long-lived handler.
-        self._id_lock = self._lock
         # W8: explicit embedded-gateway signal — never inherit the stdio
         # MACHINA_GATEWAY_TOKEN. The HTTP boundary already enforces API-key
         # auth; inheriting the token would 401 every /api/v1/rpc call.
@@ -120,19 +113,6 @@ class _RpcGateway:
         rid = frame.get("id")
         if rid is not None:
             self._responses[rid] = frame
-            self._response_timestamps[rid] = asyncio.get_event_loop().time()
-
-    def _cleanup_old_responses(self) -> None:
-        """Remove entries from _responses that have exceeded the TTL."""
-        now = asyncio.get_event_loop().time()
-        expired = [
-            rid
-            for rid, ts in self._response_timestamps.items()
-            if now - ts > self._RESPONSE_TTL_SECONDS
-        ]
-        for rid in expired:
-            self._responses.pop(rid, None)
-            self._response_timestamps.pop(rid, None)
 
     async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Call a gateway method via JSON-RPC and return the result.
@@ -147,17 +127,15 @@ class _RpcGateway:
         Raises:
             RpcError: If no response is received or the response contains an error.
         """
-        async with getattr(self, "_id_lock", getattr(self, "_lock", None)) or asyncio.Lock():
+        async with self._lock:
             self._next_id += 1
             rid = self._next_id
-        self._cleanup_old_responses()
         # The snapshot taken in __init__ goes stale across (re)connects;
         # refresh from the live connection state on every call.
         self._gateway._db_ready = db.connected
         frame = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
         await self._gateway.handle_line(json.dumps(frame))
         response = self._responses.pop(rid, None)
-        self._response_timestamps.pop(rid, None)
         if response is None:
             raise RpcError(-32603, "no response from gateway")
         if "error" in response:

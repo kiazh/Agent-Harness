@@ -558,7 +558,6 @@ async def test_rpc_gateway_concurrent_calls(load_db, monkeypatch):
     mock_gw = MockGateway()
     gw = _RpcGateway.__new__(_RpcGateway)
     gw._responses = {}
-    gw._response_timestamps = {}
     gw._next_id = 0
     gw._lock = asyncio.Lock()
     gw._gateway = mock_gw
