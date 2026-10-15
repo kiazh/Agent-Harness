@@ -21,12 +21,13 @@ from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
 from machina.core.provider.base import LLMProvider
 from machina.core.provider.caches import _cache_get, _cache_key, _cache_put, _caller_identity
-from machina.core.provider.rate_limit import _get_rate_limiter
+from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.reasoning import (
     ANTHROPIC_THINKING_BUDGETS,
     _resolve_effort,
     normalize_reasoning_effort,
 )
+from machina.core.provider.sse import sse_data, sse_event
 from machina.core.provider.transport import (
     _ephemeral_cache_control,
     _log_prompt_cache_breakpoints,
@@ -45,7 +46,7 @@ from machina.core.usage import usage_store
 # endpoint). Requests/responses are normalized to the harness's OpenAI-style
 # shapes so the agent loop works unchanged.
 # ---------------------------------------------------------------------------
-class AnthropicProvider(LLMProvider):
+class AnthropicProvider(LLMProvider, RateLimitBinding):
     """Anthropic Messages API — https://api.anthropic.com/v1/messages."""
 
     BASE_URL = "https://api.anthropic.com"
@@ -66,7 +67,7 @@ class AnthropicProvider(LLMProvider):
             raise ValidationError("ANTHROPIC_API_KEY not set")
         self.model = model or self.DEFAULT_MODEL
         self._default_effort = normalize_reasoning_effort(reasoning_effort)
-        self._rate_limiter = _get_rate_limiter(self.PROVIDER_NAME)
+        self._rate_limit_key = self.PROVIDER_NAME
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers={
@@ -416,15 +417,17 @@ class AnthropicProvider(LLMProvider):
                 resp.raise_for_status()
                 event_type = ""
                 async for line in resp.aiter_lines():
-                    if line.startswith("event: "):
-                        event_type = line[7:].strip()
+                    event = sse_event(line)
+                    if event is not None:
+                        event_type = event.strip()
                         if event_type == "message_stop":
                             saw_terminal = True
                         continue
-                    if not line.startswith("data: "):
+                    data = sse_data(line)
+                    if data is None:
                         continue
                     try:
-                        data = json.loads(line[6:])
+                        data = json.loads(data)
                     except json.JSONDecodeError:
                         continue
                     if not isinstance(data, dict):

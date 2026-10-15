@@ -19,9 +19,10 @@ from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
 from machina.core.provider.base import LLMProvider
 from machina.core.provider.caches import _cache_get, _cache_key, _cache_put, _caller_identity
-from machina.core.provider.rate_limit import _get_rate_limiter
+from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.reasoning import _resolve_effort, normalize_reasoning_effort
 from machina.core.provider.specs import ProviderSpec
+from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
     _post_with_retry,
     _stream_error_message,
@@ -40,7 +41,7 @@ from machina.core.usage import _estimate_tokens, usage_store
 # ProviderSpec so base URL, key, default model and effort mapping stay
 # accurate in one table instead of seven copy-pasted classes.
 # ---------------------------------------------------------------------------
-class DirectProvider(LLMProvider):
+class DirectProvider(LLMProvider, RateLimitBinding):
     """OpenAI-compatible chat API for a single vendor (see PROVIDER_SPECS)."""
 
     def __init__(
@@ -61,7 +62,7 @@ class DirectProvider(LLMProvider):
             raise ValidationError(f"{spec.api_key_env} not set")
         self.model = model or spec.default_model
         self._default_effort = normalize_reasoning_effort(reasoning_effort)
-        self._rate_limiter = _get_rate_limiter(spec.name)
+        self._rate_limit_key = spec.name
         self.client = httpx.AsyncClient(
             base_url=spec.base_url,
             headers=headers,
@@ -250,10 +251,10 @@ class DirectProvider(LLMProvider):
             async with _stream_with_retry(self.client, "/chat/completions", payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
+                    data = sse_data(line)
+                    if data is None:
                         continue
-                    data = line[6:]
-                    if data == "[DONE]":
+                    if data.strip() == "[DONE]":
                         saw_terminal = True
                         break
                     try:

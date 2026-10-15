@@ -53,7 +53,8 @@ from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
 from machina.core.provider.base import LLMProvider
 from machina.core.provider.catalog import validate_effort, validate_model_slug
-from machina.core.provider.rate_limit import _get_rate_limiter
+from machina.core.provider.rate_limit import RateLimitBinding
+from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
     _truncated_stream_error,
     _validate_messages,
@@ -239,7 +240,7 @@ def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
     ]
 
 
-class ChatGPTProvider(LLMProvider):
+class ChatGPTProvider(LLMProvider, RateLimitBinding):
     """Codex protocol over the ChatGPT subscription backend."""
 
     BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -260,7 +261,7 @@ class ChatGPTProvider(LLMProvider):
         # entry happens when a call resolves its effective model, so a bad
         # level fails with the supported set for THAT model, not a global one.
         self._default_effort = str(reasoning_effort or "").strip().lower()
-        self._rate_limiter = _get_rate_limiter(_PROVIDER_NAME)
+        self._rate_limit_key = _PROVIDER_NAME
         self._auth_path = auth_path
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
@@ -540,9 +541,10 @@ class ChatGPTProvider(LLMProvider):
                             f"{resolved_model}: {body}"
                         )
                     async for line in response.aiter_lines():
-                        if not line.startswith("data: "):
+                        data = sse_data(line)
+                        if data is None:
                             continue
-                        data = line[6:].strip()
+                        data = data.strip()
                         if not data or data == "[DONE]":
                             continue
                         try:

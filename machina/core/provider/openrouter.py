@@ -24,8 +24,9 @@ from machina.core.provider.caches import (
     _cache_put,
     _caller_identity,
 )
-from machina.core.provider.rate_limit import _get_rate_limiter
+from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.reasoning import _resolve_effort, normalize_reasoning_effort
+from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
     _is_free_model,
     _log_prompt_cache_breakpoints,
@@ -58,7 +59,7 @@ _FREE_FALLBACK_MODELS = (
 # ---------------------------------------------------------------------------
 # OpenRouter provider
 # ---------------------------------------------------------------------------
-class OpenRouterProvider(LLMProvider):
+class OpenRouterProvider(LLMProvider, RateLimitBinding):
     """OpenRouter API — OpenAI-compatible, multi-model."""
 
     BASE_URL = "https://openrouter.ai/api/v1"
@@ -79,7 +80,7 @@ class OpenRouterProvider(LLMProvider):
             raise ValidationError("OPENROUTER_API_KEY not set")
         self.model = model
         self._default_effort = normalize_reasoning_effort(reasoning_effort)
-        self._rate_limiter = _get_rate_limiter("openrouter")
+        self._rate_limit_key = "openrouter"
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers={
@@ -419,10 +420,10 @@ class OpenRouterProvider(LLMProvider):
                 async with _stream_with_retry(self.client, "/chat/completions", payload) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
+                        data = sse_data(line)
+                        if data is None:
                             continue
-                        data = line[6:]
-                        if data == "[DONE]":
+                        if data.strip() == "[DONE]":
                             saw_terminal = True
                             break
                         try:
@@ -527,10 +528,10 @@ class OpenRouterProvider(LLMProvider):
                         ) as resp2:
                             resp2.raise_for_status()
                             async for line in resp2.aiter_lines():
-                                if not line.startswith("data: "):
+                                d2 = sse_data(line)
+                                if d2 is None:
                                     continue
-                                d2 = line[6:]
-                                if d2 == "[DONE]":
+                                if d2.strip() == "[DONE]":
                                     saw_terminal = True
                                     break
                                 try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from machina.core.config import config
 from machina.core.exceptions import ValidationError
@@ -69,10 +70,50 @@ def reload_rate_limiters() -> None:
     runtime ``rate_limit_calls_per_minute`` change would otherwise never reach
     providers that already made a call. Only existing buckets are replaced —
     keys that never made a request are not materialized here.
+
+    Providers bound through :class:`RateLimitBinding` resolve the registry on
+    every access, so this refresh reaches already-constructed providers; no
+    provider holds a private bucket that can go stale (review round 5,
+    finding 13). Replacement (not in-place mutation) is deliberate: a reader
+    holding the old object finishes its single ``acquire`` against a
+    consistent snapshot instead of racing a mid-acquire parameter rewrite.
+
+    The budget is validated before the loop so a bad runtime value raises even
+    when no bucket has been materialized yet (a silent no-op there would hide
+    the misconfiguration).
     """
     calls_per_minute = int(config.get("rate_limit_calls_per_minute"))
+    _build_rate_limiter(calls_per_minute)  # validate unconditionally, then...
     for key in list(_RATE_LIMITERS):
         _RATE_LIMITERS[key] = _build_rate_limiter(calls_per_minute)
+
+
+class RateLimitBinding:
+    """Bind a provider to a registry bucket key instead of a bucket object.
+
+    Providers capture only the registry *key* at construction; every
+    ``self._rate_limiter`` read resolves the live registry entry, so
+    :func:`reload_rate_limiters` reaches already-constructed providers
+    instead of stranding them on a stale construction-time bucket.
+
+    Assigning ``provider._rate_limiter = ...`` installs an override that is
+    honored verbatim (the bypass seam the provider test-suite uses to disable
+    throttling); the override never leaks into the shared registry.
+    """
+
+    _rate_limit_key: str = "default"
+    _rate_limiter_override: Any = None
+
+    @property
+    def _rate_limiter(self) -> AsyncTokenBucket:
+        override = self.__dict__.get("_rate_limiter_override")
+        if override is not None:
+            return override
+        return _get_rate_limiter(self._rate_limit_key)
+
+    @_rate_limiter.setter
+    def _rate_limiter(self, value: Any) -> None:
+        self._rate_limiter_override = value
 
 
 # Process-wide limiter buckets, keyed by provider name (see _get_rate_limiter).

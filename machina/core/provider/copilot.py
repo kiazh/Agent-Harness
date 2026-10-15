@@ -43,7 +43,8 @@ from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
 from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
 from machina.core.provider.base import LLMProvider
-from machina.core.provider.rate_limit import _get_rate_limiter
+from machina.core.provider.rate_limit import RateLimitBinding
+from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
     _truncated_stream_error,
     _validate_messages,
@@ -126,7 +127,7 @@ def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
     ]
 
 
-class CopilotProvider(LLMProvider):
+class CopilotProvider(LLMProvider, RateLimitBinding):
     """OpenAI-compatible Copilot API over the user's Copilot subscription."""
 
     DEFAULT_MODEL = "gpt-4o"
@@ -142,7 +143,7 @@ class CopilotProvider(LLMProvider):
     ) -> None:
         self.model = self._normalize_model(model) or self.DEFAULT_MODEL
         self._default_effort = str(reasoning_effort or "").strip().lower()
-        self._rate_limiter = _get_rate_limiter(_PROVIDER_NAME)
+        self._rate_limit_key = _PROVIDER_NAME
         self._auth_path = auth_path
         base = (
             base_url
@@ -284,9 +285,10 @@ class CopilotProvider(LLMProvider):
                         f"copilot provider HTTP {response.status_code} for {resolved_model}: {body}"
                     )
                 async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
+                    data = sse_data(line)
+                    if data is None:
                         continue
-                    data = line[6:].strip()
+                    data = data.strip()
                     if not data:
                         continue
                     if data == "[DONE]":

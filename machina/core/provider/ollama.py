@@ -18,7 +18,7 @@ from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
 from machina.core.provider.base import LLMProvider
 from machina.core.provider.caches import _cache_get, _cache_key, _cache_put, _caller_identity
-from machina.core.provider.rate_limit import _get_rate_limiter
+from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.reasoning import _resolve_effort, normalize_reasoning_effort
 from machina.core.provider.transport import (
     _stream_with_retry,
@@ -32,7 +32,7 @@ from machina.core.usage import usage_store
 # ---------------------------------------------------------------------------
 # Ollama provider
 # ---------------------------------------------------------------------------
-class OllamaProvider(LLMProvider):
+class OllamaProvider(LLMProvider, RateLimitBinding):
     """Local Ollama provider — free, self-hosted."""
 
     def __init__(
@@ -44,7 +44,7 @@ class OllamaProvider(LLMProvider):
         self.model = model
         self.base_url = base_url
         self._default_effort = normalize_reasoning_effort(reasoning_effort)
-        self._rate_limiter = _get_rate_limiter("ollama")
+        self._rate_limit_key = "ollama"
         self.client = httpx.AsyncClient(base_url=base_url, timeout=120.0)
 
     @staticmethod
@@ -53,6 +53,16 @@ class OllamaProvider(LLMProvider):
         if not effort:
             return None
         return effort != "low"
+
+    def _cache_key_for(self, messages, tools, model: str, request=None, identity=None) -> str:
+        # Namespace by normalized endpoint (mirror DirectProvider): identical
+        # calls against two Ollama servers must not share a cache entry
+        # within the TTL (review round 5, finding 11). Trailing slashes name
+        # the same server, so they still share. ``getattr`` keeps the key
+        # buildable for doubles constructed without ``__init__``.
+        endpoint = str(getattr(self, "base_url", "") or "").rstrip("/")
+        scope = f"ollama:{endpoint}:{model}"
+        return _cache_key(messages, tools, scope, request, identity)
 
     async def complete(
         self,
@@ -89,10 +99,10 @@ class OllamaProvider(LLMProvider):
             payload["think"] = think
 
         # Check cache before making any HTTP request
-        ckey = _cache_key(
+        ckey = self._cache_key_for(
             messages,
             tools,
-            f"ollama:{model or self.model}",
+            model or self.model,
             payload,
             _caller_identity(session_id, agent_id),
         )
