@@ -333,13 +333,19 @@ test("R4-094(h) /keys suggestions match the gateway's accepted secret allowlist"
 	const result = completions("set ");
 	const items: Array<{ value: string }> = Array.isArray(result) ? result : [];
 	const suggested = items.map((item) => item.value);
-	// Source of truth: machina/gateway/features/secrets.py `_ALLOWED_SECRET_KEYS`
-	// (PROVIDER_KEYS + MANAGED_ENV_KEYS in machina/security/env_file.py).
-	const gateway = [
-		"OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
-		"MISTRAL_API_KEY", "GROQ_API_KEY", "TOGETHER_API_KEY", "DEEPSEEK_API_KEY",
-		"XAI_API_KEY", "COHERE_API_KEY", "DATABASE_URL", "SEARXNG_URL", "MACHINA_MODEL",
-	];
+	// Source of truth read from the backend at test time so drift fails loudly:
+	// machina/gateway/features/secrets.py `_ALLOWED_SECRET_KEYS` =
+	// PROVIDER_KEYS (machina/security/env_file.py) + MANAGED_ENV_KEYS (secrets.py).
+	const { readFile } = await import("node:fs/promises");
+	const envFile = await readFile(new URL("../../machina/security/env_file.py", import.meta.url), "utf8");
+	const secretsPy = await readFile(new URL("../../machina/gateway/features/secrets.py", import.meta.url), "utf8");
+	const providerBlock = envFile.match(/PROVIDER_KEYS[^=]*=\s*\(([\s\S]*?)\n\)/);
+	const managedBlock = secretsPy.match(/MANAGED_ENV_KEYS[^=]*=\s*\(([\s\S]*?)\n\)/);
+	assert.ok(providerBlock && managedBlock, "allowlist blocks found in source");
+	const names = (block: string) =>
+		[...block.matchAll(/\("([A-Z][A-Z0-9_]+)",/g)].map((m) => m[1]);
+	const gateway = [...names(providerBlock[1]), ...names(managedBlock[1])];
+	assert.ok(gateway.length >= 10, `parsed gateway allowlist (${gateway.length} keys)`);
 	for (const key of suggested) {
 		assert.ok(gateway.includes(key), `/keys suggests ${key}, which secrets.set refuses`);
 	}
