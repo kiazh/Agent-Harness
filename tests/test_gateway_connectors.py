@@ -176,6 +176,11 @@ def test_actual_stdio_gateway_reports_empty_harness_inventory_without_initializi
     )
     assert process.returncode == 0, process.stderr
     frames = [json.loads(line) for line in process.stdout.splitlines()]
-    assert frames[0] == {"jsonrpc": "2.0", "id": 1, "result": {"servers": []}}
-    assert frames[1]["id"] == 2 and frames[1]["error"]["code"] == NOT_FOUND
-    assert frames[2] == {"jsonrpc": "2.0", "id": 3, "result": {}}
+    # H21: the stdio loop dispatches shutdown immediately instead of waiting
+    # for earlier pipelined requests, so responses correlate by id, not
+    # arrival position (JSON-RPC ordering is not a protocol contract).
+    by_id = {frame["id"]: frame for frame in frames}
+    assert set(by_id) == {1, 2, 3}
+    assert by_id[1] == {"jsonrpc": "2.0", "id": 1, "result": {"servers": []}}
+    assert by_id[2]["error"]["code"] == NOT_FOUND
+    assert by_id[3] == {"jsonrpc": "2.0", "id": 3, "result": {}}

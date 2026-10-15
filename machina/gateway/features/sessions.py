@@ -195,9 +195,13 @@ async def context_compress(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
     try:
         if await turn_active(session.id):
             raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
-        result = await services.compress_session(
-            session, model=gw.model, provider=gw.provider, mutation_token=token
-        )
+        # H20: no route override here. Compression resolves the session's
+        # pinned provider/model (agent definition and global config as
+        # fallbacks) through the same precedence an ordinary turn uses;
+        # passing the gateway defaults would submit a locally pinned
+        # session's transcript to the global — possibly external — provider
+        # whenever LLM summarization is enabled.
+        result = await services.compress_session(session, mutation_token=token)
     finally:
         await end_mutation(session.id, token)
     if result is None:

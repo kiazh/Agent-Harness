@@ -8,6 +8,11 @@ re-pointed at the null device / stderr. That guarantees:
 - child processes (``git``, the terminal tool) never inherit the protocol pipes.
   On Windows a child that inherits a pipe while this process has a blocking read
   pending on it hangs at startup until the read completes.
+
+That fd re-pointing runs only when this module is executed as the entry point
+(``python -m machina.gateway``, ``__name__ == "__main__"``). Importing the
+module leaves the importer's streams untouched, which lets tests drive the
+dispatch loop in-process.
 """
 
 from __future__ import annotations
@@ -15,15 +20,20 @@ from __future__ import annotations
 import os
 import sys
 
-sys.stdout.flush()
-_protocol_in = os.fdopen(os.dup(0), "rb", buffering=0)
-_protocol_out = os.fdopen(os.dup(1), "w", encoding="utf-8", newline="\n")
-_null = os.open(os.devnull, os.O_RDONLY)
-os.dup2(_null, 0)
-os.close(_null)
-os.dup2(2, 1)
-sys.stdin = open(os.devnull, encoding="utf-8")  # lives for the process
-sys.stdout = sys.stderr
+if __name__ == "__main__":
+    sys.stdout.flush()
+    _protocol_in = os.fdopen(os.dup(0), "rb", buffering=0)
+    _protocol_out = os.fdopen(os.dup(1), "w", encoding="utf-8", newline="\n")
+    _null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(_null, 0)
+    os.close(_null)
+    os.dup2(2, 1)
+    sys.stdin = open(os.devnull, encoding="utf-8")  # lives for the process
+    sys.stdout = sys.stderr
+else:
+    # Imported (tests): keep the protocol channel on the importer's streams.
+    _protocol_in = getattr(sys.stdin, "buffer", None)
+    _protocol_out = sys.stdout
 
 import asyncio  # noqa: E402
 import json  # noqa: E402
@@ -31,6 +41,17 @@ import logging  # noqa: E402
 import secrets  # noqa: E402
 import threading  # noqa: E402
 from typing import Any  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+# Control requests preempt the serial request chain (H21). Each exists to
+# cancel, resolve, revoke, or stop in-flight work, so queueing one behind a
+# slow harness/delegation/discovery request defeats its purpose. The set is
+# deliberately small: every other request keeps strict arrival ordering.
+_CONTROL_METHODS = frozenset({"prompt.cancel", "approvals.resolve", "mode.revoke", "shutdown"})
+# Grace given to requests already read when the loop exits (shutdown/EOF)
+# before their handlers are cancelled and joined.
+REQUEST_DRAIN_TIMEOUT_SECONDS = 10.0
 
 
 def _write(frame: dict[str, Any]) -> None:
@@ -56,6 +77,80 @@ def _start_stdin_reader(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[st
     threading.Thread(target=pump, name="machina-gateway-stdin", daemon=True).start()
 
 
+def _request_method(line: str) -> str | None:
+    """Best-effort method name for dispatch; malformed frames return None."""
+    try:
+        message = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(message, dict):
+        return None
+    method = message.get("method")
+    return method if isinstance(method, str) else None
+
+
+async def _dispatch_requests(gateway: Any, queue: asyncio.Queue[str | None]) -> None:
+    """Dispatch protocol lines so control requests stay dispatchable (H21).
+
+    Ordinary requests are chained: each starts only after its predecessor
+    finishes, preserving the strict arrival-order semantics of the former
+    ``await handle_line()`` loop for shared-state mutations. Control requests
+    (_CONTROL_METHODS) are awaited immediately instead of behind the chain,
+    so a slow harness/delegation/discovery request cannot delay cancellation,
+    an approval decision, revocation, or shutdown.
+
+    On exit (shutdown or EOF) every request already read gets up to
+    ``REQUEST_DRAIN_TIMEOUT_SECONDS`` to run to completion and answer; a
+    handler that outlasts the drain is cancelled and joined (tracked tasks)
+    so a wedged request cannot hold the process open. ``Gateway.close()``
+    still owns turn and resource teardown.
+    """
+    requests: set[asyncio.Task[None]] = set()
+    tail: asyncio.Task[None] | None = None
+
+    def _retire(task: asyncio.Task[None]) -> None:
+        requests.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:  # handles answer their own RpcErrors; this is a bug
+            logger.exception("gateway request handler failed", exc_info=error)
+
+    def start(line: str) -> None:
+        nonlocal tail
+        previous = tail
+
+        async def chained() -> None:
+            if previous is not None:
+                # asyncio.wait (not awaiting the task directly) keeps a
+                # predecessor's cancellation from propagating to this task.
+                await asyncio.wait({previous})
+            await gateway.handle_line(line)
+
+        tail = asyncio.create_task(chained())
+        requests.add(tail)
+        tail.add_done_callback(_retire)
+
+    while not gateway.closing:
+        line = await queue.get()
+        if line is None:
+            break
+        if _request_method(line) in _CONTROL_METHODS:
+            # Preempt: awaited (not spawned) so shutdown is fully applied
+            # before the loop decides whether to keep reading.
+            await gateway.handle_line(line)
+        else:
+            start(line)
+
+    pending = [task for task in requests if not task.done()]
+    if pending:
+        _done, pending = await asyncio.wait(pending, timeout=REQUEST_DRAIN_TIMEOUT_SECONDS)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending)
+
+
 async def _serve() -> None:
     from machina.gateway.server import Gateway
 
@@ -78,11 +173,7 @@ async def _serve() -> None:
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     _start_stdin_reader(asyncio.get_running_loop(), queue)
     try:
-        while not gateway.closing:
-            line = await queue.get()
-            if line is None:
-                break
-            await gateway.handle_line(line)
+        await _dispatch_requests(gateway, queue)
     finally:
         await gateway.close()
 

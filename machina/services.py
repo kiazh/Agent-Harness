@@ -120,6 +120,40 @@ def _compression_config() -> CompressionConfig:
     )
 
 
+async def _effective_session_route(
+    session: Session,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve the summarization provider/model exactly like an ordinary turn.
+
+    Same precedence as ``build_agent_for_session`` (AH-021/AH-022): explicit
+    override, session pin, agent definition, global config. Compression must
+    never silently move a session pinned to a local/private provider onto the
+    gateway or global default (H20); when the effective route cannot build a
+    provider, the compressor falls back to truncation instead of a different
+    provider. A definition lookup that fails here degrades to the session/
+    global route rather than failing the operation (compression is auxiliary).
+    """
+    definition = None
+    provider_name = provider or getattr(session, "provider", None)
+    model_name = model or getattr(session, "model", None)
+    if not provider_name or not model_name:
+        try:
+            from machina.core.agent_def import agent_registry
+
+            definition = await agent_registry.get(session.agent_id or "harness")
+        except Exception:
+            definition = None
+        provider_name = provider_name or getattr(definition, "provider", None)
+        model_name = model_name or getattr(definition, "model", None)
+    return (
+        provider_name or config.get("provider"),
+        model_name or config.get("model"),
+    )
+
+
 async def compress_session_with_status(
     session: Session,
     *,
@@ -165,10 +199,16 @@ async def compress_session_with_status(
         if comp_config.llm_summarize:
             from machina.core.provider import get_provider
 
+            # H20: route summarization through the session's effective
+            # provider/model (session pin -> agent definition -> global
+            # config), the same precedence ordinary turns use. Explicit
+            # callers may still override; gateway/global defaults must never
+            # be passed as overrides for an explicit compression.
+            provider_name, model_name = await _effective_session_route(
+                session, provider=provider, model=model
+            )
             try:
-                llm_provider = get_provider(
-                    provider=provider or config.get("provider"), model=model or config.get("model")
-                )
+                llm_provider = get_provider(provider=provider_name, model=model_name)
             except Exception:
                 llm_provider = None  # no key / provider: fall back to truncation
 
