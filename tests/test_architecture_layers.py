@@ -157,7 +157,7 @@ _CORE_IMPORT_CEILINGS = {
 # machina/research/benchmark.py's architecture section (round-2 review N6:
 # the hand-mirrored literal drifted once already). Moves only with the delta
 # table documented inside test_deferred_import_count_ratchet.
-DEFERRED_IMPORT_CAP = 712
+DEFERRED_IMPORT_CAP = 713
 
 
 def test_module_level_core_imports_only_shrink():
@@ -279,6 +279,9 @@ def test_deferred_import_count_ratchet():
     #   management.py +2, connectors/store.py +2 (layering: the core import
     #   moved from module scope into the two async wrappers), core/usage.py
     #   +2, core/turn_engine.py +1, tools/file.py +1.
+    #   gate-reconciliation follow-up (2026-10-15): +1 agent_factory.py
+    #   (cancel_and_join deferred import in close_agent_provider).
+    #   Census 713, cap 713.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
