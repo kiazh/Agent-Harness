@@ -18,7 +18,7 @@ version: 1.0.0
 | Skill | Practice |
 |---|---|
 | Token budgeting | Token budget system with tiktoken |
-| Prompt caching | Cache system prompts and skill content |
+| Prompt caching | Cache the system instructions and skill content |
 | Model selection | Route simple tasks to cheaper models |
 | Batch processing | Batch embedding requests |
 | Cost monitoring | Cost dashboard per session/agent |

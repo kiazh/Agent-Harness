@@ -1,9 +1,9 @@
 ---
 name: prompt-engineering
-description: "Prompt engineering — system prompt design, few-shot examples, context assembly, prompt templates, prompt testing"
+description: "Prompt engineering — system-instruction design, few-shot examples, context assembly, prompt templates, prompt testing"
 triggers:
   - "prompt"
-  - "system prompt"
+  - "system instructions"
   - "few-shot"
   - "context assembly"
   - "template"
@@ -16,7 +16,7 @@ version: 1.0.0
 
 | Skill | Practice |
 |---|---|
-| System prompt design | Write system prompts for different agent roles |
+| System instructions | Write instruction sections for different agent roles |
 | Few-shot examples | Design few-shot examples for tool calling |
 | Context assembly | Implement prompt assembler with token budget |
 | Prompt templates | Jinja2 template library for common patterns |
