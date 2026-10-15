@@ -385,26 +385,46 @@ def test_deferred_import_count_ratchet():
 #     __init__.py 55 -> 53; the same wave adds the Kimi Code spec + registry
 #     comment, specs.py 179 -> 188 (+9). Package total 5501 -> 4780 by
 #     exactly this delta (measured post-``ruff format``).
+#   Round-4/5 review fixes (2026-10-15, measured post-``ruff format`` on the
+#   settled tree; each lane owns its numbers):
+#     +55 core/agent.py (2055 -> 2064 -> 2110): R4-025 removed the
+#         max_iterations surface and added the PB-1 flush log-and-continue
+#         (+9 net), then R5-F1 serialized the consolidation cursor
+#         read+extract+checkpoint under the advisory lock (+46).
+#     Provider package +178:
+#      +72 core/provider/audit.py (R5-N; URL-credential redaction — userinfo
+#          passwords and credential query/fragment values, shared by audit
+#          emission, the RAG pipeline and audit persistence).
+#      +46 core/provider/sse.py (new; R5-GH shared SSE field parser with the
+#          spec's optional space after the colon).
+#      +41 core/provider/rate_limit.py (R5-GH RateLimitBinding: per-access
+#          registry resolve, override setter, unconditional budget
+#          validation in reload_rate_limiters).
+#      +10 core/provider/ollama.py (R5-GH endpoint-scoped cache identity).
+#      +3 core/provider/anthropic.py, +2 chatgpt.py, +2 copilot.py,
+#          +1 direct.py, +1 openrouter.py (R5-GH shared-parser wiring).
+#     Package total 4780 -> 4958 by exactly this delta.
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
-    ("core/agent.py", 2057),
+    ("core/agent.py", 2110),
     ("core/compression.py", 999),
     ("core/provider/__init__.py", 53),
     ("core/provider/_log.py", 10),
     ("core/provider/reasoning.py", 61),
     ("core/provider/specs.py", 188),
-    ("core/provider/audit.py", 147),
-    ("core/provider/rate_limit.py", 79),
+    ("core/provider/audit.py", 219),
+    ("core/provider/rate_limit.py", 120),
     ("core/provider/caches.py", 97),
     ("core/provider/transport.py", 382),
     ("core/provider/base.py", 60),
-    ("core/provider/openrouter.py", 607),
-    ("core/provider/ollama.py", 378),
-    ("core/provider/direct.py", 347),
-    ("core/provider/anthropic.py", 577),
-    ("core/provider/chatgpt.py", 678),
+    ("core/provider/sse.py", 46),
+    ("core/provider/openrouter.py", 608),
+    ("core/provider/ollama.py", 388),
+    ("core/provider/direct.py", 348),
+    ("core/provider/anthropic.py", 580),
+    ("core/provider/chatgpt.py", 680),
     ("core/provider/factory.py", 138),
     ("core/provider/catalog.py", 553),
-    ("core/provider/copilot.py", 425),
+    ("core/provider/copilot.py", 427),
 )
 
 
@@ -429,7 +449,7 @@ def test_god_file_ceilings_only_fall(relative_path, ceiling):
 # 4780 = 5501 - 720 for the vendor-compliance removal (claude.py + gemini.py
 #        deleted) - 8 (factory.py branches/imports) - 2 (__init__.py exports)
 #        + 9 (specs.py: the Kimi Code spec + registry comment, same wave).
-_PROVIDER_PACKAGE_TOTAL_CEILING = 4780
+_PROVIDER_PACKAGE_TOTAL_CEILING = 4958
 
 
 def test_provider_package_total_only_falls():
