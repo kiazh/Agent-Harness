@@ -1,4 +1,4 @@
-"""Progress monitor: stagnation detection + artifact-first helper (Stream D).
+"""Progress monitor: stagnation detection (Stream D).
 
 Pure functions over an explicit, immutable-style history. No I/O, no imports
 from agent/orchestrator code, stdlib only.
@@ -28,10 +28,6 @@ from typing import Any, TypedDict
 # DECISION (made, do not relitigate): K consecutive stagnant rounds force a
 # synthesize/write attempt plus a truthful stop reason. Tunable here.
 STAGNATION_ROUNDS_K: int = 3
-
-# Minimum gathered evidence items before the artifact-first helper advises
-# writing without an explicit user ask. Tunable here.
-MIN_EVIDENCE_TO_WRITE_FIRST: int = 3
 
 
 class Round(TypedDict):
@@ -110,15 +106,3 @@ def stop_reason(history: list[Round] | tuple[Round, ...] | None) -> str:
     if trailing:
         return f"continuing: {trailing} stagnant round(s), below K={STAGNATION_ROUNDS_K}"
     return "continuing: recent rounds added new coverage or artifact bytes"
-
-
-def should_write_first(evidence_count: int, explicit_ask: bool) -> bool:
-    """Artifact-first helper: write the report first, then improve if needed.
-
-    An explicit user ask to write always wins. Otherwise, advise writing once
-    at least MIN_EVIDENCE_TO_WRITE_FIRST evidence items exist instead of
-    delaying a useful artifact for exhaustive rediscovery.
-    """
-    if explicit_ask:
-        return True
-    return max(0, int(evidence_count)) >= MIN_EVIDENCE_TO_WRITE_FIRST

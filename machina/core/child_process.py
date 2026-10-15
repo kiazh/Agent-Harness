@@ -195,7 +195,9 @@ def run_bounded(
     ``cwd=None`` runs in the call-time launch directory (N2). Spawning never
     raises: an OSError, or a ValueError from an invalid argv (e.g. embedded
     NUL bytes), comes back as a typed result (``spawn_error``), and
-    ``stdin_text`` writes and closes the child's stdin.
+    ``stdin_text`` writes and closes the child's stdin on a bounded writer
+    thread started after the deadline/output-draining supervision is live
+    (F14), so a large input can never block the timer.
     """
     target_cwd = Path(cwd) if cwd is not None else Path(os.getcwd())
     if env is None:
@@ -267,13 +269,6 @@ def run_bounded(
                     exceeded.set()
                     return
 
-        if stdin_text is not None and process.stdin is not None:
-            try:
-                process.stdin.write(stdin_text)
-                process.stdin.close()
-            except (OSError, ValueError):
-                pass
-
         timer = threading.Timer(timeout, stop_on_timeout)
         timer.daemon = True
         timer.start()
@@ -304,6 +299,32 @@ def run_bounded(
             ]
             for reader in readers:
                 reader.start()
+
+            # F14: deliver stdin AFTER supervision and output draining start,
+            # and on its own daemon thread. A full pipe then blocks only that
+            # writer — not the deadline timer, and not the opposite direction
+            # (the readers are already draining output). The kill-tree on
+            # expiry/cancel closes the child's read end, so a blocked write
+            # fails instead of hanging the call. Pre-fix, the synchronous write
+            # ran before the timer and readers existed, so a large input could
+            # block indefinitely and a chatty child could deadlock both ways.
+            stdin_writer: threading.Thread | None = None
+            if stdin_text is not None and process.stdin is not None:
+
+                def write_stdin() -> None:
+                    try:
+                        process.stdin.write(stdin_text)
+                        process.stdin.flush()
+                    except (OSError, ValueError):
+                        pass
+                    finally:
+                        try:
+                            process.stdin.close()
+                        except (OSError, ValueError):
+                            pass
+
+                stdin_writer = threading.Thread(target=write_stdin, daemon=True)
+                stdin_writer.start()
             # The readers block until the child (group) closes its pipes, so
             # keep a bounded wait with periodic cancel checks: caller
             # cancellation must kill the tree promptly, not only once the
@@ -331,6 +352,11 @@ def run_bounded(
                 pgid, process
             ):
                 kill_tree(process, pgid)
+            if stdin_writer is not None:
+                # The child has exited or been killed by now, so a blocked write
+                # has already failed; join briefly so the `with` teardown cannot
+                # race the writer thread.
+                stdin_writer.join(1.0)
             process.wait()
         except BaseException:
             # Caller cancellation delivered as an exception: no child may

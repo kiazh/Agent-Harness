@@ -8,7 +8,6 @@ from machina.core.progress import (
     STAGNATION_ROUNDS_K,
     is_stagnant,
     record,
-    should_write_first,
     stagnant_trailing_count,
     stop_reason,
 )
@@ -88,11 +87,3 @@ def test_stop_reason_truthful():
     assert "continuing" in stop_reason([])
     partial = looping_recall_history(2)  # 1 productive + 1 stagnant, below K
     assert "continuing" in stop_reason(partial)
-
-
-def test_should_write_first():
-    assert should_write_first(0, True) is True  # explicit ask always wins
-    assert should_write_first(0, False) is False
-    assert should_write_first(2, False) is False
-    assert should_write_first(3, False) is True
-    assert should_write_first(25, False) is True  # incident had ample evidence

@@ -17,7 +17,6 @@ from machina.core.progress import (
     STAGNATION_ROUNDS_K,
     is_stagnant,
     record,
-    should_write_first,
     stop_reason,
 )
 
@@ -76,8 +75,6 @@ def replay_incident(artifact_dir):
     # Known findings already gathered (7 ledger rows); the fixture documents the
     # explicit "just write the md file" ask as the final user instruction.
     evidence_count = len(ledger["rows"])
-    explicit_ask = True
-    assert should_write_first(evidence_count, explicit_ask)
 
     # Replay the 7 ledger delegates offline (all failed in the incident).
     for row in ledger["rows"]:

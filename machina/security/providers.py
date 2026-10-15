@@ -78,73 +78,33 @@ logger = logging.getLogger(__name__)
 #: endpoints (bearer keys then travel in cleartext).
 _PLAINTEXT_HTTP_ENV = "MACHINA_ALLOW_PLAINTEXT_HTTP"
 
-#: Bound for acquiring the store lock. The lock is only ever held across
-#: local file I/O, so a peer holding it longer is wedged or crashed.
-_STORE_LOCK_TIMEOUT_SECONDS = 5.0
-
-_WINDOWS = os.name == "nt"
-if _WINDOWS:  # pragma: no cover - platform branch
-    import msvcrt
-else:
-    import fcntl
+#: The lock is delegated to :func:`machina.security.store_fence.store_lock`, so
+#: the bound is the shared ``store_fence.STORE_LOCK_TIMEOUT_SECONDS``. The alias
+#: keeps the provider-store error message self-describing.
+_STORE_LOCK_TIMEOUT_SECONDS = store_fence.STORE_LOCK_TIMEOUT_SECONDS
 
 
 @contextmanager
 def _store_lock() -> Iterator[None]:
-    """Exclusive per-store lock (same flock idiom as machina/interop.py).
+    """Exclusive per-store lock delegated to :func:`store_fence.store_lock`.
 
-    Serializes whole load -> mutate -> atomic-replace sections across threads
-    and processes, so concurrent store writers cannot drop one side's update
-    (review round 6, R6-2). The lock file holds no state and the atomic
-    replace keeps the store itself always readable. Acquisition is bounded
-    (``_STORE_LOCK_TIMEOUT_SECONDS``): a wedged peer fails the operation with
-    :class:`ProviderStoreLockTimeout` instead of blocking the caller forever.
+    One authoritative bounded-flock implementation (code_review P2-2): the
+    mechanics live in ``machina.security.store_fence``; this wrapper only maps
+    the shared :class:`store_fence.StoreLockTimeout` onto the provider store's
+    typed :class:`ProviderStoreLockTimeout` so callers keep the same error
+    surface. It serializes whole load -> mutate -> atomic-replace sections
+    across threads and processes, so concurrent store writers cannot drop one
+    side's update (review round 6, R6-2). The lock file holds no state and the
+    atomic replace keeps the store itself always readable.
     """
-    target = providers_path()
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(str(target) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
-    acquired = False
     try:
-        if not _acquire_lock(fd, timeout=_STORE_LOCK_TIMEOUT_SECONDS):
-            raise ProviderStoreLockTimeout(
-                "provider store lock timed out after "
-                f"{_STORE_LOCK_TIMEOUT_SECONDS:g}s; another process holds it"
-            )
-        acquired = True
-        yield
-    finally:
-        try:
-            if acquired:
-                if _WINDOWS:  # pragma: no cover - platform branch
-                    os.lseek(fd, 0, os.SEEK_SET)
-                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
-
-
-def _acquire_lock(fd: int, *, timeout: float) -> bool:
-    """Bounded non-blocking exclusive flock; True once held, False on timeout.
-
-    Same deadline-and-retry idiom as ``connectors/oauth_store`` so a wedged
-    holder surfaces as a typed error rather than an unbounded wait.
-    """
-    deadline = time.monotonic() + max(0.0, timeout)
-    while True:
-        try:
-            if _WINDOWS:  # pragma: no cover - platform branch
-                if os.fstat(fd).st_size == 0:
-                    os.write(fd, b"\0")
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-            else:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except (OSError, BlockingIOError):
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.01)
+        with store_fence.store_lock(providers_path()):
+            yield
+    except store_fence.StoreLockTimeout as exc:
+        raise ProviderStoreLockTimeout(
+            "provider store lock timed out after "
+            f"{_STORE_LOCK_TIMEOUT_SECONDS:g}s; another process holds it"
+        ) from exc
 
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")

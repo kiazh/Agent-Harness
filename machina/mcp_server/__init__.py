@@ -515,6 +515,10 @@ async def machina_chat(prompt: str, session_id: str | None = None, mode: str | N
     R5-A finding 1: a tool-supplied ``mode`` above the server ceiling
     (``_mcp_mode_ceiling``) is refused with a typed error and never spawns,
     so tool arguments cannot mint authority the operator did not configure.
+    S2 (security review): an omitted ``mode`` is clamped to the ceiling when
+    the ceiling was tightened (``MCP_MAX_MODE``) below the operator mode, so
+    the child can never run above the declared ceiling by simply leaving the
+    parameter out.
     R5-A finding 15: the child runs on a worker thread bound to a stop
     handle; cancelling this coroutine sets the handle (the runner kills the
     process tree promptly) and the handler joins the worker with a bounded
@@ -525,8 +529,8 @@ async def machina_chat(prompt: str, session_id: str | None = None, mode: str | N
     if invalid:
         return _json_text({"status": "invalid_request", "error": invalid})
     requested = mode.strip().lower() if isinstance(mode, str) else ""
+    ceiling = _mcp_mode_ceiling()
     if requested:
-        ceiling = _mcp_mode_ceiling()
         if _MODE_RANK[requested] > _MODE_RANK[ceiling]:
             logger.warning("mcp mode ceiling refused mode=%s ceiling=%s", requested, ceiling)
             return _json_text(
@@ -541,7 +545,18 @@ async def machina_chat(prompt: str, session_id: str | None = None, mode: str | N
                     ),
                 }
             )
-    cmd = _chat_command(prompt, session_id, mode)
+        effective_mode: str | None = mode
+    elif _MODE_RANK[ceiling] < _MODE_RANK[_operator_mode()]:
+        # S2 (security review): the caller omitted `mode`, so the child would
+        # otherwise inherit the operator's configured execution_mode — which can
+        # sit ABOVE the declared ceiling when MCP_MAX_MODE tightens below it.
+        # Spawn with the ceiling explicit (fail-closed clamp). When the ceiling
+        # equals the operator mode the child's own default already matches, so
+        # no flag is added and the omitted-mode behavior is unchanged.
+        effective_mode = ceiling
+    else:
+        effective_mode = None
+    cmd = _chat_command(prompt, session_id, effective_mode)
     try:
         # R4-081: resolve the parent's own DSN; the child must never guess.
         child_env = _child_database_env()
