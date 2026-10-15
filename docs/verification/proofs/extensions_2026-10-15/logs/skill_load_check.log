@@ -1,0 +1,24 @@
+# Skill registry load check — 2026-10-15T16:03:11Z
+
+Skipping skill /Users/shadow/machina/skills/cost-optimization/SKILL.md: ValueError
+Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+new skills: 13
+  observability-otel         lines= 44 triggers=8 version=1.0.0
+  feature-flags              lines= 42 triggers=7 version=1.0.0
+  chaos-engineering          lines= 42 triggers=7 version=1.0.0
+  supply-chain-security      lines= 43 triggers=7 version=1.0.0
+  prompt-injection-defense   lines= 46 triggers=6 version=1.0.0
+  grpc-services              lines= 41 triggers=6 version=1.0.0
+  kubernetes-ops             lines= 44 triggers=8 version=1.0.0
+  terraform-iac              lines= 42 triggers=7 version=1.0.0
+  redis-caching              lines= 43 triggers=7 version=1.0.0
+  data-visualization         lines= 43 triggers=7 version=1.0.0
+  background-jobs            lines= 43 triggers=7 version=1.0.0
+  rate-limiting              lines= 43 triggers=7 version=1.0.0
+  incident-response          lines= 43 triggers=7 version=1.0.0
+
+registry total: 74
+first-party loaded: 32
+ecc loaded: 42 (pinned 42)
+missing new skills: []
+OK: all 13 new skills parse, load enabled, ecc still 42

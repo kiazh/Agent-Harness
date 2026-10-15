@@ -1,0 +1,21 @@
+# Skill suites — 2026-10-15T16:02:52Z
+
+## Command 1: primary skill suites
+.venv/bin/python -m pytest tests/test_skill_runtime.py tests/test_skill_registry_cache.py tests/test_ecc_skills.py tests/test_fm6_skill_read.py tests/test_fm6_registry_hardening.py tests/test_skill_workflows.py -q
+........................................................................ [ 31%]
+........................................................................ [ 62%]
+........................................................................ [ 93%]
+..............                                                           [100%]
+230 passed in 3.21s
+
+## Command 2: supporting skill suites
+.venv/bin/python -m pytest tests/test_fm6_scanner.py tests/test_fm6_triggers.py tests/test_fm6_workflow_stages.py tests/test_code_quality.py tests/test_fm6_telemetry.py -q
+........................................................................ [100%]
+72 passed in 0.99s
+
+## Command 3: atomicity / ecc agents / vendor
+.venv/bin/python -m pytest tests/test_r5_019_skill_atomicity.py tests/test_ecc_agents.py tests/test_vendor_ecc.py tests/test_comprehensive.py -k 'skill or atomicity or ecc_agents or vendor' -q
+...............                                                          [100%]
+15 passed in 0.91s
+...................................................                      [100%]
+51 passed, 109 deselected in 0.68s
