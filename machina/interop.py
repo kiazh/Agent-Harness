@@ -1295,30 +1295,65 @@ def enable_detected(
 #   * ``opencode v2.0.26`` documents ``opencode run [flags] [<message...>]``
 #     (the v1 ``run`` was interactive; the installed v2 ``run`` is the headless
 #     entry point — ``opencode run --help`` confirms the positional message).
+#     Its parser splits argv at the first ``--`` and appends every trailing
+#     operand to the variadic message argument, so the prompt is passed after
+#     that option terminator.
 #   * ``codex-cli 0.162.1`` documents ``codex exec [OPTIONS] [PROMPT]`` ("Run
-#     Codex non-interactively").
+#     Codex non-interactively"); ``codex exec --help`` documents ``-`` as the
+#     form where "instructions are read from stdin" — the prompt never appears
+#     in argv at all.
 #   * ``Hermes Agent v0.21.6`` documents ``-z/--oneshot PROMPT`` ("One-shot
-#     mode: send a single prompt and print ONLY the final response text to
-#     stdout ... Intended for scripts / pipes"), so Hermes is run-capable.
-# The prefix is the executable name plus its headless subcommand; ``run_task``
-# appends the prompt. Kept as a plain mapping so callers (the CLI and the UI
-# lane) can render the exact command without a probe.
+#     mode ... Intended for scripts / pipes"); its argparse surface binds
+#     ``--oneshot=<prompt>`` literally even when the prompt starts with ``-``
+#     (the split ``-z <prompt>`` form refuses option-like values).
+# The entry point is the executable plus its headless subcommand; ``run_task``
+# delivers the prompt through each platform's literal mechanism (never as a
+# bare argv token that could be parsed as an option, finding H09):
+# see :func:`_literal_prompt_invocation`.
 RUN_PLATFORMS: dict[str, list[str]] = {
     "opencode": ["opencode", "run"],
     "codex": ["codex", "exec"],
-    "hermes": ["hermes", "-z"],
+    "hermes": ["hermes"],  # one-shot mode inlines the prompt: --oneshot=<prompt>
 }
 
 _RUN_DESCRIPTIONS: dict[str, str] = {
-    "opencode": 'opencode run "<prompt>" — OpenCode headless message (v2 CLI)',
-    "codex": 'codex exec "<prompt>" — Codex non-interactive execution',
-    "hermes": 'hermes -z "<prompt>" — Hermes one-shot mode (scripts/pipes)',
+    "opencode": 'opencode run -- "<prompt>" — OpenCode headless message (v2 CLI)',
+    "codex": "codex exec - (prompt on stdin) — Codex non-interactive execution",
+    "hermes": 'hermes --oneshot="<prompt>" — Hermes one-shot mode (scripts/pipes)',
 }
 
 
 def supported_runs() -> dict[str, str]:
     """Platforms that support ``machina harnesses run``, with a usage hint."""
     return {key: _RUN_DESCRIPTIONS[key] for key in RUN_PLATFORMS}
+
+
+def _literal_prompt_invocation(
+    key: str, prefix: list[str], binary: str, prompt: str
+) -> tuple[list[str], str | None] | None:
+    """*binary*'s argv (plus stdin text where used) for a literal *prompt*.
+
+    Every run-capable platform gets its prompt through a mechanism that cannot
+    be parsed as a command option (finding H09):
+
+    * opencode — ``--`` ends flag parsing; everything after it is appended to
+      ``run``'s variadic message argument.
+    * codex — the documented ``exec -`` stdin form; the prompt is never an
+      argv token.
+    * hermes — argparse's ``--oneshot=<prompt>`` binding; ``=`` keeps a
+      leading ``-`` inside the value.
+
+    ``None`` means no literal mechanism is registered for *key*: callers must
+    refuse the run rather than spawn an option-interpretable prompt.
+    """
+    entry = [binary, *prefix[1:]]
+    if key == "opencode":
+        return [*entry, "--", prompt], None
+    if key == "codex":
+        return [*entry, "-"], prompt
+    if key == "hermes":
+        return [binary, f"--oneshot={prompt}"], None
+    return None
 
 
 @dataclass
@@ -1330,8 +1365,9 @@ class RunResult:
     ``exit_code`` is ``None`` for a spawn failure; ``stdout``/``stderr`` are
     bounded, ANSI-stripped and secret-redacted; ``ok`` is ``exit_code == 0``
     and not timed out. ``unsupported_reason`` is set (with ``ok`` False) for
-    an unknown platform or one without headless support, so callers never
-    raise for a run that cannot start.
+    an unknown platform, one without headless support, or one without a
+    literal prompt mechanism, so callers never raise for a run that cannot
+    start.
     """
 
     platform: str
@@ -1349,9 +1385,17 @@ def run_task(platform: str, prompt: str, *, timeout: float = 300.0) -> RunResult
     Runs the platform's documented headless command through the shared runner
     (minimal environment, its own process group, a kill-tree deadline and
     size-capped output) and maps the :class:`_ProcessResult` onto
-    :class:`RunResult`. Output is ANSI-stripped and secret-redacted. This is
-    total: a failed run, a missing binary, or an unsupported/unknown platform
-    is a value (``ok``/``exit_code``/``unsupported_reason``), never raised.
+    :class:`RunResult`. The prompt goes through the platform's literal
+    mechanism — an option terminator, stdin, or a ``=``-bound flag value — so
+    it can never be interpreted as a command option (finding H09). ``ok``
+    remains "the harness command exited 0 within its deadline": that is as far
+    as the child protocol distinguishes a completed task from a successful
+    process, and literal delivery is what keeps an option-interpreted zero
+    exit from masquerading as one. Output is ANSI-stripped and
+    secret-redacted. This is total: a failed run, a missing binary, an
+    unsupported/unknown platform, or a run-capable platform without a literal
+    prompt mechanism is a value (``ok``/``exit_code``/``unsupported_reason``),
+    never raised.
     """
     key = (platform or "").strip().lower()
     prefix = RUN_PLATFORMS.get(key)
@@ -1373,19 +1417,32 @@ def run_task(platform: str, prompt: str, *, timeout: float = 300.0) -> RunResult
             unsupported_reason=reason,
         )
     spec = resolve_platform(key)
-    planned = [prefix[0], *prefix[1:], prompt]
     binary = _which(spec)
+    invocation = _literal_prompt_invocation(key, prefix, binary or prefix[0], prompt)
+    if invocation is None:
+        return RunResult(
+            platform=key,
+            command=[],
+            exit_code=None,
+            stdout="",
+            stderr="",
+            ok=False,
+            unsupported_reason=(
+                f"{spec.label} has no literal prompt mechanism; refusing to pass "
+                "the prompt as a command option"
+            ),
+        )
+    command, stdin_text = invocation
     if binary is None:
         return RunResult(
             platform=key,
-            command=planned,
+            command=command,
             exit_code=None,
             stdout="",
             stderr=f"{spec.label} is not installed ({spec.binaries[0]} not on PATH)",
             ok=False,
         )
-    command = [binary, *prefix[1:], prompt]
-    proc = _run(command, env=_child_env(spec), timeout=timeout)
+    proc = _run(command, env=_child_env(spec), timeout=timeout, stdin_text=stdin_text)
     stdout = _redact_output(proc.output)
     stderr = _redact_output(proc.stderr)
     if proc.timed_out:

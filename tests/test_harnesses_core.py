@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import uuid
 from unittest.mock import AsyncMock
 
@@ -126,6 +127,7 @@ def test_run_task_builds_the_documented_headless_command_and_is_typed(monkeypatc
         seen["argv"] = list(argv)
         seen["timeout"] = timeout
         seen["env"] = env
+        seen["stdin_text"] = stdin_text
         return _proc(output="\x1b[32mdelegated ok\x1b[0m\n")
 
     monkeypatch.setattr(interop, "_which", lambda spec: f"/fake/bin/{spec.key}")
@@ -134,11 +136,35 @@ def test_run_task_builds_the_documented_headless_command_and_is_typed(monkeypatc
     result = interop.run_task("opencode", "fix the build", timeout=12.5)
 
     assert result.platform == "opencode"
-    assert result.command == ["/fake/bin/opencode", "run", "fix the build"]
+    # H09: the `--` option terminator keeps the prompt out of flag position
+    # (all of it becomes `run`'s variadic message).
+    assert result.command == ["/fake/bin/opencode", "run", "--", "fix the build"]
     assert result.ok and result.exit_code == 0
     assert result.stdout == "delegated ok", "ANSI must be stripped"
     assert seen["timeout"] == 12.5
     assert seen["env"]["NO_COLOR"] == "1", "minimal child env must be used"
+    assert seen["stdin_text"] is None, "opencode gets the prompt in argv, not stdin"
+
+
+def test_run_task_codex_prompt_goes_on_stdin_and_never_touches_argv(monkeypatch):
+    seen: dict = {}
+
+    def fake_run(argv, *, env=None, timeout=0.0, stdin_text=None, cwd=None):
+        seen["argv"] = list(argv)
+        seen["stdin_text"] = stdin_text
+        return _proc(output="delegated ok\n")
+
+    monkeypatch.setattr(interop, "_which", lambda spec: f"/fake/bin/{spec.key}")
+    monkeypatch.setattr(interop, "_run", fake_run)
+
+    result = interop.run_task("codex", "--help")
+
+    # H09: `codex exec -` is the documented stdin form; the prompt cannot be
+    # read as an option because it is never an argv token.
+    assert result.command == ["/fake/bin/codex", "exec", "-"]
+    assert seen["stdin_text"] == "--help"
+    assert "--help" not in result.command
+    assert result.ok
 
 
 def test_run_task_redacts_secrets_and_reports_a_failed_run(monkeypatch):
@@ -178,7 +204,164 @@ def test_run_task_not_installed_is_typed_and_never_spawns(monkeypatch):
 
     assert result.ok is False and result.exit_code is None
     assert "not installed" in result.stderr
-    assert result.command == ["hermes", "-z", "x"], "hermes headless prefix is `-z`"
+    assert result.command == ["hermes", "--oneshot=x"], "hermes prompt is an option value"
+
+
+# H09: option-like prompts must reach the harness literally -------------------
+#
+# The stubs are shell executables (run for real, under a PATH pointing at
+# them) that record their argv and emulate the installed CLIs' parsing:
+#   * opencode v2.0.26 — `--` ends flag parsing; trailing operands are
+#     appended to `run`'s variadic message. An option-like token before `--`
+#     is a flag (`--help` prints usage, exit 0).
+#   * codex-cli 0.162.1 — `exec [OPTIONS] [PROMPT]`; `-` reads the prompt
+#     from stdin; `--help` prints usage, exit 0.
+#   * Hermes v0.21.6 — argparse `-z/--oneshot PROMPT`; an option-like value
+#     after the split flag is refused (`expected one argument`, exit 2);
+#     `--oneshot=<value>` binds the value literally.
+
+_STUB_HARNESS_SCRIPTS = {
+    # Emulates: `opencode run [flags] [<message...>]` with `--` splitting.
+    "opencode": """#!/bin/sh
+for a in "$@"; do printf 'ARGV: %s\\n' "$a"; done
+parse=1
+prompt=""
+for a in "$@"; do
+  if [ "$parse" = 1 ] && [ "$a" = "--" ]; then parse=0; continue; fi
+  if [ "$parse" = 1 ] && [ "$a" = "run" ]; then continue; fi
+  if [ "$parse" = 1 ]; then
+    case "$a" in
+      --help|-h) printf 'OPENCODE HELP (usage text, exit 0)\\n'; exit 0 ;;
+      -*) printf 'unknown option %s\\n' "$a" >&2; exit 1 ;;
+    esac
+  fi
+  prompt="$a"
+done
+printf 'TASK: %s\\n' "$prompt"
+""",
+    # Emulates: `codex exec [OPTIONS] [PROMPT]`, `-` = prompt on stdin.
+    "codex": """#!/bin/sh
+for a in "$@"; do printf 'ARGV: %s\\n' "$a"; done
+prompt=""
+stdin_prompt=0
+for a in "$@"; do
+  case "$a" in
+    exec) continue ;;
+    -) stdin_prompt=1; continue ;;
+    --help|-h) printf 'CODEX HELP (usage text, exit 0)\\n'; exit 0 ;;
+    -*) printf 'error: unexpected argument %s\\n' "$a" >&2; exit 2 ;;
+  esac
+  prompt="$a"
+done
+if [ "$stdin_prompt" = 1 ]; then
+  IFS= read -r prompt
+  printf 'STDIN: %s\\n' "$prompt"
+fi
+printf 'TASK: %s\\n' "$prompt"
+""",
+    # Emulates: argparse `-z/--oneshot PROMPT` binding rules.
+    "hermes": """#!/bin/sh
+for a in "$@"; do printf 'ARGV: %s\\n' "$a"; done
+for a in "$@"; do
+  case "$a" in
+    --oneshot=*) printf 'TASK: %s\\n' "${a#--oneshot=}"; exit 0 ;;
+  esac
+done
+if [ "$1" = "-z" ] || [ "$1" = "--oneshot" ]; then
+  case "${2:-}" in
+    ""|-*) printf 'usage: hermes: error: argument -z/--oneshot: expected one argument\\n' >&2; exit 2 ;;
+    *) printf 'TASK: %s\\n' "$2"; exit 0 ;;
+  esac
+fi
+printf 'no oneshot flag\\n' >&2
+exit 2
+""",
+}
+
+
+def _install_stub_harnesses(monkeypatch, tmp_path) -> dict[str, str]:
+    """Put one executable stub per platform first on PATH; return their paths."""
+    stub_dir = tmp_path / "h09-stubs"
+    stub_dir.mkdir()
+    resolved: dict[str, str] = {}
+    for name, body in _STUB_HARNESS_SCRIPTS.items():
+        path = stub_dir / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+        resolved[name] = str(path)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return resolved
+
+
+def test_run_task_delivers_option_like_prompts_literally(monkeypatch, tmp_path):
+    """A `--help` prompt reaches each harness as the task, not as a flag.
+
+    RED before the fix: opencode/codex return usage text with ``ok=True``
+    without running a task; hermes fails with a argparse usage error (exit 2).
+    """
+    stub = _install_stub_harnesses(monkeypatch, tmp_path)
+
+    opencode = interop.run_task("opencode", "--help", timeout=10.0)
+    assert opencode.command == [stub["opencode"], "run", "--", "--help"]
+    assert opencode.ok and opencode.exit_code == 0
+    assert opencode.stdout.splitlines() == [
+        "ARGV: run",
+        "ARGV: --",
+        "ARGV: --help",
+        "TASK: --help",
+    ]
+
+    codex = interop.run_task("codex", "--help", timeout=10.0)
+    assert codex.command == [stub["codex"], "exec", "-"]
+    assert codex.ok and codex.exit_code == 0
+    assert codex.stdout.splitlines() == [
+        "ARGV: exec",
+        "ARGV: -",
+        "STDIN: --help",
+        "TASK: --help",
+    ]
+
+    hermes = interop.run_task("hermes", "--help", timeout=10.0)
+    assert hermes.command == [stub["hermes"], "--oneshot=--help"]
+    assert hermes.ok and hermes.exit_code == 0
+    assert hermes.stdout.splitlines() == [
+        "ARGV: --oneshot=--help",
+        "TASK: --help",
+    ]
+
+
+def test_run_task_refuses_a_platform_without_a_literal_prompt_mechanism(monkeypatch):
+    """A run-capable platform with no literal delivery is a typed refusal.
+
+    Forward-proofs the H09 guard: a future platform added to RUN_PLATFORMS
+    without an option-proof prompt mechanism must never be spawned with an
+    option-interpretable prompt.
+    """
+    monkeypatch.setitem(
+        interop.PLATFORMS,
+        "future",
+        interop.PlatformSpec(
+            key="future",
+            label="Future",
+            binaries=("future",),
+            version_args=(),
+            list_args=(),
+            supports_scopes=(),
+            remove_args=None,
+        ),
+    )
+    monkeypatch.setitem(interop.RUN_PLATFORMS, "future", ["future"])
+    monkeypatch.setattr(
+        interop,
+        "_run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no spawn without a mechanism")),
+    )
+
+    result = interop.run_task("future", "--help")
+
+    assert result.ok is False and result.exit_code is None
+    assert "literal prompt" in result.unsupported_reason
+    assert result.command == []
 
 
 # ─── CLI rename + kept alias + `harnesses run` ──────────────────────────────

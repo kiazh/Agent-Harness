@@ -162,18 +162,23 @@ Authenticated human management methods for the external-harness surface:
 
 | Method | Params | Result |
 |---|---|---|
-| `interop.list` | `{}` | `{harnesses: [{key, label, installed, version, running, registered, scope, runSupported, runHint}], stateFile}` |
+| `interop.list` | `{}` | `{harnesses: [{key, label, installed, version, running, registered, scope, runSupported, runHint}], stateFile, runTimeoutSeconds}` |
 | `interop.enable` | `{platform, scope?, dry_run?}` | `machina.interop.ActionResult` (`platform`, `action`, `ok`, `changed`, `message`, `steps`, `verify`, `argv`) |
 | `interop.disable` | `{platform}` | `machina.interop.ActionResult` |
 | `interop.run` | `{platform, prompt, timeout?}` | `{ok, exitCode, command, stdout, stderr, unsupportedReason}` |
 
 `interop.list` takes one on-demand detection pass, then reports each supported
 harness with `runSupported`/`runHint` from `machina.interop.supported_runs`;
-`stateFile` is the shared interop state path. `interop.run` delegates one
-prompt into a harness on a worker thread, bounded (`timeout` 1–900s, default
-300) and capped (stdout 32k, stderr 8k), with both streams redacted;
-`unsupportedReason` is set (and `ok` false) when the harness has no run
-surface. The TUI drives this as `/harnesses` (menu → Status, Register,
-Unregister, Run a task); register/unregister edit platform config outside this
-repository behind an explicit confirmation. Streaming harness output is not
-in scope — one bounded result per invocation.
+`stateFile` is the shared interop state path, and `runTimeoutSeconds` is the
+number of seconds `interop.run` waits when the request omits `timeout`
+(currently 300). `interop.run` delegates one prompt into a harness on a worker
+thread, bounded (`timeout` in seconds, 1–900, default 300; any other value is
+invalid params) and capped (stdout 32k, stderr 8k characters), with both
+streams redacted; `unsupportedReason` is set (and `ok` false) when the harness
+has no run surface. The TUI drives this as `/harnesses` (menu → Status,
+Register, Unregister, Run a task): it reads `runTimeoutSeconds`, passes it back
+as the explicit `timeout`, and sizes its client clock past it so a still-running
+harness is never abandoned early; without the field it refuses to start a run.
+Register and unregister edit platform config outside this repository behind an
+explicit confirmation. Streaming harness output is not in scope — one bounded
+result per invocation.

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
+import { JsonRpcChannel } from "../src/gateway.ts";
 import type { GatewayClient } from "../src/gateway.js";
 import type { GatewayEvent, SessionInfo } from "../src/protocol.js";
 
@@ -134,6 +135,33 @@ class FakeClient {
 	/** Simulate the gateway sending an event. */
 	emit(event: GatewayEvent): void {
 		this.onEvent?.(event);
+	}
+}
+
+/**
+ * GatewayClient stand-in backed by the real transport-agnostic channel, so
+ * request-timeout semantics under fake timers are the production ones.
+ */
+class ChannelClient {
+	readonly frames: Array<{ id: number; method: string; params: Record<string, unknown> }> = [];
+	readonly channel = new JsonRpcChannel((line) => {
+		this.frames.push(JSON.parse(line) as (typeof this.frames)[number]);
+	});
+
+	start(): void {}
+	stderr(): string[] {
+		return [];
+	}
+	async stop(): Promise<void> {}
+
+	request<T>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
+		return this.channel.request<T>(method, params, timeoutMs);
+	}
+
+	/** Answer the most recent request frame with *result*. */
+	reply(result: unknown): void {
+		const frame = this.frames.at(-1)!;
+		this.channel.handleLine(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result }));
 	}
 }
 
@@ -521,4 +549,54 @@ test("writeFile creates new files but never overwrites existing ones", async () 
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+});
+
+test("interop.run client clock outlasts the backend run deadline (H22)", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const tui = new FakeTUI();
+	const client = new ChannelClient();
+	const app = new App(tui, client as unknown as GatewayClient);
+
+	// /harnesses passes the gateway-surfaced deadline as `timeout` seconds.
+	const pending = app.request<{ ok: boolean }>("interop.run", {
+		platform: "codex",
+		prompt: "run a long task",
+		timeout: 300,
+	});
+	const frame = client.frames[0]!;
+	assert.equal(frame.method, "interop.run");
+
+	let settled: unknown;
+	void pending.then(
+		() => { settled = "resolved"; },
+		(error) => { settled = error; },
+	);
+
+	// The old fixed 120s budget aborted here while the harness kept running.
+	t.mock.timers.tick(120_000);
+	await Promise.resolve();
+	assert.equal(settled, undefined, "must not abort before the backend deadline");
+
+	// At the backend deadline the client is still waiting for the reply.
+	t.mock.timers.tick(180_000);
+	await Promise.resolve();
+	assert.equal(settled, undefined, "must outlast the backend deadline");
+
+	// The late-but-successful reply lands instead of being discarded.
+	client.reply({ ok: true, exitCode: 0 });
+	assert.deepEqual(await pending, { ok: true, exitCode: 0 });
+});
+
+test("interop.run without a reply still stops waiting on the client clock (H22)", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const tui = new FakeTUI();
+	const client = new ChannelClient();
+	const app = new App(tui, client as unknown as GatewayClient);
+
+	const pending = app.request("interop.run", { platform: "codex", prompt: "x", timeout: 300 });
+	const rejection = pending.catch((error: Error) => error);
+
+	t.mock.timers.tick(300_000 + 60_000);
+	const error = await rejection;
+	assert.match((error as Error).message, /interop\.run/);
 });

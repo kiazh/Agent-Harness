@@ -18,6 +18,12 @@ import type {
 } from "../protocol.ts";
 import { confirm, type Command, type FeatureHost } from "./types.ts";
 
+/** Positive finite run-deadline seconds, or undefined when not reported (H22). */
+function runDeadlineSeconds(body: HarnessListResult): number | undefined {
+	const value = body.runTimeoutSeconds;
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 /** Compact one-line state summary for the picker row. */
 function summary(row: HarnessRow): string {
 	const parts: string[] = [];
@@ -91,10 +97,25 @@ function renderRun(host: FeatureHost, row: HarnessRow, result: HarnessRunResult)
 	}
 }
 
-async function runTask(host: FeatureHost, row: HarnessRow): Promise<void> {
+async function runTask(
+	host: FeatureHost,
+	row: HarnessRow,
+	runTimeoutSeconds: number | undefined,
+): Promise<void> {
 	if (!row.runSupported) {
 		host.print(
 			`${row.label}: running a task is not supported${row.runHint ? ` — ${row.runHint}` : ""}.`,
+			"warning",
+		);
+		return;
+	}
+	if (runTimeoutSeconds === undefined) {
+		// H22: without the gateway's deadline the client cannot know how long
+		// the harness may run, and its own clock could abandon a live process.
+		host.print(
+			`${row.label}: this gateway does not report its harness run deadline; ` +
+				"refusing to start a task the UI could not wait for. Update Machina, " +
+				`or run it from the shell: machina harnesses run ${row.key} "<prompt>".`,
 			"warning",
 		);
 		return;
@@ -116,6 +137,9 @@ async function runTask(host: FeatureHost, row: HarnessRow): Promise<void> {
 	const result = await host.request<HarnessRunResult>("interop.run", {
 		platform: row.key,
 		prompt,
+		// The gateway applies exactly this deadline; app.ts sizes the client
+		// clock past it so a late-but-successful run is never discarded (H22).
+		timeout: runTimeoutSeconds,
 	});
 	renderRun(host, row, result);
 }
@@ -124,6 +148,7 @@ async function actOnHarness(
 	host: FeatureHost,
 	row: HarnessRow,
 	stateFile: string | null,
+	runTimeoutSeconds: number | undefined,
 ): Promise<void> {
 	if (!row.runSupported) {
 		host.print(
@@ -152,7 +177,7 @@ async function actOnHarness(
 			await unregisterHarness(host, row);
 			return;
 		case "run":
-			await runTask(host, row);
+			await runTask(host, row, runTimeoutSeconds);
 			return;
 		default:
 			return;
@@ -176,7 +201,7 @@ async function openMenu(host: FeatureHost): Promise<void> {
 	);
 	if (!choice) return;
 	const row = rows.find((entry) => entry.key === choice.value);
-	if (row) await actOnHarness(host, row, body.stateFile);
+	if (row) await actOnHarness(host, row, body.stateFile, runDeadlineSeconds(body));
 }
 
 export const harnessesCommand: Command = {
@@ -192,6 +217,6 @@ export const harnessesCommand: Command = {
 		const body = await host.request<HarnessListResult>("interop.list");
 		const row = (body.harnesses ?? []).find((entry) => entry.key === key);
 		if (!row) throw new Error(`Unknown harness "${key}". Run /harnesses to list them.`);
-		await actOnHarness(host, row, body.stateFile);
+		await actOnHarness(host, row, body.stateFile, runDeadlineSeconds(body));
 	},
 };

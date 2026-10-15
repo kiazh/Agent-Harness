@@ -174,9 +174,21 @@ async def test_interop_list_reports_state_and_runnability(stub_interop):
             },
         ],
         "stateFile": "/tmp/interop-state.json",
+        # H22: the UI aligns its client clock with this deadline.
+        "runTimeoutSeconds": feature.DEFAULT_RUN_TIMEOUT_SECONDS,
     }
     json.dumps(result)  # wire-safe: explicit fields, no dataclasses or binary paths
     assert stub_interop["detect"], "detection must run on-demand"
+
+
+async def test_interop_list_surfaces_the_authoritative_run_deadline(stub_interop):
+    """The deadline the UI must outlast comes from the backend, not the UI."""
+    result = await feature.interop_list(None, {})
+    assert result["runTimeoutSeconds"] == feature.DEFAULT_RUN_TIMEOUT_SECONDS
+    # And the default the run handler actually applies is the same number.
+    calls = stub_interop["runs"]
+    await feature.interop_run(None, {"platform": "codex", "prompt": "go"})
+    assert calls[-1]["timeout"] == result["runTimeoutSeconds"]
 
 
 async def test_interop_list_is_empty_when_nothing_detected(monkeypatch):
@@ -184,7 +196,11 @@ async def test_interop_list_is_empty_when_nothing_detected(monkeypatch):
     monkeypatch.setattr(feature, "supported_runs", lambda: {})
     monkeypatch.setattr(feature, "state_path", lambda: "/tmp/interop-state.json")
     result = await feature.interop_list(None, {})
-    assert result == {"harnesses": [], "stateFile": "/tmp/interop-state.json"}
+    assert result == {
+        "harnesses": [],
+        "stateFile": "/tmp/interop-state.json",
+        "runTimeoutSeconds": feature.DEFAULT_RUN_TIMEOUT_SECONDS,
+    }
 
 
 # ─── interop.run ────────────────────────────────────────────────────────────

@@ -119,7 +119,11 @@ const run = (text: string, host: HarnessesFakeHost) => runCommand(parseCommand(t
 
 function hostWithRows(): HarnessesFakeHost {
 	const host = new HarnessesFakeHost();
-	host.responses["interop.list"] = { harnesses: ROWS, stateFile: "/tmp/interop-state.json" };
+	host.responses["interop.list"] = {
+		harnesses: ROWS,
+		stateFile: "/tmp/interop-state.json",
+		runTimeoutSeconds: 300,
+	};
 	return host;
 }
 
@@ -214,9 +218,11 @@ test("/harnesses Run a task prompts, warns, calls interop.run and renders bounde
 	host.responses["interop.run"] = RUN_RESULT;
 	await run("/harnesses", host);
 
+	// H22: the gateway-surfaced deadline rides along as the explicit timeout,
+	// so the client clock (app.ts) is aligned with the backend's own deadline.
 	assert.deepEqual(host.calls.at(-1), {
 		method: "interop.run",
-		params: { platform: "codex", prompt: "summarize the repo" },
+		params: { platform: "codex", prompt: "summarize the repo", timeout: 300 },
 	});
 	const confirmTitle = host.pickCalls.at(-1)!.title;
 	assert.match(confirmTitle, /Run this prompt inside Codex\?/);
@@ -224,6 +230,22 @@ test("/harnesses Run a task prompts, warns, calls interop.run and renders bounde
 	assert.match(host.text(), /Codex: completed · exit code 0/);
 	assert.match(host.text(), /command: codex exec --prompt-text/);
 	assert.match(host.text(), /done/);
+});
+
+test("/harnesses Run a task refuses when the gateway does not report its deadline", async () => {
+	const host = new HarnessesFakeHost();
+	host.responses["interop.list"] = {
+		harnesses: ROWS,
+		stateFile: "/tmp/interop-state.json",
+		// No runTimeoutSeconds: the UI cannot know how long the backend runs.
+	};
+	host.answerQueue.push("codex", "run");
+	await run("/harnesses", host);
+
+	// Never start a host-accessing task whose deadline the client cannot wait for.
+	assert.ok(!host.calls.some((call) => call.method === "interop.run"));
+	assert.match(host.last().text, /does not report its harness run deadline/);
+	assert.equal(host.last().kind, "warning");
 });
 
 test("/harnesses Run a task cancel (or empty prompt) never calls interop.run", async () => {

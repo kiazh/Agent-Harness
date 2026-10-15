@@ -546,6 +546,8 @@ export interface HarnessListResult {
  harnesses: HarnessRow[];
  /** Path of the shared interop state file, for the status view. */
  stateFile: string | null;
+ /** Default interop.run deadline in seconds; the UI passes it back as `timeout`. */
+ runTimeoutSeconds: number;
 }
 
 /** Bounded, redacted outcome of interop.run. */

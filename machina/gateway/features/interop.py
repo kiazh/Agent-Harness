@@ -192,7 +192,10 @@ async def interop_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     One on-demand detection pass (bounded probes run on a worker thread), plus
     the frozen ``supported_runs`` map deciding which harnesses the UI may offer
     to run a task in. ``stateFile`` is the shared interop state path so the TUI
-    can show where registration state lives.
+    can show where registration state lives. ``runTimeoutSeconds`` is the
+    deadline ``interop.run`` applies by default, surfaced so the UI can align
+    its client clock with the backend instead of timing out a still-running
+    harness (finding H22).
     """
     results, runs = await asyncio.to_thread(lambda: (detect(), supported_runs()))
     harnesses = []
@@ -212,7 +215,11 @@ async def interop_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
             }
         )
     state_file = await asyncio.to_thread(state_path)
-    return {"harnesses": harnesses, "stateFile": str(state_file) if state_file else None}
+    return {
+        "harnesses": harnesses,
+        "stateFile": str(state_file) if state_file else None,
+        "runTimeoutSeconds": DEFAULT_RUN_TIMEOUT_SECONDS,
+    }
 
 
 async def interop_run(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

@@ -202,6 +202,13 @@ export class App implements FeatureHost {
 	// server's aborts the RPC while the child is still winding down.
 	private static readonly DELEGATION_TIMEOUT_MS = 150_000;
 
+	// `/harnesses` wind-down grace: the gateway kills a delegated run's whole
+	// process tree at the deadline it was given, then drains and redacts the
+	// output; the RPC settles a few seconds later at most. The client clock
+	// adds this margin on top of that deadline so a late-but-successful run is
+	// never discarded (finding H22).
+	private static readonly HARNESS_RUN_GRACE_MS = 15_000;
+
 	/**
 	 * Dormant per-session state (turn binding + token totals) for the last N
 	 * sessions visited. Older sessions are forgotten so a long-lived UI with
@@ -334,8 +341,7 @@ export class App implements FeatureHost {
 
 	// ─── FeatureHost ─────────────────────────────────────────────────────────
 	async request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-		const timeout = method === "agents.run" ? App.DELEGATION_TIMEOUT_MS : 120_000;
-		const result = await this.client.request<T>(method, params, timeout);
+		const result = await this.client.request<T>(method, params, App.requestTimeoutMs(method, params));
 		if (["mode.get", "mode.set", "mode.revoke"].includes(method)) {
 			const mode = (result as { mode?: string }).mode;
 			if (typeof mode === "string") this.footer.mode = mode;
@@ -343,6 +349,28 @@ export class App implements FeatureHost {
 		}
 		if (method === "session.setModel") this.adoptSessionRoute(result);
 		return result;
+	}
+
+	/**
+	 * Client clock per method. A client timeout at or below its backend
+	 * deadline aborts the RPC while the other side is still working, so both
+	 * budgets below outlast their server-side counterpart (finding H22).
+	 * - `agents.run`: the orchestrator enforces DELEGATION_TIMEOUT_SECONDS.
+	 * - `interop.run`: `/harnesses` passes the gateway's own deadline
+	 *   (`interop.list.runTimeoutSeconds`) as `timeout`; wait past it by the
+	 *   wind-down grace. The feature refuses to start a run whose deadline the
+	 *   gateway did not report, so this branch always has the authoritative
+	 *   number when a harness actually runs.
+	 */
+	private static requestTimeoutMs(method: string, params: Record<string, unknown>): number {
+		if (method === "agents.run") return App.DELEGATION_TIMEOUT_MS;
+		if (method === "interop.run") {
+			const seconds = params.timeout;
+			if (typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0) {
+				return seconds * 1000 + App.HARNESS_RUN_GRACE_MS;
+			}
+		}
+		return 120_000;
 	}
 
 	/**
