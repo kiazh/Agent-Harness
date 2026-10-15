@@ -1071,6 +1071,14 @@ class JobRunner:
         close); production agents are owned and closed by the caller.
         Precedence: job overrides > session settings > definition defaults
         > global defaults (resolved inside the shared factory).
+
+        R5-C (finding 7): the JOB's agent identity governs the run, not the
+        session owner's. The resolved session is passed through with only
+        ``agent_id`` replaced by ``agent_name`` — every authority
+        restriction stays intact (``delegation_authority`` caps are still
+        intersected inside the factory; unknown specialists still fail
+        closed). When the job already names the session's agent the session
+        is passed unchanged.
         """
         if self._agent_factory is not None:
             return self._agent_factory(agent_name)
@@ -1102,6 +1110,15 @@ class JobRunner:
                 created_at=_dt.now(_UTC),
                 last_activity=_dt.now(_UTC),
             )
+        elif agent_name and agent_name != session.agent_id:
+            # R5-C: honor the job's selected identity on the owned session.
+            # Only the identity is replaced; delegation_authority,
+            # execution_mode, and model/provider settings stay the
+            # session's, so the run keeps the session's authority
+            # restrictions (never widened by the job).
+            from dataclasses import replace as _replace
+
+            session = _replace(session, agent_id=agent_name)
         return await build_agent_for_session(
             session,
             provider_override=provider,
