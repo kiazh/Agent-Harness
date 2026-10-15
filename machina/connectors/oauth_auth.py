@@ -26,12 +26,18 @@ class OAuthBearerAuth(_AuthBase):  # type: ignore[misc]
         deadline_factory,
         *,
         register_token=None,
+        config=None,
     ) -> None:
         self._coordinator = coordinator
         self._binding = binding
         self._expected_grant = dict(expected_grant)
         self._deadline_factory = deadline_factory
         self._register_token = register_token
+        # Validated immutable configuration snapshot of the owning connection
+        # (H13): token checks validate against it instead of asking the
+        # coordinator to re-resolve config through the service, which can hold
+        # the configuration lock for the whole connect dispatch.
+        self._config = config
 
     async def async_auth_flow(self, request):
         from machina.connectors.models import ConnectionFailed
@@ -47,7 +53,10 @@ class OAuthBearerAuth(_AuthBase):  # type: ignore[misc]
         deadline = self._deadline_factory()
         try:
             token = await self._coordinator.ensure_token(
-                self._binding, expected_grant=self._expected_grant, deadline=deadline
+                self._binding,
+                expected_grant=self._expected_grant,
+                deadline=deadline,
+                config=self._config,
             )
         except Exception as exc:
             from machina.connectors.models import AuthRequired

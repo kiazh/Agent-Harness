@@ -40,7 +40,12 @@ from machina.connectors.oauth_network import (
     OAuthNetworkError,
     normalize_resource,
 )
-from machina.connectors.oauth_store import OAuthCredentialStore, credential_key_for
+from machina.connectors.oauth_store import (
+    OAuthCredentialStore,
+    OAuthPublicationCancelled,
+    PublicationFence,
+    credential_key_for,
+)
 from machina.observability.diagnostics import record_failure
 
 
@@ -365,6 +370,9 @@ class OAuthCoordinator:
             "client": None,
             "verifier": "",
             "task": None,
+            # H16: shared with the store's commit section so cancellation can
+            # be linearized with credential publication.
+            "publication_fence": PublicationFence(),
         }
         async with self._lock:
             self._operations[operation_id] = operation
@@ -390,6 +398,7 @@ class OAuthCoordinator:
             owner = operation["owner"]
             callback = operation["callback"]
             connector_id = operation["connector_id"]
+            fence = operation.get("publication_fence")
         from machina.permissions import broker
         from machina.permissions import store as perm_store
         from machina.permissions.policy import build_request
@@ -588,7 +597,9 @@ class OAuthCoordinator:
                     refresh_state="idle",
                 )
                 try:
-                    await self._creds.save(record, expected_generation=expected_gen)
+                    await self._creds.save(record, expected_generation=expected_gen, fence=fence)
+                except OAuthPublicationCancelled:
+                    raise OAuthError("authorization cancelled", reason="oauth_cancelled") from None
                 except ValueError as exc:
                     raise OAuthError(
                         "credential generation changed", reason="oauth_config_changed"
@@ -598,6 +609,13 @@ class OAuthCoordinator:
                         "credential storage failed", reason="oauth_storage_unavailable"
                     ) from exc
                 async with self._lock:
+                    if operation["state"] == "cancelled":
+                        # Cancellation won the race after the store published;
+                        # retire the grant this flow just wrote before
+                        # reporting completion (H16).
+                        published = fence.published if fence is not None else record
+                        await self._retire_published(published)
+                        raise OAuthError("authorization cancelled", reason="oauth_cancelled")
                     operation["state"] = "complete"
                     operation["grant_id"] = record.grant_id
                 outcome = "completed"
@@ -852,6 +870,29 @@ class OAuthCoordinator:
         if config.revision != handle["snapshot"].config_revision:
             raise OAuthError("configuration changed", reason="oauth_config_changed")
 
+    async def _retire_published(self, published: OAuthCredentialRecord) -> None:
+        """Retire exactly the grant a cancelled flow published (H16).
+
+        Compare-and-swap on the published generation: a newer authority
+        (logout, replacement, later grant) makes the store refuse and the
+        newer state wins; nothing else is touched.
+        """
+        binding = OAuthBinding(
+            connector_id=published.connector_id,
+            credential_key=published.credential_key,
+            resource=published.resource,
+            issuer=published.issuer,
+            client_id=published.client_id,
+        )
+        try:
+            await self._creds.forget(binding, expected_generation=published.generation)
+        except ValueError:
+            pass  # superseded by newer authority; the store's CAS held
+        except Exception as _boundary_error:
+            record_failure("oauth.cancel.reconcile", _boundary_error)
+        else:
+            self._auth_cache.pop(published.connector_id, None)
+
     async def authorization_url(
         self, operation_id: str, owner: OAuthOwner, *, connector_id: str | None = None
     ) -> str:
@@ -921,6 +962,22 @@ class OAuthCoordinator:
             operation["reason"] = "oauth_cancelled"
             task = operation.get("task")
             callback = operation.get("callback")
+            fence = operation.get("publication_fence")
+        published = None
+        if fence is not None:
+            try:
+                # Fence the in-flight commit *before* cancelling: whichever of
+                # {publication, cancellation} reaches the store's commit lock
+                # first wins, and a publication that already won is reported
+                # back so it can be retired before this cancel returns (H16).
+                await self._creds.fence_publication(fence)
+            except Exception as _boundary_error:
+                # Bounded fence failure (index lock busy past the timeout): the
+                # task cancellation below still stops the flow; a commit that
+                # raced past the fence is reconciled by the completion path.
+                record_failure("oauth.cancel.fence", _boundary_error)
+            else:
+                published = fence.published
         if task is not None and not task.done():
             task.cancel()
         if callback is not None:
@@ -928,13 +985,18 @@ class OAuthCoordinator:
                 await callback.aclose()
             except Exception:
                 pass
+        if published is not None:
+            await self._retire_published(published)
         return True
 
     async def forget(
         self, connector_id: str, owner: OAuthOwner, *, expected_generation: int, revoke: bool
     ) -> dict[str, Any]:
         config = await self._resolve_config(connector_id)
-        # Cancel this connector's flows first.
+        # Cancel this connector's flows first; fence their in-flight
+        # publications under the store's commit lock so the retirement scan
+        # below observes a committed record (or the commit is refused) (H16).
+        fences: list[PublicationFence] = []
         async with self._lock:
             for op in list(self._operations.values()):
                 if op["connector_id"] == connector_id:
@@ -943,9 +1005,16 @@ class OAuthCoordinator:
                     task = op.get("task")
                     if task is not None and not task.done():
                         task.cancel()
+                    if op.get("publication_fence") is not None:
+                        fences.append(op["publication_fence"])
             for pid, prev in list(self._previews.items()):
                 if prev["connector_id"] == connector_id:
                     await self._close_preview_locked(pid)
+        for fence in fences:
+            try:
+                await self._creds.fence_publication(fence)
+            except Exception as _boundary_error:
+                record_failure("oauth.forget.fence", _boundary_error)
         # Local invalidation first (tombstone), then one bounded revoke attempt.
         binding = await self._primary_binding(config)
         remote = "not_requested"
@@ -1114,6 +1183,7 @@ class OAuthCoordinator:
     async def invalidate_connector(
         self, connector_id: str, *, config_revision: int | None = None
     ) -> None:
+        fences: list[PublicationFence] = []
         async with self._lock:
             for op in list(self._operations.values()):
                 if op["connector_id"] == connector_id and (
@@ -1124,11 +1194,18 @@ class OAuthCoordinator:
                     task = op.get("task")
                     if task is not None and not task.done():
                         task.cancel()
+                    if op.get("publication_fence") is not None:
+                        fences.append(op["publication_fence"])
             for pid, prev in list(self._previews.items()):
                 if prev["connector_id"] == connector_id and (
                     config_revision is None or prev["snapshot"].config_revision <= config_revision
                 ):
                     await self._close_preview_locked(pid)
+        for fence in fences:
+            try:
+                await self._creds.fence_publication(fence)
+            except Exception as _boundary_error:
+                record_failure("oauth.invalidate.fence", _boundary_error)
         self._auth_cache.pop(connector_id, None)
         await self._retire_connector_credentials(connector_id, config_revision=config_revision)
 
@@ -1250,8 +1327,21 @@ class OAuthCoordinator:
             return None
 
     async def ensure_token(
-        self, binding: OAuthBinding, *, expected_grant: dict[str, Any], deadline: float
+        self,
+        binding: OAuthBinding,
+        *,
+        expected_grant: dict[str, Any],
+        deadline: float,
+        config=None,
     ) -> str:
+        """Return a usable access token; refresh once when within the skew.
+
+        ``config`` is an optional validated immutable configuration snapshot
+        (the caller's approved dispatch configuration). When provided, grant
+        validation uses it instead of re-resolving through ``service.refresh``;
+        a connect dispatch may hold the service configuration lock, and that
+        refresh is non-reentrant (H13).
+        """
         try:
             record = await self._creds.load(binding)
         except Exception as exc:
@@ -1260,8 +1350,8 @@ class OAuthCoordinator:
             ) from exc
         if record is None:
             raise OAuthError("authorization required", reason="oauth_reauthorization_required")
-        config = await self._resolve_config(binding.connector_id)
-        if not self._record_matches_config(record, config, binding):
+        current = config if config is not None else await self._resolve_config(binding.connector_id)
+        if not self._record_matches_config(record, current, binding):
             self._auth_cache.pop(binding.connector_id, None)
             raise OAuthError("configuration changed", reason="oauth_config_changed")
         if (
@@ -1290,8 +1380,10 @@ class OAuthCoordinator:
             fresh = await self._creds.load(binding)
             if fresh is None:
                 raise OAuthError("authorization required", reason="oauth_reauthorization_required")
-            config = await self._resolve_config(binding.connector_id)
-            if not self._record_matches_config(fresh, config, binding):
+            current = (
+                config if config is not None else await self._resolve_config(binding.connector_id)
+            )
+            if not self._record_matches_config(fresh, current, binding):
                 self._auth_cache.pop(binding.connector_id, None)
                 raise OAuthError("configuration changed", reason="oauth_config_changed")
             if fresh.refresh_state != "idle":
@@ -1325,7 +1417,7 @@ class OAuthCoordinator:
                     "refresh journal unavailable", reason="oauth_storage_unavailable"
                 ) from exc
             self._auth_cache.pop(binding.connector_id, None)
-            network = self._network_factory(local_access=bool(config.local_access))
+            network = self._network_factory(local_access=bool(current.local_access))
             try:
                 token = await network.refresh_token(fresh, deadline=deadline)
             except OAuthNetworkError as exc:
@@ -1365,7 +1457,9 @@ class OAuthCoordinator:
                 }
             )
             # Generation check at commit defeats late refresh after logout.
-            current = await self._resolve_config(binding.connector_id)
+            current = (
+                config if config is not None else await self._resolve_config(binding.connector_id)
+            )
             if not self._record_matches_config(fresh, current, binding):
                 raise OAuthError(
                     "configuration changed during refresh", reason="oauth_config_changed"

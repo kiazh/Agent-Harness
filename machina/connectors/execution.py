@@ -307,7 +307,9 @@ async def _oauth_preflight(service, config, *, remaining: float) -> None:
     )
     deadline = asyncio.get_running_loop().time() + max(0.0, remaining)
     try:
-        token = await coordinator.ensure_token(binding, expected_grant=identity, deadline=deadline)
+        token = await coordinator.ensure_token(
+            binding, expected_grant=identity, deadline=deadline, config=config
+        )
     except AuthRequired as exc:
         raise ConnectorToolError(str(exc) or "authorization required") from exc
     except Exception as exc:

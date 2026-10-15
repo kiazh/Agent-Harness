@@ -97,6 +97,11 @@ class _PipeStderr:
 
     A pipe with a draining task: the buffer stops at the cap no matter how
     much a server spews. No disk involved; nothing here is ever logged raw.
+
+    The drain waits for loop-level pipe readiness (``add_reader``), never for a
+    default-executor worker: one blocked ``os.read`` per live connector would
+    let enough quiet servers occupy every shared worker and stall unrelated
+    ``to_thread`` work (H15).
     """
 
     def __init__(self, cap: int = MAX_STDERR_BYTES) -> None:
@@ -108,24 +113,65 @@ class _PipeStderr:
         self.file = os.fdopen(write_fd, "w", encoding="utf-8", errors="replace")
         self._drainer: asyncio.Task | None = None
 
+    def _consume(self, chunk: bytes) -> None:
+        text = chunk.decode("utf-8", "replace")
+        if self._size >= self._cap:
+            self.truncated = True
+            return
+        room = self._cap - self._size
+        self._chunks.append(text[:room])
+        self._size += min(len(text), room)
+        if len(text) > room:
+            self.truncated = True
+
     async def _drain_loop(self) -> None:
         loop = asyncio.get_running_loop()
+        readable: asyncio.Event | None = None
         try:
+            # Non-blocking reads under selector readiness (same discipline as
+            # asyncio's own pipe transports): after the pipe drains, the
+            # selector can deliver one stale activation and a blocking read
+            # there would park the event loop; a spurious wakeup instead
+            # surfaces as BlockingIOError and the reader re-arms.
+            os.set_blocking(self._read_fd, False)
+            ready = asyncio.Event()
+            loop.add_reader(self._read_fd, ready.set)
+            readable = ready
+        except (NotImplementedError, RuntimeError, ValueError, OSError):
+            # The loop cannot watch raw pipe fds (e.g. a proactor transport):
+            # restore blocking mode and use the executor read below.
+            try:
+                os.set_blocking(self._read_fd, True)
+            except (OSError, ValueError):
+                pass
+            readable = None
+        try:
+            if readable is None:
+                while True:
+                    chunk = await loop.run_in_executor(None, os.read, self._read_fd, 65536)
+                    if not chunk:
+                        return
+                    self._consume(chunk)
             while True:
-                chunk = await loop.run_in_executor(None, os.read, self._read_fd, 65536)
+                await readable.wait()
+                readable.clear()
+                try:
+                    chunk = os.read(self._read_fd, 65536)
+                except BlockingIOError:
+                    # Stale selector activation for an emptied pipe: no data
+                    # and not EOF; the reader stays armed for the next write.
+                    continue
                 if not chunk:
                     return
-                text = chunk.decode("utf-8", "replace")
-                if self._size >= self._cap:
-                    self.truncated = True
-                    continue
-                room = self._cap - self._size
-                self._chunks.append(text[:room])
-                self._size += min(len(text), room)
-                if len(text) > room:
-                    self.truncated = True
+                self._consume(chunk)
         except (OSError, ValueError):
             return
+        finally:
+            if readable is not None:
+                try:
+                    loop.remove_reader(self._read_fd)
+                except (OSError, ValueError):
+                    pass
 
     def start(self) -> None:
         if self._drainer is None:
@@ -141,6 +187,13 @@ class _PipeStderr:
                 await asyncio.wait_for(asyncio.shield(self._drainer), timeout=2.0)
             except (TimeoutError, asyncio.CancelledError):
                 self._drainer.cancel()
+                # Let the reader task unwind (it removes its loop reader)
+                # before the fd closes: a reader still registered on a closed
+                # descriptor makes the selector unregister a dead fd.
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._drainer), timeout=1.0)
+                except (TimeoutError, asyncio.CancelledError):
+                    pass
         try:
             os.close(self._read_fd)
         except OSError:
@@ -461,12 +514,19 @@ class MCPConnection:
             raise AuthRequired(self.last_error) from exc
 
     async def _oauth_preflight(self, coordinator):
-        """Bounded token preflight before dispatch; never opens a browser."""
+        """Bounded token preflight before dispatch; never opens a browser.
+
+        ``self.config`` is the connection's validated immutable snapshot. The
+        coordinator validates the grant against it instead of resolving config
+        through ``service.refresh()``: connect dispatch can hold the service
+        configuration lock here, and that refresh would re-enter the same
+        non-reentrant lock (H13).
+        """
         from machina.connectors.oauth_auth import OAuthBearerAuth
 
         if coordinator is None:
             raise AuthRequired("oauth authorization is required; authorize via /mcp")
-        await coordinator.refresh_auth_cache(self.config.id)
+        await coordinator.refresh_auth_cache(self.config.id, config=self.config)
         identity = coordinator.auth_identity(self.config.id)
         if identity is None:
             raise AuthRequired("oauth authorization is required; authorize via /mcp")
@@ -483,7 +543,10 @@ class MCPConnection:
         deadline = loop.time() + min(self.config.connect_timeout, 15.0)
         try:
             token = await coordinator.ensure_token(
-                binding, expected_grant=identity, deadline=deadline
+                binding,
+                expected_grant=identity,
+                deadline=deadline,
+                config=self.config,
             )
         except Exception as exc:
             raise AuthRequired(str(exc) or "authorization required") from exc
@@ -492,7 +555,12 @@ class MCPConnection:
             return asyncio.get_running_loop().time() + self.config.call_timeout
 
         return OAuthBearerAuth(
-            coordinator, binding, identity, _deadline, register_token=self.register_oauth_token
+            coordinator,
+            binding,
+            identity,
+            _deadline,
+            register_token=self.register_oauth_token,
+            config=self.config,
         ), token
 
     def register_oauth_token(self, token_value: str) -> None:

@@ -57,6 +57,40 @@ def _safe_name(key: str) -> str:
     return key
 
 
+class OAuthPublicationCancelled(Exception):
+    """A credential publication was fenced by a cancellation (H16).
+
+    Distinct from ``ValueError`` so generation-mismatch handling cannot absorb
+    it: callers map it to a cancelled authorization, not a changed authority.
+    """
+
+
+class PublicationFence:
+    """Shared cancellation/publication state for one credential commit (H16).
+
+    ``save`` consults ``cancelled`` while holding the store's index lock, and
+    ``fence_publication`` sets it under that same lock. The two are therefore
+    linearized: after fencing returns, the in-flight commit either already
+    published (the record is available as ``published``) or it will refuse to
+    publish. Fencing waits for a commit already holding the index lock rather
+    than leaving an undetermined outcome behind.
+    """
+
+    def __init__(self) -> None:
+        self._cancelled = threading.Event()
+        self.published: OAuthCredentialRecord | None = None
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def mark_published(self, record: OAuthCredentialRecord) -> None:
+        self.published = record
+
+
 def _check_secret_file(path: Path, *, max_bytes: int) -> None:
     try:
         st = path.lstat()
@@ -364,7 +398,11 @@ class OAuthCredentialStore:
         }
 
     async def save(
-        self, record: OAuthCredentialRecord, *, expected_generation: int
+        self,
+        record: OAuthCredentialRecord,
+        *,
+        expected_generation: int,
+        fence: PublicationFence | None = None,
     ) -> OAuthCredentialRecord:
         key = _safe_name(record.credential_key)
         _ensure_dirs(self.root)
@@ -380,11 +418,14 @@ class OAuthCredentialStore:
         def _commit() -> OAuthCredentialRecord:
             fd = _lock_file(self._lock_path())
             acquired = False
+            keep_envelope = False
             try:
                 acquired = _file_lock_acquire(fd, timeout=OAUTH_LOCK_SECONDS)
                 if not acquired:
                     raise TimeoutError("oauth store lock acquisition timed out")
                 try:
+                    if fence is not None and fence.cancelled:
+                        raise OAuthPublicationCancelled("credential publication cancelled")
                     index = self._read_index()
                     current, current_gen, floor = _index_floor(index, key)
                     if expected_generation != floor:
@@ -409,7 +450,21 @@ class OAuthCredentialStore:
                         "connector_id": record.connector_id,
                         "config_revision": record.config_revision,
                     }
-                    self._write_index(index)
+                    try:
+                        self._write_index(index)
+                    except BaseException:
+                        # H17: _atomic_write replaces the index *before* its
+                        # final directory fsync, so a raising write may already
+                        # be visible. A visible entry naming this envelope is a
+                        # committed credential (its bytes were fsynced before
+                        # the rename): keep it instead of deleting what the
+                        # index points at. An unreadable index also keeps the
+                        # envelope — a leaked file is recoverable, an orphaned
+                        # index entry loses the credential.
+                        published = self._index_references_envelope(key, envelope_name)
+                        if published is not True:
+                            keep_envelope = published is None
+                            raise
                     # GC: remove superseded envelopes for this key.
                     if current and current.get("envelope") != envelope_name:
                         old = self.root / "grants" / str(current["envelope"])
@@ -417,14 +472,17 @@ class OAuthCredentialStore:
                             old.unlink()
                         except OSError:
                             pass
+                    if fence is not None:
+                        fence.mark_published(record)
                     return record
                 finally:
                     _file_lock_release(fd)
             except BaseException:
-                try:
-                    envelope_path.unlink()
-                except OSError:
-                    pass
+                if not keep_envelope:
+                    try:
+                        envelope_path.unlink()
+                    except OSError:
+                        pass
                 raise
             finally:
                 if not acquired:
@@ -433,6 +491,40 @@ class OAuthCredentialStore:
         committed = await asyncio.to_thread(_commit)
 
         return committed
+
+    def _index_references_envelope(self, key: str, envelope_name: str) -> bool | None:
+        """Whether the visible index names ``envelope_name`` (None if unreadable)."""
+        try:
+            entry = self._read_index()["grants"].get(key)
+        except Exception:
+            return None
+        return bool(isinstance(entry, dict) and entry.get("envelope") == envelope_name)
+
+    async def fence_publication(self, fence: PublicationFence) -> None:
+        """Mark a credential publication cancelled under the index lock (H16).
+
+        Serialized with ``save``'s commit section: when this returns, the
+        in-flight commit either already published (``fence.published`` holds
+        the record) or is forbidden from publishing. Callers must reconcile a
+        published record before reporting the cancellation.
+        """
+
+        def _fence() -> None:
+            fd = _lock_file(self._lock_path())
+            acquired = False
+            try:
+                acquired = _file_lock_acquire(fd, timeout=OAUTH_LOCK_SECONDS)
+                if not acquired:
+                    raise TimeoutError("oauth store lock acquisition timed out")
+                try:
+                    fence.cancel()
+                finally:
+                    _file_lock_release(fd)
+            finally:
+                if not acquired:
+                    os.close(fd)
+
+        await asyncio.to_thread(_fence)
 
     async def forget(
         self,
