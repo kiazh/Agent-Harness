@@ -70,10 +70,12 @@ def test_update_write_failure_leaves_live_skill_and_disk_untouched(tmp_path, mon
     before = _snapshot(registry)
     disk_before = skill_file.read_bytes()
 
-    def _boom(self, *args, **kwargs):
+    def _boom(*args, **kwargs):
         raise OSError("injected write failure")
 
-    monkeypatch.setattr(Path, "write_text", _boom)
+    # The rewrite now publishes via mkstemp + os.replace (S5); inject at the
+    # publish step so a failure still leaves the live object + disk untouched.
+    monkeypatch.setattr("machina.skills.registry.os.replace", _boom)
     with pytest.raises(OSError):
         registry.update_skill("deploy", description="New valid description")
     assert _snapshot(registry) == before
@@ -85,10 +87,12 @@ def test_set_enabled_write_failure_leaves_live_skill_and_disk_untouched(tmp_path
     before = _snapshot(registry)
     disk_before = skill_file.read_bytes()
 
-    def _boom(self, *args, **kwargs):
+    def _boom(*args, **kwargs):
         raise OSError("injected write failure")
 
-    monkeypatch.setattr(Path, "write_text", _boom)
+    # The rewrite now publishes via mkstemp + os.replace (S5); inject at the
+    # publish step so a failure still leaves the live object + disk untouched.
+    monkeypatch.setattr("machina.skills.registry.os.replace", _boom)
     with pytest.raises(OSError):
         registry.set_enabled("deploy", False)
     assert _snapshot(registry) == before

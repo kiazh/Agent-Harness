@@ -1,0 +1,92 @@
+FFF.FFF.                                                                 [100%]
+=================================== FAILURES ===================================
+______________ test_azure_sas_sig_param_redacted_neighbors_intact ______________
+
+    def test_azure_sas_sig_param_redacted_neighbors_intact():
+        from machina.core.provider.audit import _sanitize_value
+    
+        out = _sanitize_value(AZURE_SAS)
+>       assert "abc123%2B%2F%3D" not in out
+E       AssertionError: assert 'abc123%2B%2F%3D' not in 'https://acc...123%2B%2F%3D'
+E         
+E         'abc123%2B%2F%3D' is contained here:
+E           Z&sp=r&sig=abc123%2B%2F%3D
+
+tests/test_final_review_2026_10_15_providers.py:112: AssertionError
+_______________ test_aws_sigv4_signature_and_credential_redacted _______________
+
+    def test_aws_sigv4_signature_and_credential_redacted():
+        from machina.core.provider.audit import _sanitize_value
+    
+        out = _sanitize_value(AWS_PRESIGNED)
+>       assert "deadbeefcafef00d" not in out
+E       AssertionError: assert 'deadbeefcafef00d' not in 'https://buc...beefcafef00d'
+E         
+E         'deadbeefcafef00d' is contained here:
+E           -Signature=deadbeefcafef00d
+
+tests/test_final_review_2026_10_15_providers.py:122: AssertionError
+______________________ test_gcs_x_goog_signature_redacted ______________________
+
+    def test_gcs_x_goog_signature_redacted():
+        from machina.core.provider.audit import redact_url_credentials
+    
+        src = (
+            "https://storage.googleapis.com/b/o"
+            "?X-Goog-Algorithm=GOOG4&X-Goog-Signature=abcdef123456&X-Goog-Expires=3600"
+        )
+        out = redact_url_credentials(src)
+>       assert "abcdef123456" not in out
+E       AssertionError: assert 'abcdef123456' not in 'https://sto...Expires=3600'
+E         
+E         'abcdef123456' is contained here:
+E           Signature=abcdef123456&X-Goog-Expires=3600
+E         ?           ++++++++++++
+
+tests/test_final_review_2026_10_15_providers.py:140: AssertionError
+__________________ test_is_credential_param_precise_sig_rules __________________
+
+    def test_is_credential_param_precise_sig_rules():
+        from machina.core.provider.audit import _is_credential_param
+    
+>       assert _is_credential_param("sig")
+E       AssertionError: assert False
+E        +  where False = <function _is_credential_param at 0x108f80a90>('sig')
+
+tests/test_final_review_2026_10_15_providers.py:160: AssertionError
+___________________ test_password_only_db_userinfo_redacted ____________________
+
+    def test_password_only_db_userinfo_redacted():
+        from machina.core.provider.audit import _sanitize_value
+    
+        out = _sanitize_value("redis://:s3cr3t@host:6379/0")
+>       assert "s3cr3t" not in out
+E       AssertionError: assert 's3cr3t' not in 'redis://:s3...@host:6379/0'
+E         
+E         's3cr3t' is contained here:
+E           redis://:s3cr3t@host:6379/0
+E         ?          ++++++
+
+tests/test_final_review_2026_10_15_providers.py:180: AssertionError
+_________________ test_password_only_generic_userinfo_redacted _________________
+
+    def test_password_only_generic_userinfo_redacted():
+        from machina.core.provider.audit import redact_url_credentials
+    
+        out = redact_url_credentials("https://:p@ssw0rd@example.invalid/doc")
+>       assert "p@ssw0rd" not in out
+E       AssertionError: assert 'p@ssw0rd' not in 'https://:p@....invalid/doc'
+E         
+E         'p@ssw0rd' is contained here:
+E           https://:p@ssw0rd@example.invalid/doc
+E         ?          ++++++++
+
+tests/test_final_review_2026_10_15_providers.py:192: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_final_review_2026_10_15_providers.py::test_azure_sas_sig_param_redacted_neighbors_intact
+FAILED tests/test_final_review_2026_10_15_providers.py::test_aws_sigv4_signature_and_credential_redacted
+FAILED tests/test_final_review_2026_10_15_providers.py::test_gcs_x_goog_signature_redacted
+FAILED tests/test_final_review_2026_10_15_providers.py::test_is_credential_param_precise_sig_rules
+FAILED tests/test_final_review_2026_10_15_providers.py::test_password_only_db_userinfo_redacted
+FAILED tests/test_final_review_2026_10_15_providers.py::test_password_only_generic_userinfo_redacted
+6 failed, 2 passed, 20 deselected in 0.29s

@@ -36,7 +36,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from machina.security import oauth_keys
+from machina.security import oauth_keys, store_fence
 from machina.security import providers as store
 from machina.security.oauth_keys import OAuthKeyUnavailable
 
@@ -263,8 +263,9 @@ _ADD_UNDER_CONTENTION = textwrap.dedent(
             return None
 
     from machina.security import providers as store
+    import machina.security.store_fence as store_fence
     if timeout_override:
-        store._STORE_LOCK_TIMEOUT_SECONDS = timeout_override
+        store_fence.STORE_LOCK_TIMEOUT_SECONDS = timeout_override
     before = open_fds()
     started = time.monotonic()
     error = None
@@ -342,14 +343,20 @@ def test_contended_store_lock_fails_bounded_with_typed_error(tmp_path):
             )
             assert payload["elapsed"] < 3.0, f"attempt {attempt}: {payload}"
             assert payload["leaked_fds"] in (None, []), f"attempt {attempt}: {payload}"
-        # And once under the production default, to exercise the real bound.
-        completed = _run_contended_add(providers_file, "0", window=15.0)
+        # The bound now comes from the shared, single bounded-flock
+        # implementation (P2-2): the provider store aliases
+        # ``store_fence.STORE_LOCK_TIMEOUT_SECONDS`` rather than keeping its own
+        # 5 s loop. Assert the sharing, then exercise the typed failure once more
+        # under a compressed clock (the real default is exercised by the shared
+        # store-lock tests).
+        assert store._STORE_LOCK_TIMEOUT_SECONDS == store_fence.STORE_LOCK_TIMEOUT_SECONDS
+        completed = _run_contended_add(providers_file, "0.4", window=10.0)
         assert completed.returncode == 0, completed.stderr
         payload = json.loads(completed.stdout.strip().splitlines()[-1])
         assert payload["error"] is not None and payload["error"]["type"] == (
             "ProviderStoreLockTimeout"
         ), payload
-        assert 4.0 <= payload["elapsed"] < 8.0, payload
+        assert payload["elapsed"] < 3.0, payload
         # The contended operation never wrote anything.
         assert not providers_file.exists()
     finally:

@@ -1,0 +1,102 @@
+F.F.F.F.F                                                                [100%]
+=================================== FAILURES ===================================
+_______________ test_http_v2_tool_complete_forwards_iserror_flag _______________
+
+    def test_http_v2_tool_complete_forwards_iserror_flag():
+        """The v2 canonical frame must carry the real failure flag, not a default."""
+        from machina.api.app import _serialize_event
+    
+>       failed = _serialize_event(
+            _tool_result_event(result="Error: boom"),
+            protocol_version=2,
+            session_id="s",
+            turn_id="t",
+            tool_is_error=True,
+        )
+E       TypeError: _serialize_event() got an unexpected keyword argument 'tool_is_error'
+
+tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py:55: TypeError
+------------------------------ Captured log call -------------------------------
+INFO     machina.gateway.server:server.py:122 Gateway logging initialized: /Users/shadow/.machina/logs/gateway.log
+_____________ test_sse_route_v2_tool_complete_carries_real_iserror _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d3d4dd0>
+
+    async def test_sse_route_v2_tool_complete_carries_real_iserror(monkeypatch):
+        frames = await _drive_route_with_tool_complete(monkeypatch, protocol_version=2)
+        complete = [f for f in frames if f.get("type") == "tool.complete"]
+        assert complete, frames
+>       assert complete[0]["isError"] is True, complete[0]
+E       AssertionError: {'protocolVersion': 2, 'type': 'tool.complete', 'sessionId': '3e29b781-bbd8-4808-9af1-99e99a041975', 'turnId': '8e7bbb1b6138', ...}
+E       assert False is True
+
+tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py:175: AssertionError
+_____________ test_render_diagnostics_marks_dropped_ledger_entries _____________
+
+    def test_render_diagnostics_marks_dropped_ledger_entries():
+        start_turn("t-ledger-diag")
+        for _ in range(traces.MAX_LEDGER_ENTRIES_PER_TURN + 20):
+            reservation = uuid.uuid4()
+            note_reserve(reservation, model="m", reserved_tokens=5)
+            note_finish(reservation, prompt_tokens=3, completion_tokens=2, accounted_tokens=5)
+    
+        text = render_diagnostics("t-ledger-diag")
+        llm_line = next(line for line in text.splitlines() if line.startswith("llm:"))
+>       assert "(+20 dropped)" in llm_line, text
+E       AssertionError: turn t-ledger-diag session - agent - [open/-]
+E         llm: 500 calls, 1500 in / 1000 out tokens (2500 accounted, 0 unknown)
+E         tools: 0
+E         delegations: 0
+E         approvals: 0 waits, 0 ms waited
+E         spans: 500 (+21 dropped)
+E       assert '(+20 dropped)' in 'llm: 500 calls, 1500 in / 1000 out tokens (2500 accounted, 0 unknown)'
+
+tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py:204: AssertionError
+___________ test_flush_emits_withheld_prefix_for_oversized_open_pem ____________
+
+    def test_flush_emits_withheld_prefix_for_oversized_open_pem():
+        """Flush must hand back the withheld prefix (redacted) and drop the body."""
+        redactor = StreamingSecretRedactor()
+        redactor._pem_open = True
+        redactor._pem_prefix = "text before the block\n"
+        redactor._buf = "RAWPRIVATEKEYBODYMUSTNOTLEAK"
+    
+        out = redactor.flush()
+>       assert "text before the block" in out
+E       AssertionError: assert 'text before the block' in ''
+
+tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py:231: AssertionError
+_________________ test_flush_emits_prefix_after_real_overflow __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10cbf1b70>
+
+    def test_flush_emits_prefix_after_real_overflow(monkeypatch):
+        """Natural overflow path: a configured credential lowers the frontier, so
+        the oversized block carries a genuine withheld prefix that flush must not
+        discard."""
+        body = "\n".join(
+            f"BODYLINE{i:04d}" + "A" * (64 - len(f"BODYLINE{i:04d}")) for i in range(600)
+        )
+        block = "-----BEGIN PRIVATE KEY-----\n" + body + "\n"
+        assert len(block) > MAX_BUFFERED_PEM
+        prefix = "ZZZZ"
+        monkeypatch.setenv("MACHINA_FIXBATCH3_PASSWORD", prefix + block)
+    
+        redactor = StreamingSecretRedactor()
+        emitted = redactor.feed(prefix + block)
+        assert redactor._pem_open is True
+        emitted += redactor.flush()
+    
+        assert "BODYLINE" not in emitted
+>       assert prefix in emitted, emitted[:200]
+E       AssertionError: [REDACTED_PRIVATE_KEY]
+E       assert 'ZZZZ' in '[REDACTED_PRIVATE_KEY]'
+
+tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py:264: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py::test_http_v2_tool_complete_forwards_iserror_flag
+FAILED tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py::test_sse_route_v2_tool_complete_carries_real_iserror
+FAILED tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py::test_render_diagnostics_marks_dropped_ledger_entries
+FAILED tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py::test_flush_emits_withheld_prefix_for_oversized_open_pem
+FAILED tests/test_final_review_2026_10_15_batch3_gateway_obs_memory.py::test_flush_emits_prefix_after_real_overflow
+5 failed, 4 passed in 0.56s

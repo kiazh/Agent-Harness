@@ -30,7 +30,7 @@ async def test_web_research_fetches_and_indexes_with_session_and_source(monkeypa
         AsyncMock(return_value="Fetched reference text."),
     )
     monkeypatch.setattr(research_module.db, "fetchval", AsyncMock(return_value=False))
-    monkeypatch.setattr(research_module, "get_rag_pipeline", AsyncMock(return_value=pipeline))
+    monkeypatch.setattr(research_module, "acquire_rag_pipeline", AsyncMock(return_value=pipeline))
 
     response = await research_module.web_research("reference guide")
 
@@ -75,7 +75,7 @@ async def test_web_research_does_not_duplicate_an_indexed_url(monkeypatch):
             ]
         ),
     )
-    monkeypatch.setattr(research_module, "get_rag_pipeline", AsyncMock(return_value=pipeline))
+    monkeypatch.setattr(research_module, "acquire_rag_pipeline", AsyncMock(return_value=pipeline))
 
     response = await research_module.web_research("reference guide")
 
@@ -92,7 +92,7 @@ def research_stubs(monkeypatch):
     monkeypatch.setattr(
         research_module, "active_agent_scope", AsyncMock(return_value=("harness", sid))
     )
-    monkeypatch.setattr(research_module, "get_rag_pipeline", AsyncMock(return_value=pipeline))
+    monkeypatch.setattr(research_module, "acquire_rag_pipeline", AsyncMock(return_value=pipeline))
     monkeypatch.setattr(research_module.db, "fetchval", AsyncMock(return_value=False))
     monkeypatch.setattr(
         research_module.db,

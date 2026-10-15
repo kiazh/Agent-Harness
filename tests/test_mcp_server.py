@@ -409,11 +409,19 @@ async def test_chat_hands_the_parent_resolved_dsn_to_the_child_env(monkeypatch):
     )
     payload = json.loads(await mcp_server.machina_chat("hello"))
     assert payload["status"] == "completed"
-    assert capture["env_extra"] == {"DATABASE_URL": "postgresql://parent:pw@db:5432/machina_test"}
+    # The DSN handoff (R4-081) and the mode-ceiling environment (R1 fix) both
+    # travel as explicit child env; the DSN is the only value that varies here.
+    assert capture["env_extra"]["DATABASE_URL"] == "postgresql://parent:pw@db:5432/machina_test"
+    assert capture["env_extra"]["MACHINA_EXECUTION_MODE"] == "ask"
+    assert capture["env_extra"]["MACHINA_MCP_MODE_CEILING"] == "ask"
 
 
 async def test_chat_without_a_resolved_dsn_passes_no_override(monkeypatch):
-    """No resolved DSN (test/degraded runtime) adds no override at all."""
+    """No resolved DSN (test/degraded runtime) adds no database override.
+
+    The mode-ceiling environment still travels (it is independent of the DSN);
+    only DATABASE_URL must be absent so the child never guesses one.
+    """
     capture: dict = {}
     monkeypatch.setattr(
         mcp_server,
@@ -423,7 +431,8 @@ async def test_chat_without_a_resolved_dsn_passes_no_override(monkeypatch):
     monkeypatch.setattr("machina.db.connection.db", SimpleNamespace(dsn=""))
     payload = json.loads(await mcp_server.machina_chat("hello"))
     assert payload["status"] == "completed"
-    assert not capture["env_extra"]
+    assert "DATABASE_URL" not in capture["env_extra"]
+    assert capture["env_extra"]["MACHINA_MCP_MODE_CEILING"] == "ask"
 
 
 async def test_chat_fails_typed_when_database_resolution_fails(monkeypatch):

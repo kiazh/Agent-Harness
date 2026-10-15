@@ -24,6 +24,19 @@ from machina.connectors.store import ConnectorStore
 from machina.observability.diagnostics import record_failure
 
 
+def refuse_sandbox_stdio(config, mode: str | None) -> None:
+    """One authoritative refusal for host stdio launch under sandbox mode.
+
+    Existing connect/invoke paths already reject this combination; the agent
+    ``mcp_connect`` management path launches through ``connect_and_discover``,
+    so the rule lives here and is enforced for every caller that knows the
+    session mode. Host stdio MCP always runs on the host, never in the
+    sandbox transport.
+    """
+    if config.transport == "stdio" and mode == "sandbox":
+        raise ConnectorToolError("host stdio MCP is unavailable in sandbox mode")
+
+
 class ConnectorService:
     """One service object shared by future CLI/TUI/HTTP adapters."""
 
@@ -58,13 +71,22 @@ class ConnectorService:
         return dict(cached) if cached is not None else None
 
     async def refresh(self) -> None:
-        """Reload changed durable config and retire stale worker connections."""
+        """Reload changed durable config and retire stale worker connections.
+
+        The configuration lock is released before cached authorization is
+        refreshed. ``oauth.refresh_auth_cache`` may wait on a credential
+        refresh lock, and the token-refresh owner re-resolves config through
+        ``refresh`` while holding that lock; keeping the configuration lock
+        across the credential wait would invert the two locks into a circular
+        wait (F06). One order holds throughout: configuration lock, then (only
+        outside it) any credential-store wait.
+        """
         if self.store is None:
             await self._refresh_auth_cache()
             return
         async with self._configuration_lock:
             await self._refresh_locked()
-            await self._refresh_auth_cache()
+        await self._refresh_auth_cache()
 
     async def _refresh_locked(self) -> None:
         generation, configs = self.store.load()
@@ -108,9 +130,19 @@ class ConnectorService:
         if not isinstance(fields, dict):
             raise ConfigError("config must be an object")
         async with self._configuration_lock:
-            return await self._configure_locked(fields)
+            result = await self._configure_locked(fields)
+        # Credential-cache refresh never runs under the configuration lock (F06).
+        try:
+            await self._refresh_auth_cache()
+        except asyncio.CancelledError:
+            from machina.core.background_tasks import CompletedOnCancellation
 
-    async def _configure_locked(self, fields: dict[str, Any]) -> dict[str, Any]:
+            raise CompletedOnCancellation(result) from None
+        return result
+
+    async def _configure_locked(
+        self, fields: dict[str, Any], *, expected_revision: int | None = None
+    ) -> dict[str, Any]:
         """Configure under the caller-held configuration lock.
 
         Composite management flows (agent mcp_connect add+launch, rollback)
@@ -145,19 +177,37 @@ class ConnectorService:
         config = self.store.validate_input(fields)
         if self.registry.get(config.id) is not None:
             await self.manager.disconnect(config.id)
-        self.store.configure(fields)
-        await self._refresh_locked()
-        await self._refresh_auth_cache()
-        current = self._config(config.id)
-        return {**current.public_view(), **_state_only(self.manager.status(config.id))}
+        from machina.core.background_tasks import CompletedOnCancellation
+
+        written = None
+        try:
+            written = await self.store.configure_async(fields, expected_revision=expected_revision)
+            await self._refresh_locked()
+        except CompletedOnCancellation as cancellation:
+            raise CompletedOnCancellation(cancellation.result.public_view()) from None
+        except asyncio.CancelledError:
+            if written is not None:
+                raise CompletedOnCancellation(written.public_view()) from None
+            raise
+        return {**written.public_view(), **_state_only(self.manager.status(config.id))}
 
     async def remove(self, connector_id: str) -> bool:
         if self.store is None:
             raise ConfigError("durable connector store is unavailable")
         async with self._configuration_lock:
-            return await self._remove_locked(connector_id)
+            removed = await self._remove_locked(connector_id)
+        # Credential-cache refresh never runs under the configuration lock (F06).
+        try:
+            await self._refresh_auth_cache()
+        except asyncio.CancelledError:
+            from machina.core.background_tasks import CompletedOnCancellation
 
-    async def _remove_locked(self, connector_id: str) -> bool:
+            raise CompletedOnCancellation(removed) from None
+        return removed
+
+    async def _remove_locked(
+        self, connector_id: str, *, expected_revision: int | None = None
+    ) -> bool:
         """Remove under the caller-held configuration lock (see _configure_locked)."""
         await self._refresh_locked()
         if self.registry.get(connector_id) is not None:
@@ -168,9 +218,18 @@ class ConnectorService:
                 except Exception as _boundary_error:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("connector_service.invalidate_oauth", _boundary_error)
-        removed = self.store.remove(connector_id)
-        await self._refresh_locked()
-        await self._refresh_auth_cache()
+        from machina.core.background_tasks import CompletedOnCancellation
+
+        removed = None
+        try:
+            removed = await self.store.remove_async(
+                connector_id, expected_revision=expected_revision
+            )
+            await self._refresh_locked()
+        except asyncio.CancelledError:
+            if removed is not None:
+                raise CompletedOnCancellation(removed) from None
+            raise
         return removed
 
     async def list(self) -> list[dict[str, Any]]:
@@ -197,21 +256,23 @@ class ConnectorService:
         return await self.manager.connect(connector_id, secrets)
 
     async def connect_and_discover(
-        self, connector_id: str, *, launch_config=None
+        self, connector_id: str, *, launch_config=None, mode: str | None = None
     ) -> list[DiscoveredTool]:
         """Launch a configured connector and install its discovered catalog.
 
         The low-level primitive shared by the human-reviewed management route
         (``connect_authorized``) and the agent ``mcp_connect`` tool: approval
         happens before this call, and composite flows hold the configuration
-        lock across it. ``secret_refs`` values resolve at launch; a discovery
-        failure retires the connection so a failed connect never leaves a
-        half-live server. Never retried here — the manager owns bounded
-        connection retries.
+        lock across it. ``mode`` is the approved session mode; host stdio is
+        refused under sandbox before any launch. ``secret_refs`` values resolve
+        at launch; a discovery failure retires the connection so a failed
+        connect never leaves a half-live server. Never retried here — the
+        manager owns bounded connection retries.
         """
         from machina.security.secrets import get_secret
 
         config = self._config(connector_id)
+        refuse_sandbox_stdio(config, mode)
         secrets = {name: get_secret(name) or "" for name in config.secret_refs}
         await self.manager.connect(connector_id, secrets, launch_config=launch_config)
         connection = self._live_connection(connector_id)

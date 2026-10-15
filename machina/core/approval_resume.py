@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from machina.core.background_tasks import joined_teardown
 from machina.core.execution_context import resolve_execution_context
 from machina.core.models import AgentResponse, LLMResponse, StreamEvent
 from machina.permissions import store
@@ -60,8 +61,11 @@ async def resume_action_stream(agent, session_id, record: dict, arguments: dict)
             }
         ],
     )
-    async for event in agent._execute_tool_calls_stream(response, [], made, session_id):
-        yield event
+    async with joined_teardown(
+        stream=agent._execute_tool_calls_stream(response, [], made, session_id)
+    ) as events:
+        async for event in events:
+            yield event
     pauses = [entry["needs_approval"] for entry in made if "needs_approval" in entry]
     if made:
         content = made[0].get("result_preview", "") or "continuation ended"

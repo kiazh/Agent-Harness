@@ -4,7 +4,10 @@
 // background + ink with mixColors, the way Codex derives subtle surface
 // elevations. The composer fill stays a neutral lift (Codex
 // backgroundElement); selection rows paint accent bg with a derived,
-// contrast-checked ink token (>= 4.5:1; see selectionInk).
+// contrast-checked ink token (>= 4.5:1; see selectionInk). Every skin's `dim`
+// token is contrast-checked to >= 4.5:1 against its own background while
+// staying below that skin's `muted`, because `dim` carries essential footer/
+// menu/tool-status text (review P3-2).
 //
 // Style functions resolve the *current* skin lazily, so `setSkin()` recolors
 // the whole UI without a restart. The choice persists via `config.theme`.
@@ -72,7 +75,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#eeeeee",
 			muted: "#808080",
-			dim: "#5f5f5f",
+			dim: "#7c7c7c",
 			accent: "#fab283",
 			secondary: "#9d7cd8",
 			success: "#7fd88f",
@@ -87,8 +90,8 @@ const SKINS: Record<string, SkinDef> = {
 		art: ["   .--.  ", "  ( moon)", "   `--'  ", "  *  . * "],
 		base: {
 			text: "#c0caf5",
-			muted: "#7a80a6",
-			dim: "#565f89",
+			muted: "#8389ac",
+			dim: "#7982ab",
 			accent: "#7aa2f7",
 			secondary: "#bb9af7",
 			success: "#9ece6a",
@@ -103,8 +106,8 @@ const SKINS: Record<string, SkinDef> = {
 		art: ["  (=^.^=)", "  │mocha│", "  │latte│", "  └─────┘"],
 		base: {
 			text: "#cdd6f4",
-			muted: "#7f849c",
-			dim: "#585b70",
+			muted: "#888da3",
+			dim: "#82869d",
 			accent: "#b4befe",
 			secondary: "#f38ba8",
 			success: "#a6d189",
@@ -120,7 +123,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#f8f8f2",
 			muted: "#a8abbf",
-			dim: "#6272a4",
+			dim: "#8491b8",
 			accent: "#bd93f9",
 			secondary: "#ff79c6",
 			success: "#50fa7b",
@@ -136,7 +139,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#ebdbb2",
 			muted: "#a89a85",
-			dim: "#928374",
+			dim: "#9a8d7f",
 			accent: "#83a598",
 			secondary: "#d3869b",
 			success: "#b8bb26",
@@ -152,7 +155,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#e0def4",
 			muted: "#908caa",
-			dim: "#6e6a86",
+			dim: "#827f99",
 			accent: "#c4a7e7",
 			secondary: "#ebbcba",
 			success: "#9ccfd8",
@@ -167,8 +170,8 @@ const SKINS: Record<string, SkinDef> = {
 		art: ["  ▲────▲", "  │NORD │", "  │FROST│", "  ▲────▲"],
 		base: {
 			text: "#e5e9f0",
-			muted: "#7e8aa3",
-			dim: "#616e88",
+			muted: "#9aa4b7",
+			dim: "#929db1",
 			accent: "#88c0d0",
 			secondary: "#d57780",
 			success: "#a3be8c",
@@ -183,8 +186,8 @@ const SKINS: Record<string, SkinDef> = {
 		art: ["    ▲    ", "   ▲▲▲   ", "  ▲▲▲▲▲  ", "    │    "],
 		base: {
 			text: "#d3c6aa",
-			muted: "#7a8478",
-			dim: "#585f57",
+			muted: "#9ea69d",
+			dim: "#979f96",
 			accent: "#7fbbb3",
 			secondary: "#d699b6",
 			success: "#a7c080",
@@ -200,7 +203,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#62ff94",
 			muted: "#8ca391",
-			dim: "#3d4a40",
+			dim: "#69806f",
 			accent: "#2eff6a",
 			secondary: "#c770ff",
 			success: "#62ff94",
@@ -216,7 +219,9 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: CODEX_SEMANTIC_START.text,
 			muted: CODEX_SEMANTIC_START.muted,
-			dim: CODEX_SEMANTIC_START.faint,
+			// AA lift of CODEX_SEMANTIC_START.faint (#5d5d66 = 3.02:1 on
+			// #0b0b0c): the startup skin's `dim` must clear 4.5:1 (see P3-2).
+			dim: "#797984",
 			accent: CODEX_SEMANTIC_START.accent,
 			secondary: CODEX_SEMANTIC_START.accentSoft,
 			success: CODEX_SEMANTIC_START.success,
@@ -264,7 +269,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#ffffff",
 			muted: "#adb7c9",
-			dim: "#2d5a7b",
+			dim: "#6aa1c8",
 			accent: "#0088ff",
 			secondary: "#2affdf",
 			success: "#9eff80",
@@ -280,7 +285,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#d6dae0",
 			muted: "#8f96a3",
-			dim: "#5a6673",
+			dim: "#718090",
 			accent: "#3fb7e3",
 			secondary: "#f2856f",
 			success: "#78d05c",
@@ -296,7 +301,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#d6deeb",
 			muted: "#8fa0ae",
-			dim: "#637777",
+			dim: "#6d8383",
 			accent: "#82aaff",
 			secondary: "#c792ea",
 			success: "#c5e478",
@@ -311,8 +316,8 @@ const SKINS: Record<string, SkinDef> = {
 		art: ["  ◇────◇", "  │ONE  │", "  │DARK │", "  ◇────◇"],
 		base: {
 			text: "#abb2bf",
-			muted: "#828997",
-			dim: "#5c6370",
+			muted: "#959ba6",
+			dim: "#8c94a1",
 			accent: "#61afef",
 			secondary: "#c678dd",
 			success: "#98c379",
@@ -327,8 +332,8 @@ const SKINS: Record<string, SkinDef> = {
 		art: ["  ≈────≈", "  │FLEX │", "  │ OKI │", "  ≈────≈"],
 		base: {
 			text: "#cecdc3",
-			muted: "#6f6e69",
-			dim: "#575652",
+			muted: "#84827c",
+			dim: "#7d7c76",
 			accent: "#da702c",
 			secondary: "#8b7ec8",
 			success: "#879a39",
@@ -344,7 +349,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#e8e8e8",
 			muted: "#a0a0a0",
-			dim: "#6e6e6e",
+			dim: "#808080",
 			accent: "#ffffff",
 			secondary: "#c0c0c0",
 			success: "#d0d0d0",
@@ -359,8 +364,8 @@ const SKINS: Record<string, SkinDef> = {
 		art: ["  ○────○", "  │ONE  │", "  │DARK │", "  ○────○"],
 		base: {
 			text: "#abb2bf",
-			muted: "#7a8291",
-			dim: "#5c6370",
+			muted: "#949ba7",
+			dim: "#8c94a1",
 			accent: "#61afef",
 			secondary: "#c678dd",
 			success: "#98c379",
@@ -376,7 +381,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#f8f8f2",
 			muted: "#9a9178",
-			dim: "#75715e",
+			dim: "#938f79",
 			accent: "#66d9ef",
 			secondary: "#ae81ff",
 			success: "#a6e22e",
@@ -392,7 +397,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#e6edf3",
 			muted: "#7d8590",
-			dim: "#6e7681",
+			dim: "#757d89",
 			accent: "#2f81f7",
 			secondary: "#ab7df8",
 			success: "#3fb950",
@@ -408,7 +413,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#93a1a1",
 			muted: "#839496",
-			dim: "#586e75",
+			dim: "#78929a",
 			accent: "#268bd2",
 			secondary: "#d33682",
 			success: "#859900",
@@ -423,8 +428,8 @@ const SKINS: Record<string, SkinDef> = {
 		art: ["  ≈────≈", "  │KANA │", "  │GAWA │", "  ≈────≈"],
 		base: {
 			text: "#dcd7ba",
-			muted: "#72788e",
-			dim: "#545864",
+			muted: "#888ea0",
+			dim: "#828796",
 			accent: "#7e9cd8",
 			secondary: "#957fb8",
 			success: "#98bb6c",
@@ -439,8 +444,8 @@ const SKINS: Record<string, SkinDef> = {
 		art: ["  ◑────◑", "  │PALE │", "  │NIGHT│", "  ◑────◑"],
 		base: {
 			text: "#a6accd",
-			muted: "#676e95",
-			dim: "#464b6a",
+			muted: "#969bb7",
+			dim: "#8e94b4",
 			accent: "#82aaff",
 			secondary: "#c792ea",
 			success: "#c3e88d",
@@ -456,7 +461,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#e4e4e7",
 			muted: "#8b8b94",
-			dim: "#5d5d66",
+			dim: "#797984",
 			accent: "#7aa2f7",
 			secondary: "#9d7cd8",
 			success: "#9ece6a",
@@ -472,7 +477,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#1a1a1e",
 			muted: "#565660",
-			dim: "#8a8a94",
+			dim: "#6e6e79",
 			accent: "#2f5fd0",
 			secondary: "#6a4fc7",
 			success: "#1a7f37",

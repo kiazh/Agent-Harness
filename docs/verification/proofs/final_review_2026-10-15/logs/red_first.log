@@ -1,0 +1,28 @@
+RED-FIRST run (recorded before the fix was applied; code was at the pre-fix state).
+
+Command:
+    .venv/bin/python -m pytest tests/test_permission_risk_policy.py -q -k "revspec or recursive_search"
+    .venv/bin/python -m pytest tests/test_final_review_permissions_views.py -q
+
+Observed (pre-fix):
+    tests/test_permission_risk_policy.py
+      FAILED test_recursive_search_commands_require_review[grep -id recurse REVIEW_TOKEN .]
+      FAILED test_recursive_search_commands_require_review[grep -sd recurse REVIEW_TOKEN .]
+      FAILED test_recursive_search_commands_require_review[grep -End recurse REVIEW_TOKEN .]
+      FAILED test_git_revspec_credential_operands_require_credential_access[git show :0:credentials]
+      FAILED test_git_revspec_credential_operands_require_credential_access[git show :0:.netrc]
+      FAILED test_git_revspec_credential_operands_require_credential_access[git show :0:id_rsa]
+      FAILED test_git_revspec_credential_operands_require_credential_access[git show :2:id_rsa]
+      FAILED test_git_revspec_credential_operands_require_credential_access[git show :0:credentials.1]
+      8 failed, 20 passed
+
+    tests/test_final_review_permissions_views.py
+      FAILED test_find_pending_redacts_target_and_preserves_fields
+             "raw secret leaked through view" (raw `target` column reaches the record)
+      FAILED test_find_approved_unclaimed_redacts_and_still_resumes
+      FAILED test_broker_headless_pause_surfaces_redacted_record
+      3 failed, 2 passed
+
+Notes: `git show :credentials`, `:0:deploy/.env` and `:0:sub/credentials` already
+passed pre-fix (single-component root names were the confirmed gap), so they are
+included as coverage but were not RED.

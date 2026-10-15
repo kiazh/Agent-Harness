@@ -1,0 +1,26 @@
+.....                                                                    [100%]
+==================================== PASSES ====================================
+________________ test_global_mode_set_persist_writes_env_shadow ________________
+------------------------------ Captured log call -------------------------------
+DEBUG    machina.core.config:config.py:583 Config saved to /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2213/test_global_mode_set_persist_w0/config.yaml
+___________ test_generic_config_set_execution_mode_beats_env_shadow ____________
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 00:59:12,863 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+------------------------------ Captured log call -------------------------------
+WARNING  machina.gateway.server:server.py:231 MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+____________________ test_initialize_mode_beats_env_shadow _____________________
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 00:59:12,865 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+------------------------------ Captured log call -------------------------------
+WARNING  machina.gateway.server:server.py:231 MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+INFO     machina.gateway.server:server.py:487 Gateway initialize: model=openrouter/free provider=openrouter
+______________________ test_global_mode_revoke_is_durable ______________________
+------------------------------ Captured log call -------------------------------
+DEBUG    machina.core.config:config.py:583 Config saved to /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2213/test_global_mode_revoke_is_dur0/config.yaml
+=========================== short test summary info ============================
+PASSED tests/test_final_review_2026_10_15_gateway_mode.py::test_global_mode_set_beats_preexisting_env_shadow
+PASSED tests/test_final_review_2026_10_15_gateway_mode.py::test_global_mode_set_persist_writes_env_shadow
+PASSED tests/test_final_review_2026_10_15_gateway_mode.py::test_generic_config_set_execution_mode_beats_env_shadow
+PASSED tests/test_final_review_2026_10_15_gateway_mode.py::test_initialize_mode_beats_env_shadow
+PASSED tests/test_final_review_2026_10_15_gateway_mode.py::test_global_mode_revoke_is_durable
+5 passed in 2.16s

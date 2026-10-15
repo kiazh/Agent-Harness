@@ -1,0 +1,89 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+__________ test_runtime_shutdown_drains_background_before_audit_stop ___________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a093950>
+
+    async def test_runtime_shutdown_drains_background_before_audit_stop(monkeypatch):
+        """Structural pin: drain runs, then the audit writer stops."""
+        from machina.core import runtime as rt
+        from machina.observability import audit as audit_mod
+    
+        order: list[str] = []
+    
+        async def record_drain(timeout: float = 5.0) -> int:
+            order.append("drain")
+            return 0
+    
+        async def record_stop(*args, **kwargs) -> None:
+            order.append("audit_stop")
+    
+        monkeypatch.setattr(rt, "drain_background_tasks", record_drain)
+        monkeypatch.setattr(audit_mod.audit_persistence, "stop", record_stop)
+        monkeypatch.setattr("machina.rag.embedder.close_shared_embedder", AsyncMock())
+        monkeypatch.setattr("machina.db.connection.db.close", AsyncMock())
+    
+        runtime = rt.RuntimeServices(_started=True)
+        await runtime.shutdown(timeout=1.0)
+>       assert order == ["drain", "audit_stop"], order
+E       AssertionError: ['audit_stop', 'drain']
+E       assert ['audit_stop', 'drain'] == ['drain', 'audit_stop']
+E         
+E         At index 0 diff: 'audit_stop' != 'drain'
+E         Use -v to get more diff
+
+tests/test_final_review_2026_10_15_providers.py:373: AssertionError
+____________ test_runtime_shutdown_persists_audit_from_drained_task ____________
+
+db_pool = <machina.db.connection.Database object at 0x10a068910>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109fbef90>
+
+    async def test_runtime_shutdown_persists_audit_from_drained_task(db_pool, monkeypatch):
+        """Behavioral pin: an audit event from a still-running background task
+        submitted during shutdown reaches ``audit_events`` (not dropped)."""
+        from machina.core import runtime as rt
+        from machina.core.background_tasks import pending_learning_reviews
+        from machina.core.provider.audit import audit_log
+        from machina.observability import audit as audit_mod
+    
+        monkeypatch.setattr(audit_mod, "db", db_pool)
+        monkeypatch.setattr("machina.rag.embedder.close_shared_embedder", AsyncMock())
+        monkeypatch.setattr("machina.db.connection.db.close", AsyncMock())
+    
+        audit_mod.audit_persistence.start()
+        ran = asyncio.Event()
+    
+        async def worker() -> None:
+            # Yield once so the drain is genuinely awaiting a live task.
+            await asyncio.sleep(0)
+            audit_log("shutdown_drain_probe", detail="kept")
+            ran.set()
+    
+        task = asyncio.create_task(worker())
+        pending_learning_reviews.add(task)
+        try:
+            runtime = rt.RuntimeServices(_started=True)
+            await runtime.shutdown(timeout=5.0)
+        finally:
+            pending_learning_reviews.discard(task)
+            while audit_mod.audit_persistence._owners:
+                await audit_mod.audit_persistence.stop(timeout=0.05)
+    
+        assert ran.is_set()
+        row = await db_pool.fetchrow(
+            "SELECT payload FROM audit_events WHERE event = 'shutdown_drain_probe'"
+        )
+>       assert row is not None, "audit event from a drained background task was dropped"
+E       AssertionError: audit event from a drained background task was dropped
+E       assert None is not None
+
+tests/test_final_review_2026_10_15_providers.py:411: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 00:53:09,217 [AUDIT] {"timestamp": 1792039989.217891, "event": "shutdown_drain_probe", "detail": "kept"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:225 {"timestamp": 1792039989.217891, "event": "shutdown_drain_probe", "detail": "kept"}
+ERROR    machina.observability.audit:audit.py:45 Audit event dropped during/after writer shutdown; event was not persisted
+=========================== short test summary info ============================
+FAILED tests/test_final_review_2026_10_15_providers.py::test_runtime_shutdown_drains_background_before_audit_stop
+FAILED tests/test_final_review_2026_10_15_providers.py::test_runtime_shutdown_persists_audit_from_drained_task
+2 failed, 18 deselected in 0.39s

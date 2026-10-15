@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from machina.core.config import config
@@ -12,6 +14,40 @@ if TYPE_CHECKING:
     from machina.gateway.server import Gateway
 
 from machina.gateway.features._common import _bool, _str
+
+logger = logging.getLogger(__name__)
+
+_EXECUTION_MODE_ENV = "MACHINA_EXECUTION_MODE"
+
+
+def sync_execution_mode_env(mode: str, *, persist: bool) -> None:
+    """Keep the ``MACHINA_EXECUTION_MODE`` shadow in step with a mode write.
+
+    ``Config.get`` reads ``MACHINA_<KEY>`` (env / ``.env``) *before* the
+    in-memory attribute, so a global mode write that only calls ``Config.set``
+    is silently shadowed by a pre-existing ``MACHINA_EXECUTION_MODE`` — e.g.
+    the ``.env`` line ``machina mode X`` leaves behind — and a requested
+    downgrade is ignored while ``grant_full_default`` keeps granting.
+
+    Mirror the CLI's ``_sync_env_shadow``: always update the process
+    environment so ``config.get`` reflects the request immediately, and mirror
+    it into ``.env`` for the durable path so a saved default survives
+    restarts. A failed ``.env`` write only warns (the in-process value already
+    took effect).
+    """
+    os.environ[_EXECUTION_MODE_ENV] = mode
+    if not persist:
+        return
+    try:
+        from machina.security.env_file import set_env_values
+
+        set_env_values({_EXECUTION_MODE_ENV: mode})
+    except (OSError, ValueError) as error:
+        logger.warning(
+            "execution_mode: .env sync failed for %s (%s)",
+            _EXECUTION_MODE_ENV,
+            type(error).__name__,
+        )
 
 
 async def mode_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -66,7 +102,12 @@ async def mode_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     if scope == "global":
         # Explicit future-session default: global mutation is the point.
         # Existing sessions keep their explicit session overrides.
-        config.set("execution_mode", mode, persist=_bool(params, "persist"))
+        persist = _bool(params, "persist")
+        config.set("execution_mode", mode, persist=persist)
+        # F1: mirror the CLI's env/.env shadow, or a pre-existing
+        # MACHINA_EXECUTION_MODE silently wins in Config.get and the
+        # downgrade is ignored (grant_full_default keeps granting).
+        sync_execution_mode_env(mode, persist=persist)
         return {"mode": mode, "scope": scope, "backend": _backend()}
 
     # Session-local activation: never touch the global default.
@@ -147,11 +188,15 @@ async def mode_revoke(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
         n = await activate_durable_mode(str(session.id), session.agent_id, "ask")
         if params.get("scope") == "global":
-            config.set("execution_mode", "ask")
+            # F6: durable reset — persist the default (CLI parity) and sync
+            # the env/.env shadow (F1) so it is not silently shadowed.
+            config.set("execution_mode", "ask", persist=True)
+            sync_execution_mode_env("ask", persist=True)
         return {"revoked": n, "mode": "ask", "scope": params.get("scope", "session")}
     n = await permission_broker.revoke(str(session.id))
     if str(params.get("scope") or "session") == "global":
-        config.set("execution_mode", "ask")
+        config.set("execution_mode", "ask", persist=True)
+        sync_execution_mode_env("ask", persist=True)
         return {"revoked": n, "mode": "ask", "scope": "global"}
     clear_session_mode(str(session.id))
     return {"revoked": n, "mode": get_effective_mode(str(session.id)), "scope": "session"}

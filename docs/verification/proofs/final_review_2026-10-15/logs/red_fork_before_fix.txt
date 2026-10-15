@@ -1,0 +1,45 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________________ test_fork_preserves_event_seq _________________________
+
+db_pool = <machina.db.connection.Database object at 0x10d910e10>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e8e36f0>
+
+    async def test_fork_preserves_event_seq(db_pool, monkeypatch):
+        """A fork copies ordinals verbatim; it must not re-derive them."""
+        import machina.core.session as sessmod
+        from machina.core.session import SessionManager
+    
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            monkeypatch.setattr(sessmod, "db", database)
+            sid = await _session(database)
+            await _seed_anti_correlated_batch(database, sid)
+            # Explicit inserts bypass the column DEFAULT, so advance the sequence
+            # past the seeded ordinals: a fork that re-derives ordinals would then
+            # draw fresh (1001+) values instead of copying 1..4.
+            await database.execute("SELECT setval('context_chunks_event_seq', 1000)")
+    
+            child = await SessionManager().fork(sid)
+            parent_rows = {
+                r["id"]: r["event_seq"]
+                for r in await database.fetch(
+                    "SELECT id, event_seq FROM context_chunks WHERE session_id=$1", sid
+                )
+            }
+            child_rows = await database.fetch(
+                "SELECT event_seq FROM context_chunks WHERE session_id=$1 ORDER BY event_seq",
+                child.id,
+            )
+            child_seqs = [r["event_seq"] for r in child_rows]
+>           assert child_seqs == [1, 2, 3, 4], child_seqs
+E           AssertionError: [1001, 1002, 1003, 1004]
+E           assert [1001, 1002, 1003, 1004] == [1, 2, 3, 4]
+E             
+E             At index 0 diff: 1001 != 1
+E             Use -v to get more diff
+
+tests/test_held_55_history_order.py:333: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_held_55_history_order.py::test_fork_preserves_event_seq - A...
+1 failed in 0.49s

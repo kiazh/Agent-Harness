@@ -185,15 +185,6 @@ export function composerWindow(rows: string[], budget: number, popupHeight = 0):
 }
 
 /**
- * Bound rendered editor rows around the real cursor instead of clipping the
- * tail: the cursor row stays visible with preference for trailing context.
- * Autocomplete popup rows (already moved above the input) are preserved.
- */
-export function windowAroundCursor(rows: string[], budget: number, popupHeight = 0): string[] {
-	return composerWindow(rows, budget, popupHeight).rows;
-}
-
-/**
  * Move trailing popup lines above the input block, Codex style. The Editor
  * renders `[top, text, bottom, ...popup]`; the composer shows
  * `[...popup, top, text, bottom]` so the `/` menu opens upward into the

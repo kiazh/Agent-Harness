@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -117,3 +118,48 @@ async def join_agent_background_tasks(
     finally:
         await _cancel_and_settle([task for task in tasks if not task.done()], grace=settle_grace)
     return len(tasks)
+
+
+class CompletedOnCancellation(asyncio.CancelledError):
+    """Cancellation carrying the result of an operation that finished."""
+
+    def __init__(self, result):
+        super().__init__()
+        self.result = result
+
+
+async def await_joined(operation, *, capture_result: bool = False):
+    """Finish an operation before propagating caller cancellation."""
+    task = asyncio.ensure_future(operation)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning("Joined operation failed during cancellation: %s", task.exception())
+        if capture_result and not task.cancelled() and task.exception() is None:
+            raise CompletedOnCancellation(task.result()) from None
+        raise
+
+
+@asynccontextmanager
+async def joined_teardown(*, stream=None, cleanup=None):
+    try:
+        yield stream
+    finally:
+
+        async def finish():
+            try:
+                if stream is not None:
+                    await stream.aclose()
+            finally:
+                if cleanup is not None:
+                    await cleanup()
+
+        await await_joined(finish())

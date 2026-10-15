@@ -94,7 +94,119 @@ _TYPE_NAMES = ("string", "number", "integer", "boolean", "object", "array", "nul
 # products that would explode, and unbounded outer counts, fail closed.
 _MAX_REPETITION_COUNT = 10_000
 _NESTED_REPETITION_BUDGET = 1_000
+# Counted repetitions unroll at compile time, so cost scales with the SIZE of
+# the repeated unit as well as the count: `(<long body>){10000}` produces
+# ~count x body nodes even though its count is legal, because the body itself
+# was never charged by the count screen below. A single atom may be counted up
+# to _MAX_REPETITION_COUNT (<= 10k nodes, the documented cheap level); the
+# node budget gives that ~5x headroom while refusing a large body under a large
+# count. Real-world patterns (IPv4 octets, UUIDs, host masks) sit far below it.
+_MAX_PATTERN_NODES = 50_000
 _ASCII_DIGITS = "0123456789"
+
+
+def _parse_count(pattern: str, index: int) -> tuple[int, int | None, int] | None:
+    """Parse `{n}`/`{n,}`/`{n,m}` at *index*; return (low, high, end) or None.
+
+    ``high`` is ``None`` for the open form. ASCII digits only: other "digits"
+    are literals to the engine and must not be read as counts.
+    """
+    length = len(pattern)
+    cursor = index + 1
+    while cursor < length and pattern[cursor] in _ASCII_DIGITS:
+        cursor += 1
+    low_text = pattern[index + 1 : cursor]
+    has_comma = cursor < length and pattern[cursor] == ","
+    high_text = ""
+    if has_comma:
+        end = cursor + 1
+        while end < length and pattern[end] in _ASCII_DIGITS:
+            end += 1
+        high_text = pattern[cursor + 1 : end]
+        cursor = end
+    if cursor >= length or pattern[cursor] != "}" or not (low_text or high_text):
+        return None
+    low = int(low_text) if low_text else 0
+    high = (int(high_text) if high_text else None) if has_comma else low
+    return low, high, cursor + 1
+
+
+def _screen_pattern_node_budget(pattern: str) -> None:
+    """Bound compiled node count by count x repeated-unit size.
+
+    Counted groups/atoms are charged their unit size multiplied by the count
+    (unbounded ``{n,}`` forms are loops, not unrolled, so they charge one copy
+    and stay covered by the nested-count screen). ``frame_sizes`` holds, per
+    open group, the accumulated cost of its body; a just-closed group is held
+    as ``pending_body`` so a following count multiplies it. Exceeding the node
+    budget fails closed before any compile.
+    """
+    frame_sizes: list[int] = [0]
+    pending_body: int | None = None
+    total = 0
+    index = 0
+    length = len(pattern)
+    while index < length:
+        char = pattern[index]
+        if char == "\\":
+            if pending_body is not None:
+                frame_sizes[-1] += pending_body
+                pending_body = None
+            frame_sizes[-1] += 1
+            index += 2  # escaped literal + the escaped character
+            continue
+        if char == "[":
+            if pending_body is not None:
+                frame_sizes[-1] += pending_body
+                pending_body = None
+            cursor = index + 1
+            if cursor < length and pattern[cursor] == "^":
+                cursor += 1
+            if cursor < length and pattern[cursor] == "]":
+                cursor += 1
+            while cursor < length and pattern[cursor] != "]":
+                if pattern[cursor] == "\\":
+                    cursor += 1
+                cursor += 1
+            index = cursor + 1 if cursor < length else cursor
+            frame_sizes[-1] += 1  # a class is one repeatable unit
+            continue
+        if char == "(":
+            if pending_body is not None:
+                frame_sizes[-1] += pending_body
+                pending_body = None
+            frame_sizes.append(0)
+            index += 1
+            continue
+        if char == ")":
+            if pending_body is not None:
+                frame_sizes[-1] += pending_body
+            body = frame_sizes.pop() if len(frame_sizes) > 1 else 0
+            pending_body = body
+            index += 1
+            continue
+        if char == "{":
+            parsed = _parse_count(pattern, index)
+            if parsed is not None:
+                _low, high, end = parsed
+                unit = pending_body if pending_body is not None else 1
+                if high is not None:
+                    cost = unit * high
+                    total += cost
+                    if total > _MAX_PATTERN_NODES:
+                        raise ConnectorToolError("pattern compilation cost exceeds the budget")
+                    frame_sizes[-1] += cost
+                else:
+                    # Unbounded count: not unrolled; charge a single unit.
+                    frame_sizes[-1] += unit
+                pending_body = None
+                index = end
+                continue
+        if pending_body is not None:
+            frame_sizes[-1] += pending_body
+            pending_body = None
+        frame_sizes[-1] += 1
+        index += 1
 
 
 def _screen_pattern_budget(pattern: str) -> None:
@@ -218,6 +330,7 @@ def _check_schema(schema: Any, depth: int = 0) -> None:
         if not isinstance(pattern, str) or len(pattern) > 200:
             raise ConnectorToolError("invalid schema pattern")
         _screen_pattern_budget(pattern)
+        _screen_pattern_node_budget(pattern)
     if "format" in schema and not isinstance(schema["format"], str):
         raise ConnectorToolError("invalid schema format")
     if "propertyNames" in schema:

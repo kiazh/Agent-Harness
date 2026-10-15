@@ -2870,8 +2870,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # Database guard (R4-095): never run the write-heavy journeys against a
     # database the operator did not visibly choose. Non-test databases need the
-    # explicit --db-url consent; an unset environment is refused too.
-    db_url, db_source = resolve_db_url(args.db_url)
+    # explicit --db-url consent; an unset environment is refused too. A blank
+    # `--db-url=` (or `--db-url ""`) is treated as absent (line_infra_docs F1):
+    # an empty value is not consent and must not select the export path either.
+    explicit_db_url = args.db_url if (args.db_url and args.db_url.strip()) else None
+    db_url, db_source = resolve_db_url(explicit_db_url)
     if db_url is None:
         log(
             "no MACHINA_DATABASE_URL/DATABASE_URL in the environment and no --db-url "
@@ -2886,7 +2889,7 @@ def main(argv: list[str] | None = None) -> int:
             "expected postgresql://user:pass@host:port/database"
         )
         return 2
-    if args.db_url is None and not is_test_database(db_name):
+    if explicit_db_url is None and not is_test_database(db_name):
         log(
             f"refusing to run against non-test database '{db_name}' "
             f"({summarize_db_url(db_url)}, source {db_source}): this gate writes "
@@ -2894,7 +2897,7 @@ def main(argv: list[str] | None = None) -> int:
             "if that database is the intended target."
         )
         return 2
-    if args.db_url is not None:
+    if explicit_db_url is not None:
         # Every child (CLI, API server, gateway, embedded scripts) must resolve
         # the requested database; explicit config env wins over .env files.
         os.environ["MACHINA_DATABASE_URL"] = db_url

@@ -1,0 +1,111 @@
+...FFFFFF.F..                                                            [100%]
+=================================== FAILURES ===================================
+____________________ test_artifact_missing_errors_honestly _____________________
+
+delegation = namespace(child=Session(id=UUID('e9fda84c-4d8e-4cad-ab24-c81b599d00a1'), title=None, agent_id='coder', status='active'...private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2206/test_artifact_missing_errors_h0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a4fe250>
+
+    async def test_artifact_missing_errors_honestly(delegation, monkeypatch):
+        """R4-028 (delete): missing artifact -> error, no phantom backtrack.
+    
+        The deleted code called ``should_write_first(0, True)`` and discarded the
+        return, forcing no write at all while the comment claimed a "forced
+        synthesize/write attempt". This pins the real behavior: status "error",
+        the reason naming the path, a terminal error row, and no backtrack claim
+        (the helper must never be called again).
+        """
+        import machina.core.progress as progress
+    
+        spy = MagicMock(return_value=True)
+>       monkeypatch.setattr(progress, "should_write_first", spy)
+E       AttributeError: <module 'machina.core.progress' from '/Users/shadow/machina/machina/core/progress.py'> has no attribute 'should_write_first'
+
+tests/test_delegation_contracts.py:139: AttributeError
+____________________________ test_empty_file_errors ____________________________
+
+delegation = namespace(child=Session(id=UUID('53f3977c-9d93-486a-a6fa-a2943abe75ed'), title=None, agent_id='coder', status='active'...xPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2206/test_empty_file_errors0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1095d0e60>
+
+    async def test_empty_file_errors(delegation, monkeypatch):
+        import machina.core.progress as progress
+    
+>       monkeypatch.setattr(progress, "should_write_first", MagicMock(return_value=True))
+E       AttributeError: <module 'machina.core.progress' from '/Users/shadow/machina/machina/core/progress.py'> has no attribute 'should_write_first'
+
+tests/test_delegation_contracts.py:153: AttributeError
+________________________ test_directory_artifact_errors ________________________
+
+delegation = namespace(child=Session(id=UUID('8a1659fe-85b2-47d5-9ccb-d04701226436'), title=None, agent_id='coder', status='active'...private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2206/test_directory_artifact_errors0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a47f850>
+
+    async def test_directory_artifact_errors(delegation, monkeypatch):
+        import machina.core.progress as progress
+    
+>       monkeypatch.setattr(progress, "should_write_first", MagicMock(return_value=True))
+E       AttributeError: <module 'machina.core.progress' from '/Users/shadow/machina/machina/core/progress.py'> has no attribute 'should_write_first'
+
+tests/test_delegation_contracts.py:164: AttributeError
+__________________________ test_no_contract_unchanged __________________________
+
+delegation = namespace(child=Session(id=UUID('5fd90389-5df9-4989-9bfb-db160bbd09c8'), title=None, agent_id='coder', status='active'...h('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2206/test_no_contract_unchanged0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109a344d0>
+
+    async def test_no_contract_unchanged(delegation, monkeypatch):
+        """Without new kwargs, missing artifact must not fail (zero behavior change)."""
+        import machina.core.progress as progress
+    
+        spy = MagicMock(return_value=True)
+>       monkeypatch.setattr(progress, "should_write_first", spy)
+E       AttributeError: <module 'machina.core.progress' from '/Users/shadow/machina/machina/core/progress.py'> has no attribute 'should_write_first'
+
+tests/test_delegation_contracts.py:177: AttributeError
+_________________ test_waiting_approval_bypasses_verification __________________
+
+delegation = namespace(child=Session(id=UUID('9b3bfee1-dbb6-4f62-a08b-66e2060dc958'), title=None, agent_id='coder', status='active'...private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2206/test_waiting_approval_bypasses0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1095ec5d0>
+
+    async def test_waiting_approval_bypasses_verification(delegation, monkeypatch):
+        import machina.core.progress as progress
+    
+        spy = MagicMock(return_value=True)
+>       monkeypatch.setattr(progress, "should_write_first", spy)
+E       AttributeError: <module 'machina.core.progress' from '/Users/shadow/machina/machina/core/progress.py'> has no attribute 'should_write_first'
+
+tests/test_delegation_contracts.py:189: AttributeError
+___________ test_cancelled_mid_write_propagates_without_verification ___________
+
+delegation = namespace(child=Session(id=UUID('8caccee6-e2b6-47ba-ad1d-8ddb10b07541'), title=None, agent_id='coder', status='active'...private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2206/test_cancelled_mid_write_propa0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1095ea710>
+
+    async def test_cancelled_mid_write_propagates_without_verification(delegation, monkeypatch):
+        import asyncio
+    
+        import machina.core.progress as progress
+    
+        spy = MagicMock(return_value=True)
+>       monkeypatch.setattr(progress, "should_write_first", spy)
+E       AttributeError: <module 'machina.core.progress' from '/Users/shadow/machina/machina/core/progress.py'> has no attribute 'should_write_first'
+
+tests/test_delegation_contracts.py:217: AttributeError
+______________ test_orchestrator_direct_escape_is_error_not_raise ______________
+
+delegation = namespace(child=Session(id=UUID('0b64fae4-88d5-47f3-b83b-8542df5c83e0'), title=None, agent_id='coder', status='active'...private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2206/test_orchestrator_direct_escap0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1095a36d0>
+
+    async def test_orchestrator_direct_escape_is_error_not_raise(delegation, monkeypatch):
+        import machina.core.progress as progress
+    
+>       monkeypatch.setattr(progress, "should_write_first", MagicMock(return_value=True))
+E       AttributeError: <module 'machina.core.progress' from '/Users/shadow/machina/machina/core/progress.py'> has no attribute 'should_write_first'
+
+tests/test_delegation_contracts.py:241: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_delegation_contracts.py::test_artifact_missing_errors_honestly
+FAILED tests/test_delegation_contracts.py::test_empty_file_errors - Attribute...
+FAILED tests/test_delegation_contracts.py::test_directory_artifact_errors - A...
+FAILED tests/test_delegation_contracts.py::test_no_contract_unchanged - Attri...
+FAILED tests/test_delegation_contracts.py::test_waiting_approval_bypasses_verification
+FAILED tests/test_delegation_contracts.py::test_cancelled_mid_write_propagates_without_verification
+FAILED tests/test_delegation_contracts.py::test_orchestrator_direct_escape_is_error_not_raise
+7 failed, 6 passed in 0.42s
+delegation_contracts_exit=1

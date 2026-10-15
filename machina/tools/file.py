@@ -151,11 +151,27 @@ def resolve_path(path: str, *, allow_outside: bool = False) -> Path:
     # Re-stat with O_NOFOLLOW semantics where possible to catch TOCTOU swaps.
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if nofollow and candidate.exists() and not candidate.is_dir():
+        # F13: reject non-regular files (FIFO/device/socket) before any
+        # blocking open. A writer-less named pipe blocks a plain O_RDONLY
+        # open forever, freezing the event loop; the async tool timeout
+        # cannot fire while that synchronous open is stuck.
         try:
-            fd = os.open(candidate, os.O_RDONLY | nofollow)
+            st_pre = os.lstat(candidate)
+        except OSError as e:
+            raise ValueError(f"Path '{path}' is not accessible") from e
+        if not stat.S_ISREG(st_pre.st_mode):
+            raise ValueError(f"Path '{path}' is not a regular file")
+        # Open nonblocking AND re-check the type on the descriptor so a swap
+        # between the stat and the open (regular -> FIFO) cannot reintroduce
+        # the block. O_NONBLOCK is a no-op for regular files.
+        nonblock = getattr(os, "O_NONBLOCK", 0)
+        try:
+            fd = os.open(candidate, os.O_RDONLY | nofollow | nonblock)
         except OSError as e:
             raise ValueError(f"Path '{path}' is not accessible (symlink?)") from e
         try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError(f"Path '{path}' is not a regular file")
             # Cross-platform verification: fstat dev/ino match (+ realpath
             # containment for workspace paths; full-mode outside paths skip
             # containment since the broker already authorized them).
@@ -175,9 +191,14 @@ def _open_secure_read(candidate: Path, *, check_base: bool = True):
     Uses O_NOFOLLOW where available and verifies the descriptor matches the
     path to close the check-then-open race (AH-003). Callers must os.close
     the fd (or fdopen it, which takes ownership).
+
+    F13: the descriptor is opened nonblocking and must be a regular file, so
+    a FIFO/device swapped in after path validation cannot block the caller
+    (a writer-less FIFO's blocking O_RDONLY open would freeze the loop).
     """
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    flags = os.O_RDONLY
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    flags = os.O_RDONLY | nonblock
     if nofollow:
         flags |= nofollow
     try:
@@ -185,6 +206,8 @@ def _open_secure_read(candidate: Path, *, check_base: bool = True):
     except OSError as e:
         raise ValueError(f"Path '{candidate}' is not accessible (symlink?)") from e
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError(f"Path '{candidate}' is not a regular file")
         _verify_fd_matches_path(fd, candidate, check_base=check_base)
     except Exception:
         try:
@@ -263,49 +286,76 @@ def _dir_fd_supported() -> bool:
         supported = os.supports_dir_fd
     except AttributeError:
         return False
-    return all(f in supported for f in (os.open, os.rename, os.stat, os.unlink))
+    return all(f in supported for f in (os.open, os.rename, os.stat, os.unlink, os.mkdir))
+
+
+def _traversal_error(display: str, part: str, dir_fd: int) -> ValueError:
+    """Classify a failed no-follow component open (symlink vs non-directory)."""
+    try:
+        st = os.lstat(part, dir_fd=dir_fd)
+    except OSError:
+        st = None
+    if st is not None and stat.S_ISLNK(st.st_mode):
+        return ValueError(f"Path '{display}' traverses a symlink")
+    return ValueError(f"Path '{display}' traverses a non-directory")
 
 
 def _open_parent_dir_fd(parent: Path, *, display: str) -> int:
-    """Open the validated parent directory, returning a descriptor (R5-B).
+    """Open the validated parent directory by walking from the trusted root.
 
-    Binds the descriptor to the validated directory object: the parent must
-    currently be a real directory inside the base (symlink leaves rejected),
-    and the opened descriptor's dev/ino must match the lstat identity,
-    closing the validate-then-use race on the directory itself. All
-    subsequent temp creation and replacement use this descriptor
-    (openat/renameat), so a concurrent rename of the workspace subdirectory
-    to a symlink cannot redirect the write outside the base.
+    F01: the previous implementation checked ancestor containment by pathname
+    (``_realpath_inside_base`` + ``lstat``) before opening. An ancestor could
+    be swapped to a symlink pointing outside between the check and the open:
+    ``lstat`` resolves the ancestor link and ``O_NOFOLLOW`` only rejects the
+    *final* component, so both operations saw the outside directory and the
+    dev/ino comparison still matched — subsequent writes escaped the base.
+
+    This walks every component from the trusted workspace root with
+    ``openat`` + ``O_NOFOLLOW|O_DIRECTORY`` relative to the previous
+    descriptor, creating missing levels with ``mkdirat``. No pathname
+    containment check runs after the root: the chain is anchored to
+    descriptors, so a concurrently swapped ancestor fails closed. The
+    returned descriptor is owned by the caller.
     """
-    _realpath_inside_base(parent)
+    base = _base_dir()
     try:
-        st_path = os.lstat(parent)
-    except OSError as e:
-        raise ValueError(f"Path '{display}' is not accessible") from e
-    if stat.S_ISLNK(st_path.st_mode):
-        raise ValueError(f"Path '{display}' traverses a symlink")
-    if not stat.S_ISDIR(st_path.st_mode):
-        raise ValueError(f"Path '{display}' traverses a non-directory")
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        rel = parent.relative_to(base)
+    except ValueError:
+        raise ValueError(f"Path '{display}' escapes the allowed base directory") from None
+    dflags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        dir_fd = _os_open(parent, flags)
+        cur_fd = _os_open(base, dflags)
     except OSError as e:
-        raise ValueError(f"Path '{display}' is not accessible (symlink?)") from e
+        raise ValueError(f"Path '{display}' is not accessible: {e}") from e
     try:
-        st_fd = os.fstat(dir_fd)
-    except OSError as e:
+        for part in rel.parts:
+            if part in ("", "."):
+                continue
+            try:
+                next_fd = _os_open(part, dflags, dir_fd=cur_fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, dir_fd=cur_fd)
+                except FileExistsError:
+                    # Raced creation: re-open below and let O_NOFOLLOW decide.
+                    pass
+                except OSError as e:
+                    raise ValueError(f"Cannot create directory for '{display}': {e}") from e
+                try:
+                    next_fd = _os_open(part, dflags, dir_fd=cur_fd)
+                except OSError:
+                    raise _traversal_error(display, part, cur_fd) from None
+            except OSError:
+                raise _traversal_error(display, part, cur_fd) from None
+            os.close(cur_fd)
+            cur_fd = next_fd
+    except BaseException:
         try:
-            os.close(dir_fd)
+            os.close(cur_fd)
         except OSError:
             pass
-        raise ValueError(f"Path '{display}' is not accessible") from e
-    if (st_fd.st_ino, st_fd.st_dev) != (st_path.st_ino, st_path.st_dev):
-        try:
-            os.close(dir_fd)
-        except OSError:
-            pass
-        raise ValueError(f"Path '{display}' changed during access (TOCTOU)")
-    return dir_fd
+        raise
+    return cur_fd
 
 
 def _verify_fd_at(fd: int, dir_fd: int, name: str, *, display: str) -> None:
@@ -329,34 +379,66 @@ def _verify_fd_at(fd: int, dir_fd: int, name: str, *, display: str) -> None:
         raise ValueError(f"Path '{display}' changed during access (TOCTOU)") from e
 
 
-def _atomic_write_file_at(
-    dir_fd: int, leaf: str, content: str, *, mode: int | None = None, display: str = ""
-) -> None:
-    """Write *content* to *leaf* under the pinned *dir_fd* (R5-B).
+def _unlink_temp(tmp_name: str, dir_fd: int | None) -> None:
+    """Best-effort removal of a temp file, anchored (dir_fd) or by pathname."""
+    try:
+        if dir_fd is not None:
+            os.unlink(tmp_name, dir_fd=dir_fd)
+        else:
+            os.unlink(tmp_name)
+    except OSError:
+        pass
 
-    Same temp + fsync + replace contract as :func:`_atomic_write_file`,
-    except every operation is relative to the validated directory
-    descriptor (openat/renameat): temp creation and replacement cannot
-    resolve through a concurrently swapped ancestor symlink.
+
+def _atomic_write_file_at(
+    dir_fd: int | None,
+    leaf: str,
+    content: str,
+    *,
+    mode: int | None = None,
+    display: str = "",
+    parent: Path | None = None,
+) -> None:
+    """Write *content* to *leaf* atomically — the single implementation.
+
+    The complete content is written and fsynced on a random-name temp file in
+    the target directory and only replaced once it is whole, so a mid-write
+    failure (ENOSPC, crash, cancellation) cannot destroy the original; the
+    caller's mode bits are preserved and a failed write leaves no temp behind.
+
+    When *dir_fd* is an int, every operation is relative to that validated
+    directory descriptor (openat/renameat), so temp creation and replacement
+    cannot resolve through a concurrently swapped ancestor symlink (R5-B/F01).
+    When *dir_fd* is ``None`` (platforms without dir_fd support), *parent*
+    supplies the directory and pathname syscalls are used — the explicit
+    non-dir_fd platform fallback :func:`_atomic_write_file` delegates with.
     """
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     tmp_fd: int | None = None
     tmp_name: str | None = None
-    for _ in range(8):
-        candidate = f".{leaf}.{secrets.token_hex(8)}.tmp"
+    if dir_fd is not None:
+        for _ in range(8):
+            candidate = f".{leaf}.{secrets.token_hex(8)}.tmp"
+            try:
+                tmp_fd = _os_open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+                    0o600,
+                    dir_fd=dir_fd,
+                )
+            except FileExistsError:
+                continue
+            except OSError as e:
+                raise ValueError(f"Cannot write '{display}': {e}") from e
+            tmp_name = candidate
+            break
+    else:
+        if parent is None:
+            raise ValueError(f"Cannot write '{display}': no target directory")
         try:
-            tmp_fd = _os_open(
-                candidate,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
-                0o600,
-                dir_fd=dir_fd,
-            )
-        except FileExistsError:
-            continue
+            tmp_fd, tmp_name = tempfile.mkstemp(prefix=f".{leaf}.", suffix=".tmp", dir=str(parent))
         except OSError as e:
             raise ValueError(f"Cannot write '{display}': {e}") from e
-        tmp_name = candidate
-        break
     if tmp_fd is None or tmp_name is None:
         raise ValueError(f"Cannot write '{display}': temp file unavailable")
     try:
@@ -370,71 +452,61 @@ def _atomic_write_file_at(
             os.close(tmp_fd)
         except OSError:
             pass
-        try:
-            os.unlink(tmp_name, dir_fd=dir_fd)
-        except OSError:
-            pass
+        _unlink_temp(tmp_name, dir_fd)
         raise
     try:
         with handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.rename(tmp_name, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        if dir_fd is not None:
+            os.rename(tmp_name, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        else:
+            os.replace(tmp_name, parent / leaf)
     except BaseException:
+        _unlink_temp(tmp_name, dir_fd)
+        raise
+    if dir_fd is not None:
         try:
-            os.unlink(tmp_name, dir_fd=dir_fd)
+            os.fsync(dir_fd)
         except OSError:
             pass
-        raise
-    try:
-        os.fsync(dir_fd)
-    except OSError:
-        pass
+    elif parent is not None:
+        _fsync_dir_best_effort(parent)
 
 
 def _atomic_write_file(file_path: Path, content: str, *, mode: int | None = None) -> None:
     """Write *content* to *file_path* through temp + fsync + replace.
 
-    A mid-write failure (ENOSPC, crash, cancellation) cannot destroy the
-    original: the complete content is written and fsynced on a random-name
-    temp file in the same directory (mkstemp, O_EXCL) and only renamed over
-    the target once it is whole. The caller's mode bits are preserved.
+    Thin delegate to the single authoritative :func:`_atomic_write_file_at`.
+    On dir_fd-capable platforms the parent directory is pinned as a descriptor
+    (the same anchoring the workspace path uses); on platforms without dir_fd
+    support the parent path is passed instead so the body uses pathname
+    syscalls — the unchanged non-dir_fd fallback.
     """
-    directory = file_path.parent
-    fd, temp_name = tempfile.mkstemp(
-        prefix=f".{file_path.name}.", suffix=".tmp", dir=str(directory)
-    )
+    parent = file_path.parent
+    dir_fd: int | None = None
+    if _dir_fd_supported():
+        dflags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        dir_fd = _os_open(parent, dflags)
     try:
-        if mode is not None:
-            os.fchmod(fd, mode)
-        handle = os.fdopen(fd, "w", encoding="utf-8")
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        try:
-            os.unlink(temp_name)
-        except OSError:
-            pass
-        raise
-    try:
-        with handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_name, file_path)
-    except BaseException:
-        try:
-            os.unlink(temp_name)
-        except OSError:
-            pass
-        raise
-    _fsync_dir_best_effort(directory)
+        _atomic_write_file_at(
+            dir_fd,
+            file_path.name,
+            content,
+            mode=mode,
+            display=str(file_path),
+            parent=parent if dir_fd is None else None,
+        )
+    finally:
+        if dir_fd is not None:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
 
 
-async def _run_worker_joined(operation: Callable[[], str]) -> str:
+async def _run_worker_joined(operation: Callable[[], str], *, capture_result: bool = False) -> str:
     """Run *operation* in a worker thread, joining it on cancellation.
 
     Cancelling the await of ``asyncio.to_thread`` stops the *await*, not the
@@ -447,23 +519,9 @@ async def _run_worker_joined(operation: Callable[[], str]) -> str:
     ``CancelledError`` propagates. Each join is itself shielded, so a repeated
     cancellation cannot orphan the running thread mid-write.
     """
-    worker: asyncio.Future[str] = asyncio.ensure_future(asyncio.to_thread(operation))
-    try:
-        return await asyncio.shield(worker)
-    except asyncio.CancelledError:
-        while not worker.done():
-            try:
-                await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                # Repeated cancel: keep joining so the write always finishes
-                # its effects before ownership is released.
-                continue
-            except Exception as exc:
-                # The worker's own failure is secondary to the cancellation;
-                # surface it in logs rather than losing it silently.
-                logger.warning("File write worker failed during cancellation: %s", exc)
-                break
-        raise
+    from machina.core.background_tasks import await_joined
+
+    return await await_joined(asyncio.to_thread(operation), capture_result=capture_result)
 
 
 # read_file paging bounds: the byte gate applies to the selected lines (not
@@ -472,46 +530,66 @@ async def _run_worker_joined(operation: Callable[[], str]) -> str:
 # buffered whole.
 _READ_LINE_CHUNK = 1 << 16
 _READ_MAX_PAGE_BYTES = 5_242_880
+# Code-review P2 #4: stop counting the total after this many lines past the
+# selected window. Reaching EOF within the budget yields an exact total (small
+# files, unchanged); otherwise the marker reports a lower bound instead of
+# reading a multi-GB file to EOF for a `limit=10` page.
+_READ_TOTAL_SCAN_LINES = 1000
+_READ_TOTAL_SCAN_BYTES = 1 << 20
 
 
 def _read_page(
     stream, *, offset: int, limit: int, max_bytes: int, path: str
-) -> tuple[str, int, int]:
+) -> tuple[str, int, int, bool]:
     """Apply offset/limit to *stream* under per-line and per-page byte caps.
 
-    Returns ``(page_text, shown_lines, total_lines)``. Lines outside the
-    requested window are consumed piece by piece and discarded; a window
-    whose encoded size exceeds *max_bytes* is rejected (fail closed) instead
-    of returned.
+    Returns ``(page_text, shown_lines, total_lines, total_exact)``. Lines
+    outside the requested window are consumed piece by piece and discarded; a
+    window whose encoded size exceeds *max_bytes* is rejected (fail closed)
+    instead of returned. Counting stops ``_READ_TOTAL_SCAN_LINES`` past the
+    window or at ``_READ_TOTAL_SCAN_BYTES`` of trailing text, so ``total_exact``
+    is ``False`` for very large files (the caller then reports a lower bound
+    rather than scanning to EOF).
     """
     page: list[str] = []
     page_bytes = 0
     total_lines = 0
+    total_exact = True
+    scan_cap = offset + limit - 1 + _READ_TOTAL_SCAN_LINES
+    scan_bytes = 0
     while True:
         piece = stream.readline(_READ_LINE_CHUNK)
         if piece == "":
             break
         total_lines += 1
-        parts: list[str] | None = [piece] if offset <= total_lines < offset + limit else None
-        size = len(piece)
-        while not piece.endswith("\n"):
+        parts: list[str] | None = [] if offset <= total_lines < offset + limit else None
+        size = 0
+        while True:
+            if total_lines >= offset + limit:
+                scan_bytes += len(piece.encode("utf-8", errors="replace"))
+                if scan_bytes >= _READ_TOTAL_SCAN_BYTES:
+                    return "".join(page), len(page), total_lines, False
+            if parts is not None:
+                size += len(piece)
+                if size > max_bytes:
+                    raise ValueError(f"File '{path}' exceeds max size during read")
+                parts.append(piece)
+            if piece.endswith("\n"):
+                break
             piece = stream.readline(_READ_LINE_CHUNK)
             if piece == "":
                 break
-            size += len(piece)
-            if parts is None:
-                continue
-            if size > max_bytes:
-                raise ValueError(f"File '{path}' exceeds max size during read")
-            parts.append(piece)
         if parts is None:
+            if total_lines >= scan_cap:
+                total_exact = False
+                break
             continue
         text = "".join(parts)
         page_bytes += len(text.encode("utf-8", errors="replace"))
         if page_bytes > max_bytes:
             raise ValueError(f"File '{path}' exceeds max size during read")
         page.append(text)
-    return "".join(page), len(page), total_lines
+    return "".join(page), len(page), total_lines, total_exact
 
 
 @registry.register(
@@ -519,7 +597,8 @@ def _read_page(
     description=(
         "Read the contents of a file. Returns the file content as text. Large files "
         "can be paged with offset/limit; a result truncated at limit ends with a "
-        "marker reporting the total line count and the next offset."
+        "marker reporting the total line count (or a lower bound for very large "
+        "files) and the next offset."
     ),
     parameters={
         "type": "object",
@@ -559,7 +638,9 @@ async def read_file(
     Offset/limit are applied before the size gate: only the selected page
     counts against ``max_size``, so an oversized file can be paged instead of
     rejected. When the page is cut off at ``limit`` and more lines follow, a
-    final marker reports the total line count and the next offset.
+    final marker reports the total line count and the next offset; for very
+    large files the total is a lower bound (the scan stops a bounded number of
+    lines past the page rather than reading the file to EOF).
 
     Args:
         path: Path to the file to read.
@@ -594,7 +675,7 @@ async def read_file(
             fd = _open_secure_read(file_path, check_base=not outside)
             try:
                 with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
-                    page, shown, total = _read_page(
+                    page, shown, total, total_exact = _read_page(
                         f, offset=offset, limit=limit, max_bytes=effective_max, path=path
                     )
             except BaseException:
@@ -607,9 +688,10 @@ async def read_file(
                 return ""
             if total > offset + shown - 1:
                 next_offset = offset + shown
+                total_label = f"{total}" if total_exact else f"at least {total}"
                 return page + (
                     f"\n[read_file: showing lines {offset}-{next_offset - 1} of "
-                    f"{total}; use offset={next_offset} to continue]"
+                    f"{total_label}; use offset={next_offset} to continue]"
                 )
             return page
 
@@ -625,11 +707,13 @@ def _write_anchored_inside(file_path: Path, content: str, display: str) -> str:
 
     Directory-fd-anchored counterpart of the legacy probe + atomic-write
     sequence in :func:`write_file` (R5-B finding 3). The parent directory is
-    opened and bound to its validated identity; the existence probe, temp
-    creation, and final replacement all run relative to that descriptor
-    (openat/renameat), so a concurrent rename of a workspace subdirectory to
-    a symlink cannot redirect temp creation or replacement outside the base.
-    Platforms without dir_fd support keep the legacy pathname sequence.
+    acquired by walking from the trusted workspace root (:func:`_open_parent_dir_fd`,
+    F01) — creating missing levels with ``mkdirat`` — and bound to those
+    descriptors; the existence probe, temp creation, and final replacement all
+    run relative to the final descriptor (openat/renameat), so a concurrent
+    rename of a workspace ancestor to a symlink cannot redirect the write
+    outside the base. Platforms without dir_fd support keep the legacy
+    pathname sequence.
     """
     parent = file_path.parent
     leaf = file_path.name
@@ -721,19 +805,23 @@ async def write_file(path: str, content: str) -> str:
 
         def _write():
             inside = file_path.is_relative_to(_base_dir())
+            if inside and _dir_fd_supported():
+                # R5-B/F01: create missing parents and anchor the probe, temp
+                # creation, and replacement to descriptors walked from the
+                # trusted workspace root (openat/mkdirat/renameat). No pathname
+                # containment check runs after the root, so a concurrently
+                # swapped ancestor symlink cannot redirect the write outside.
+                return _write_anchored_inside(file_path, content, path)
+            # Fallback path: full-mode outside paths, or platforms without
+            # dir_fd support. Verify ancestors (symlink-aware) before and
+            # after creating parents one level at a time, never through
+            # symlinks.
             if inside:
-                # Verify ancestors (symlink-aware) before creating parents.
                 _reject_symlink_components(file_path)
-            # Secure parent creation: level-by-level, never through symlinks.
             _secure_mkdir_parents(file_path, inside_base=inside)
             if inside:
                 # Re-check after mkdir (a component could have been swapped).
                 _reject_symlink_components(file_path)
-            if inside and _dir_fd_supported():
-                # R5-B: anchor the probe, temp creation, and replacement to
-                # the validated parent directory descriptor so a concurrent
-                # ancestor rename cannot redirect the write outside.
-                return _write_anchored_inside(file_path, content, path)
             nofollow = getattr(os, "O_NOFOLLOW", 0)
             # Open first WITHOUT O_TRUNC: the descriptor is validated before
             # any content changes, and the content itself is written to a
@@ -796,7 +884,7 @@ async def write_file(path: str, content: str) -> str:
                 raise
             return f"Successfully wrote {len(content)} characters to {path}"
 
-        return await _run_worker_joined(_write)
+        return await _run_worker_joined(_write, capture_result=True)
     except Exception as e:
         raise ToolError(f"Error writing file: {e}") from e
 

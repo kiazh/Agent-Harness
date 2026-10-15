@@ -214,7 +214,7 @@ fallback persistence) are now settled and recorded in the R4-131 section below.
 | Decision/change | Resolution | Commit |
 |---|---|---|
 | `max_iterations` | REMOVED (owner decision): field, config key, soulspec mapping, DB column (idempotent DROP); PB-1 flush log-and-continue landed in the same file | `bceadb4`; UI surface dropped in `978aab8` |
-| `minimal` catalog effort tier | accepted + alias-normalized | `3130a7a` |
+| `minimal` catalog effort tier | accepted (distinct catalog tier, not alias-normalized) | `3130a7a` |
 | Provider-remove fallback persistence | persisted, restart-surviving | `3130a7a` |
 | Keys allowlist final shape | widened (OPENCODE/KIMI/CUSTOM) + parity test | `b1794be`, `011f1ba` |
 | Full-grant disclosure semantics | policy fast-path STANDS (comment-pinned); copy corrected to no-approval semantics | `22081dd`, `8b50144` |

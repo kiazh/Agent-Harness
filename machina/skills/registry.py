@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import threading
 import unicodedata
 from contextlib import contextmanager
@@ -42,6 +43,21 @@ logger = logging.getLogger(__name__)
 # same skills are found no matter where `machina` is launched. Override with env vars.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _LEGACY_INSTALL_BUILD_RE = re.compile(r"[a-z0-9_-]+\.install-[0-9]+-[0-9a-f]{8}")
+
+
+def _skill_key(name: Any) -> Any:
+    """Canonical case-insensitive key for the in-memory skill map.
+
+    Names are matched case-insensitively (``load_all`` already looks up
+    ``skill.name.casefold()``), so the map is keyed by the folded spelling.
+    Without this an uppercase local skill ('FOO') and a differently-cased
+    builtin ('Foo') would occupy two keys and the collision guard would miss,
+    letting the local entry shadow/duplicate the builtin
+    (line_rag_tools_skills P3). Non-string values pass through unchanged so a
+    ``None``/sentinel lookup still misses rather than raising.
+    """
+    return name.casefold() if isinstance(name, str) else name
+
 
 # ─── best-effort injection-scan normalization ───────────────────────────────
 # The scanner below is deliberately normalization-based, not semantic. These
@@ -523,14 +539,15 @@ class SkillRegistry(SkillSource):
             if not isinstance(data, dict):
                 return
             for name, telemetry in data.items():
-                if name in self._skills and isinstance(telemetry, dict):
-                    skill = self._skills[name]
+                key = _skill_key(name)
+                if key in self._skills and isinstance(telemetry, dict):
+                    skill = self._skills[key]
                     skill.usage_count = telemetry.get("usage_count", 0)
                     skill.view_count = telemetry.get("view_count", 0)
                     last_activity = telemetry.get("last_activity_at")
                     if last_activity:
                         skill.last_activity_at = datetime.fromisoformat(last_activity)
-                    self._telemetry_baseline[name] = (skill.usage_count, skill.view_count)
+                    self._telemetry_baseline[key] = (skill.usage_count, skill.view_count)
         except (json.JSONDecodeError, OSError, ValueError):
             logger.warning("Failed to load telemetry", exc_info=True)
 
@@ -654,7 +671,9 @@ class SkillRegistry(SkillSource):
                 from machina.skills.bundle import ECCBundle
 
                 self._ecc_bundle = ECCBundle()
-            self._skills.update((skill.name, skill) for skill in self._ecc_bundle.skills())
+            self._skills.update(
+                (_skill_key(skill.name), skill) for skill in self._ecc_bundle.skills()
+            )
         for directory in self._skill_dirs():
             if not directory.exists():
                 continue
@@ -667,17 +686,17 @@ class SkillRegistry(SkillSource):
                         except (ValueError, OSError, UnicodeDecodeError) as e:
                             logger.warning("Skipping skill %s: %s", skill_file, e)
                             continue
-                        existing = self._skills.get(skill.name.casefold())
+                        existing = self._skills.get(_skill_key(skill.name))
                         if not existing or existing.source_type != "builtin-ecc":
                             # Local provenance cannot claim the verified bundle's trust.
                             if skill.source_type == "builtin-ecc":
                                 skill.source_type = "local"
-                            self._skills[skill.name] = skill
+                            self._skills[_skill_key(skill.name)] = skill
         self._load_telemetry()
         self._signature_cache = signature
 
     def get(self, name: str) -> Skill | None:
-        return self._skills.get(name)
+        return self._skills.get(_skill_key(name))
 
     def list_skills(self) -> list[Skill]:
         return list(self._skills.values())
@@ -707,7 +726,7 @@ class SkillRegistry(SkillSource):
 
     def get_skill_content(self, name: str) -> str | None:
         """Get the full content of a skill (for injection into prompt)."""
-        skill = self._skills.get(name)
+        skill = self._skills.get(_skill_key(name))
         if skill and skill.source_type == "builtin-ecc":
             return self._ecc_bundle.instructions(skill)
         return skill.content if skill and skill.enabled else None
@@ -716,7 +735,7 @@ class SkillRegistry(SkillSource):
 
     def record_use(self, name: str) -> None:
         """Record that a skill was used (triggered and content injected)."""
-        skill = self._skills.get(name)
+        skill = self._skills.get(_skill_key(name))
         if skill:
             skill.usage_count += 1
             skill.last_activity_at = datetime.now(UTC)
@@ -724,7 +743,7 @@ class SkillRegistry(SkillSource):
 
     def record_view(self, name: str) -> None:
         """Record that a skill was viewed (listed or inspected)."""
-        skill = self._skills.get(name)
+        skill = self._skills.get(_skill_key(name))
         if skill:
             skill.view_count += 1
             skill.last_activity_at = datetime.now(UTC)
@@ -732,7 +751,7 @@ class SkillRegistry(SkillSource):
 
     def get_telemetry(self, name: str) -> dict[str, Any] | None:
         """Get telemetry data for a skill."""
-        skill = self._skills.get(name)
+        skill = self._skills.get(_skill_key(name))
         if not skill:
             return None
         return {
@@ -754,7 +773,7 @@ class SkillRegistry(SkillSource):
 
     def get_provenance(self, name: str) -> dict[str, Any] | None:
         """Get provenance data for a skill."""
-        skill = self._skills.get(name)
+        skill = self._skills.get(_skill_key(name))
         if not skill:
             return None
         return {
@@ -786,7 +805,7 @@ class SkillRegistry(SkillSource):
         SkillParser._validate_metadata(name, description, triggers or [])
         if self._include_ecc:
             self.load_all()
-            existing = self._skills.get(name.casefold())
+            existing = self._skills.get(_skill_key(name))
             if existing and existing.source_type == "builtin-ecc":
                 raise ValueError(f"skill '{name}' is a bundled default")
         if source_type == "builtin-ecc":
@@ -848,7 +867,7 @@ class SkillRegistry(SkillSource):
             source_type=source_type,
             created_at=created_at,
         )
-        self._skills[name] = skill
+        self._skills[_skill_key(name)] = skill
         self._invalidate()
         return skill
 
@@ -862,6 +881,12 @@ class SkillRegistry(SkillSource):
         enabled: bool,
     ) -> None:
         """Atomically replace a skill's SKILL.md (temp file + fsync + replace).
+
+        Uses ``tempfile.mkstemp`` (unpredictable name, created ``O_EXCL`` in the
+        skill's own directory) rather than a predictable ``<name>.<pid>.tmp``
+        path, so a pre-planted symlink is never followed or reused
+        (security_review S5 / adversarial F3; same idiom as
+        ``security/providers._save_store`` and ``security/env_file``).
 
         Raises ``OSError`` without touching the live object or leaving a
         partial file, mirroring the telemetry writer's crash-safe idiom.
@@ -880,15 +905,21 @@ class SkillRegistry(SkillSource):
         skill_content = f"---\n{yaml_text}---\n{content}\n"
 
         path = Path(skill.file_path)
-        temp_file = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent)
+        )
         try:
-            temp_file.write_text(skill_content, encoding="utf-8")
-            with open(temp_file, "rb") as handle:
+            if hasattr(os, "fchmod"):  # not available on Windows
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(skill_content)
+                handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temp_file, path)
-        except OSError:
+            os.replace(temp_name, path)
+        except BaseException:
             try:
-                temp_file.unlink()
+                os.unlink(temp_name)
             except OSError:
                 pass
             raise
@@ -907,7 +938,7 @@ class SkillRegistry(SkillSource):
         disk write succeeds, so a validation error or an ``OSError`` leaves
         both the live skill and the file untouched.
         """
-        skill = self._skills.get(name)
+        skill = self._skills.get(_skill_key(name))
         if not skill:
             return None
         if skill.source_type == "builtin-ecc":
@@ -949,7 +980,7 @@ class SkillRegistry(SkillSource):
         The flag is published to the live object only after the SKILL.md
         rewrite succeeds, so a failed write never diverges memory from disk.
         """
-        skill = self._skills.get(name)
+        skill = self._skills.get(_skill_key(name))
         if skill is None:
             return None
         if skill.source_type == "builtin-ecc":
@@ -967,9 +998,10 @@ class SkillRegistry(SkillSource):
 
     def delete_skill(self, name: str) -> bool:
         """Delete a skill by name."""
-        if self._skills.get(name) and self._skills[name].source_type == "builtin-ecc":
+        skill = self._skills.get(_skill_key(name))
+        if skill and skill.source_type == "builtin-ecc":
             return False
-        skill = self._skills.pop(name, None)
+        skill = self._skills.pop(_skill_key(name), None)
         if not skill:
             return False
         self._invalidate()

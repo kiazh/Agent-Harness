@@ -1,0 +1,365 @@
+diff --git a/machina/core/agent_factory.py b/machina/core/agent_factory.py
+index e7d0604..aacb015 100644
+--- a/machina/core/agent_factory.py
++++ b/machina/core/agent_factory.py
+@@ -300,10 +300,20 @@ def check_mode_cap(parent_authority: dict | None, requested_mode: str) -> None:
+ async def close_agent_provider(agent, timeout: float = 5.0) -> None:
+     """Release owned RAG leases and close providers with sanitized reporting.
+ 
+-    Claim release remains the caller's independent finally. Resistant cleanup
+-    remains strongly referenced until it retires; cancellation still propagates.
++    Claim release remains the caller's independent finally. An owned provider
++    is closed exactly once (AH-023). Resistant cleanup remains strongly
++    referenced until it retires.
++
++    Cancellation contract: a caller cancelling this call cancels the INNER
++    close (it observes ``CancelledError`` and ``bounded_cleanup`` records
++    ``provider.close.cancelled``), then bounded-joins it, then re-raises — so
++    the cancellation both reaches the in-flight close and never abandons a
++    half-closed provider. A genuinely wedged close still retires through the
++    independent timeout/quarantine path.
+     """
+-    from machina.core.background_tasks import await_joined
++    import asyncio
++
++    from machina.core.cleanup import cancel_and_join
+ 
+     async def release_dependencies():
+         try:
+@@ -315,7 +325,15 @@ async def close_agent_provider(agent, timeout: float = 5.0) -> None:
+         finally:
+             await _close_owned_provider(agent, timeout)
+ 
+-    await await_joined(release_dependencies())
++    operation = asyncio.ensure_future(release_dependencies())
++    try:
++        await asyncio.shield(operation)
++    except asyncio.CancelledError:
++        # Cancel the in-flight close first (the inner close observes the
++        # CancelledError and is counted), bounded-join it so nothing outlives
++        # this call, then propagate the caller's cancellation.
++        await cancel_and_join([operation], timeout, "owned provider")
++        raise
+ 
+ 
+ async def _close_owned_provider(agent, timeout: float) -> None:
+diff --git a/tests/test_chaos.py b/tests/test_chaos.py
+index f566654..fe39535 100644
+--- a/tests/test_chaos.py
++++ b/tests/test_chaos.py
+@@ -604,7 +604,9 @@ class TestDatabaseChaos:
+         The run path accumulates chunks and persists them through
+         ``context_manager.add_chunks_batch`` — patching ``add_chunk`` (as the
+         old version did) never fires. The second batch (the assistant message)
+-        fails here; the turn must still return a response.
++        fails here; the turn must still return a response, and the failed batch
++        must be RETAINED and retried by the turn-close cleanup rather than
++        silently dropped.
+         """
+         provider = AsyncMock()
+         provider.complete = AsyncMock(
+@@ -622,11 +624,18 @@ class TestDatabaseChaos:
+ 
+             with patch("machina.core.agent.context_manager") as mock_cm:
+                 # The real seam: the run path flushes via add_chunks_batch.
+-                # First flush (user message) succeeds, second (assistant
+-                # message) hits the dropped connection.
+-                mock_cm.add_chunks_batch = AsyncMock(
+-                    side_effect=[None, Exception("Connection lost")]
+-                )
++                # Snapshot each offered batch (the live pending list is cleared
++                # after success, so a stored reference would not prove what was
++                # persisted). First flush (user message) succeeds, second
++                # (assistant message) hits the dropped connection.
++                batches: list[list[dict]] = []
++
++                async def _flush(chunks):
++                    batches.append(list(chunks))
++                    if len(batches) == 2:
++                        raise Exception("Connection lost")
++
++                mock_cm.add_chunks_batch = AsyncMock(side_effect=_flush)
+                 mock_cm.get_latest_images = AsyncMock(return_value=[])
+                 mock_cm.get_recent_context = AsyncMock(return_value=[])
+ 
+@@ -635,8 +644,12 @@ class TestDatabaseChaos:
+                 response = await agent.run(mock_session.id, "test", verbose=False)
+                 assert response is not None
+                 assert response.content == "test"
+-                # The failure was injected at the real seam and actually ran.
+-                assert mock_cm.add_chunks_batch.await_count == 2
++                # The failure was injected at the real seam and actually ran:
++                # two flushes during the turn plus one retained-batch retry from
++                # the turn-close cleanup. The retried batch is exactly the one
++                # whose flush failed — proof it was retained, not dropped.
++                assert len(batches) == 3
++                assert batches[2] == batches[1]
+ 
+     async def test_agent_handles_slow_db(self, mock_session):
+         """Agent should handle slow database batch writes."""
+diff --git a/tests/test_handoff_regressions.py b/tests/test_handoff_regressions.py
+index b733e9d..1c2aae9 100644
+--- a/tests/test_handoff_regressions.py
++++ b/tests/test_handoff_regressions.py
+@@ -782,14 +782,31 @@ def test_keyset_pagination_counts_and_concurrent_insert():
+ 
+         store.extend(_mk(i) for i in range(n))
+         calls = {"pages": 0}
+-
+-        async def _page(session_id, limit=500, before_time=None, before_id=None, chunk_type=None):
++        seq_floor = -9223372036854775808  # matches context.NULL_EVENT_SEQ_DESC
++
++        def _seq(chunk):
++            # Mirror the reader's COALESCE(event_seq, <bigint floor>).
++            return chunk.event_seq if chunk.event_seq is not None else seq_floor
++
++        async def _page(
++            session_id,
++            limit=500,
++            before_time=None,
++            before_id=None,
++            before_seq=None,
++            chunk_type=None,
++        ):
+             calls["pages"] += 1
+-            ordered = sorted(store, key=lambda c: (c.created_at, str(c.id)), reverse=True)
++            # 3-key keyset (created_at, event_seq, id), newest first — the same
++            # cursor contract get_chunks_before implements.
++            ordered = sorted(store, key=lambda c: (c.created_at, _seq(c), str(c.id)), reverse=True)
+             if before_time is not None:
+-                ordered = [
+-                    c for c in ordered if (c.created_at, str(c.id)) < (before_time, str(before_id))
+-                ]
++                cursor = (
++                    before_time,
++                    before_seq if before_seq is not None else seq_floor,
++                    str(before_id),
++                )
++                ordered = [c for c in ordered if (c.created_at, _seq(c), str(c.id)) < cursor]
+             # Concurrent insert mid-pagination: newest row appears once.
+             if calls["pages"] == 1 and n >= 500:
+                 store.append(_mk(10**6))
+diff --git a/tests/test_integration_permissions.py b/tests/test_integration_permissions.py
+index af7f0e1..eefcd6f 100644
+--- a/tests/test_integration_permissions.py
++++ b/tests/test_integration_permissions.py
+@@ -503,11 +503,38 @@ def test_tool_start_ids_stable():
+ 
+ 
+ def test_owned_provider_close_once():
+-    import inspect
++    """AH-023: an owned provider is closed exactly once across close paths.
++
++    Ownership is consumed inside ``_close_owned_provider`` (the close seam the
++    gate introduced). Re-entering the close through either the public wrapper
++    (``close_agent_provider``) or the inner helper must not issue a second
++    ``provider.close()``.
++    """
++    import asyncio
+ 
+-    from machina.core.agent_factory import close_agent_provider
++    from machina.core.agent_factory import _close_owned_provider, close_agent_provider
+ 
+-    assert "_owns_provider" in inspect.getsource(close_agent_provider)
++    closed = []
++
++    class _P:
++        async def close(self):
++            closed.append(True)
++
++    class _A:
++        provider = _P()
++        _owns_provider = True
++
++    async def _go():
++        agent = _A()
++        await close_agent_provider(agent)
++        # Second entry through the public wrapper: ownership already consumed.
++        await close_agent_provider(agent)
++        # The inner seam agrees — no double close.
++        await _close_owned_provider(agent, timeout=1.0)
++        assert agent._owns_provider is False
++
++    asyncio.run(_go())
++    assert closed == [True]
+ 
+ 
+ # ─── Installation proof ───
+diff --git a/tests/test_final_review_2026_10_15_gate_reconciliation.py b/tests/test_final_review_2026_10_15_gate_reconciliation.py
+new file mode 100644
+index 0000000..c521618
+--- /dev/null
++++ b/tests/test_final_review_2026_10_15_gate_reconciliation.py
+@@ -0,0 +1,172 @@
++"""Evidence tests for the 2026-10-15 final-review gate reconciliation.
++
++Four no-mistakes-gate failures were reconciled against earlier pins. Each test
++here pins the reconciled invariant directly (fails on the pre-reconciliation
++code, passes after), independent of the file that originally hosted it:
++
++1. ``chaos``: a failed context flush retains its batch; the turn-close cleanup
++   retries it, so the turn neither fails nor silently drops the batch.
++2. ``handoff``: the keyset pagination cursor is the 3-key
++   ``(created_at, event_seq, id)`` tuple, so readers pass ``before_seq``.
++3. ``integration_permissions``: an owned provider is closed exactly once
++   across both close paths (public wrapper + inner helper).
++4. ``provider_close_visibility``: parent cancellation cancels the in-flight
++   close (counted as ``provider.close.cancelled``), bounded-joins it, and
++   re-raises CancelledError.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import uuid
++from datetime import UTC, datetime
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, patch
++
++import pytest
++
++from machina.core.agent import ReActAgent
++from machina.core.agent_factory import _close_owned_provider, close_agent_provider
++from machina.core.metrics import MetricsCollector
++from machina.core.models import LLMResponse, Session
++
++# ─── 1. Retained-on-failure flush is retried, not dropped ──────────────────
++
++
++async def test_failed_flush_batch_is_retained_and_retried_at_turn_close():
++    session = Session(id=uuid.uuid4(), title="s", context_budget=8000)
++    provider = AsyncMock()
++    provider.complete = AsyncMock(
++        return_value=LLMResponse(content="test", model="test", usage={"total_tokens": 10})
++    )
++
++    with patch("machina.core.agent.session_manager") as mock_sm:
++        mock_sm.get = AsyncMock(return_value=session)
++        mock_sm.update_activity = AsyncMock()
++        with patch("machina.core.agent.context_manager") as mock_cm:
++            batches: list[list[dict]] = []
++
++            async def _flush(chunks):
++                batches.append(list(chunks))  # snapshot: the live list is cleared
++                if len(batches) == 2:
++                    raise Exception("Connection lost")
++
++            mock_cm.add_chunks_batch = AsyncMock(side_effect=_flush)
++            mock_cm.get_latest_images = AsyncMock(return_value=[])
++            mock_cm.get_recent_context = AsyncMock(return_value=[])
++
++            agent = ReActAgent(provider=provider)
++            response = await agent.run(session.id, "test", verbose=False)
++
++    assert response is not None and response.content == "test"
++    # Two in-turn flushes plus one turn-close retry; the retried batch is the
++    # exact batch whose flush failed.
++    assert len(batches) == 3
++    assert batches[2] == batches[1]
++
++
++# ─── 2. 3-key keyset pagination cursor ─────────────────────────────────────
++
++
++async def test_get_all_chunks_advances_the_three_key_cursor():
++    from machina.core.context import ContextManager
++    from machina.core.models import ContextChunk
++
++    mgr = ContextManager()
++    base = datetime(2026, 1, 1, tzinfo=UTC)
++    store = [
++        ContextChunk(
++            id=uuid.uuid4(),
++            session_id=uuid.uuid4(),
++            agent_id="h",
++            chunk_type="user_message",
++            payload={"content": f"m{i}"},
++            token_count=1,
++            created_at=base,  # identical timestamps: event_seq must break the tie
++            event_seq=i,
++        )
++        for i in range(600)
++    ]
++    cursors: list[int | None] = []
++
++    async def _page(
++        session_id,
++        limit=500,
++        before_time=None,
++        before_id=None,
++        before_seq=None,
++        chunk_type=None,
++    ):
++        cursors.append(before_seq)
++        ordered = sorted(store, key=lambda c: (c.created_at, c.event_seq, str(c.id)), reverse=True)
++        if before_time is not None:
++            ordered = [
++                c
++                for c in ordered
++                if (c.created_at, c.event_seq, str(c.id))
++                < (before_time, before_seq, str(before_id))
++            ]
++        return ordered[:limit]
++
++    mgr.get_chunks_before = _page  # type: ignore[method-assign]
++    out = await mgr.get_all_chunks(uuid.uuid4())
++
++    assert cursors[0] is None  # legacy first page keeps the 2-key predicate
++    assert all(seq is not None for seq in cursors[1:])  # reader advances the ordinal
++    ids = [c.id for c in out]
++    assert len(ids) == len(set(ids)), "no duplicate pages"
++    assert len(out) == 600, "same-timestamp batch is not skipped"
++
++
++# ─── 3. Owned provider closed exactly once across both paths ───────────────
++
++
++async def test_owned_provider_closed_once_across_both_paths():
++    closed: list[bool] = []
++
++    class _P:
++        async def close(self):
++            closed.append(True)
++
++    class _A:
++        provider = _P()
++        _owns_provider = True
++
++    agent = _A()
++    await close_agent_provider(agent)
++    await close_agent_provider(agent)  # ownership already consumed
++    await _close_owned_provider(agent, timeout=1.0)  # inner seam agrees
++    assert closed == [True]
++    assert agent._owns_provider is False
++
++
++# ─── 4. Cancellation cancels + bounded-joins the in-flight close ───────────
++
++
++async def test_parent_cancellation_cancels_and_joins_inner_close(monkeypatch):
++    import machina.core.metrics as metrics_module
++
++    collector = MetricsCollector()
++    monkeypatch.setattr(metrics_module, "metrics", collector)
++
++    started, cancelled = asyncio.Event(), asyncio.Event()
++
++    async def close():
++        started.set()
++        try:
++            await asyncio.Event().wait()
++        finally:
++            cancelled.set()
++
++    agent = SimpleNamespace(
++        _owns_provider=True, agent_id="test-agent", provider=SimpleNamespace(close=close)
++    )
++    task = asyncio.create_task(close_agent_provider(agent))
++    await started.wait()
++    task.cancel()
++    with pytest.raises(asyncio.CancelledError):
++        await task
++    # The inner close observed cancellation (not the cleanup timeout) and the
++    # join held before the error propagated.
++    await asyncio.wait_for(cancelled.wait(), 0.5)
++    assert collector._counters["provider.close.cancelled"] == 1

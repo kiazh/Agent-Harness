@@ -503,11 +503,38 @@ def test_tool_start_ids_stable():
 
 
 def test_owned_provider_close_once():
-    import inspect
+    """AH-023: an owned provider is closed exactly once across close paths.
 
-    from machina.core.agent_factory import close_agent_provider
+    Ownership is consumed inside ``_close_owned_provider`` (the close seam the
+    gate introduced). Re-entering the close through either the public wrapper
+    (``close_agent_provider``) or the inner helper must not issue a second
+    ``provider.close()``.
+    """
+    import asyncio
 
-    assert "_owns_provider" in inspect.getsource(close_agent_provider)
+    from machina.core.agent_factory import _close_owned_provider, close_agent_provider
+
+    closed = []
+
+    class _P:
+        async def close(self):
+            closed.append(True)
+
+    class _A:
+        provider = _P()
+        _owns_provider = True
+
+    async def _go():
+        agent = _A()
+        await close_agent_provider(agent)
+        # Second entry through the public wrapper: ownership already consumed.
+        await close_agent_provider(agent)
+        # The inner seam agrees — no double close.
+        await _close_owned_provider(agent, timeout=1.0)
+        assert agent._owns_provider is False
+
+    asyncio.run(_go())
+    assert closed == [True]
 
 
 # ─── Installation proof ───

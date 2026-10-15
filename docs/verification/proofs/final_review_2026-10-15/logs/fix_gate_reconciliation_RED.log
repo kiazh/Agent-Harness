@@ -1,0 +1,215 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+___________ TestDatabaseChaos.test_agent_handles_db_connection_drop ____________
+
+self = <tests.test_chaos.TestDatabaseChaos object at 0x10b6aca50>
+mock_session = Session(id=UUID('de1dcc79-1cd2-4c71-baa6-8f8985259f1b'), title='Test Session', agent_id='harness', status='active', st...7, 46, 47, 53396, tzinfo=datetime.timezone.utc), execution_mode='ask', parent_session_id=None, delegation_authority={})
+
+    async def test_agent_handles_db_connection_drop(self, mock_session):
+        """Agent should handle a database connection drop during context flush.
+    
+        The run path accumulates chunks and persists them through
+        ``context_manager.add_chunks_batch`` — patching ``add_chunk`` (as the
+        old version did) never fires. The second batch (the assistant message)
+        fails here; the turn must still return a response.
+        """
+        provider = AsyncMock()
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="test",
+                model="test",
+                usage={"total_tokens": 10},
+                tool_calls=[],
+            )
+        )
+    
+        with patch("machina.core.agent.session_manager") as mock_sm:
+            mock_sm.get = AsyncMock(return_value=mock_session)
+            mock_sm.update_activity = AsyncMock()
+    
+            with patch("machina.core.agent.context_manager") as mock_cm:
+                # The real seam: the run path flushes via add_chunks_batch.
+                # First flush (user message) succeeds, second (assistant
+                # message) hits the dropped connection.
+                mock_cm.add_chunks_batch = AsyncMock(
+                    side_effect=[None, Exception("Connection lost")]
+                )
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
+                mock_cm.get_recent_context = AsyncMock(return_value=[])
+    
+                agent = ReActAgent(provider=provider)
+                # Agent should handle DB errors gracefully (log and continue)
+                response = await agent.run(mock_session.id, "test", verbose=False)
+                assert response is not None
+                assert response.content == "test"
+                # The failure was injected at the real seam and actually ran.
+>               assert mock_cm.add_chunks_batch.await_count == 2
+E               AssertionError: assert 3 == 2
+E                +  where 3 = <AsyncMock name='context_manager.add_chunks_batch' id='4513422304'>.await_count
+E                +    where <AsyncMock name='context_manager.add_chunks_batch' id='4513422304'> = <MagicMock name='context_manager' id='4513421968'>.add_chunks_batch
+
+tests/test_chaos.py:639: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 03:46:47,083 [AUDIT] {"timestamp": 1792050407.083178, "event": "agent_run_start", "session_id": "de1dcc79-1cd2-4c71-baa6-8f8985259f1b", "agent_id": "harness"}
+2026-10-15 03:46:47,170 [AUDIT] {"timestamp": 1792050407.170413, "event": "agent_run_complete", "session_id": "de1dcc79-1cd2-4c71-baa6-8f8985259f1b", "iterations": 1, "total_tokens": 10, "tool_calls_count": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792050407.083178, "event": "agent_run_start", "session_id": "de1dcc79-1cd2-4c71-baa6-8f8985259f1b", "agent_id": "harness"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.observability.diagnostics:diagnostics.py:25 boundary failed: agent.growth.prepare error_type=DatabaseError
+WARNING  machina.memory.retriever:retriever.py:187 Sparse search failed: DatabaseError
+WARNING  machina.core.agent:agent.py:705 Archived context retrieval failed: TypeError
+WARNING  machina.skills.registry:registry.py:687 Skipping skill /Users/shadow/machina/skills/cost-optimization/SKILL.md: ValueError
+WARNING  machina.skills.registry:registry.py:687 Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+WARNING  machina.core.agent:agent.py:1455 Context flush failed (Exception); continuing turn
+INFO     machina.audit:audit.py:244 {"timestamp": 1792050407.170413, "event": "agent_run_complete", "session_id": "de1dcc79-1cd2-4c71-baa6-8f8985259f1b", "iterations": 1, "total_tokens": 10, "tool_calls_count": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+WARNING  machina.core.agent:agent.py:1455 Context flush failed (StopAsyncIteration); continuing turn
+_____________ test_keyset_pagination_counts_and_concurrent_insert ______________
+
+    def test_keyset_pagination_counts_and_concurrent_insert():
+        """5.7: 499/500/501/999/1000/1001+, identical timestamps, concurrent insert."""
+        import asyncio
+        import uuid as _uuid
+        from datetime import UTC, datetime
+    
+        from machina.core.context import ContextManager
+        from machina.core.models import ContextChunk
+    
+        async def _run(n, identical_ts):
+            mgr = ContextManager()
+            from datetime import timedelta
+    
+            base_stamp = datetime(2026, 1, 1, tzinfo=UTC)
+            stamp = base_stamp if identical_ts else None
+            store = []
+    
+            def _mk(i):
+                return ContextChunk(
+                    id=_uuid.uuid4(),
+                    session_id=_uuid.uuid4(),
+                    agent_id="h",
+                    chunk_type="user_message",
+                    payload={"content": f"m{i}"},
+                    token_count=1,
+                    created_at=stamp or (base_stamp + timedelta(seconds=i)),
+                )
+    
+            store.extend(_mk(i) for i in range(n))
+            calls = {"pages": 0}
+    
+            async def _page(session_id, limit=500, before_time=None, before_id=None, chunk_type=None):
+                calls["pages"] += 1
+                ordered = sorted(store, key=lambda c: (c.created_at, str(c.id)), reverse=True)
+                if before_time is not None:
+                    ordered = [
+                        c for c in ordered if (c.created_at, str(c.id)) < (before_time, str(before_id))
+                    ]
+                # Concurrent insert mid-pagination: newest row appears once.
+                if calls["pages"] == 1 and n >= 500:
+                    store.append(_mk(10**6))
+                return ordered[:limit]
+    
+            mgr.get_chunks_before = _page  # type: ignore[method-assign]
+            out = await mgr.get_all_chunks(_uuid.uuid4())
+            ids = [c.id for c in out]
+            assert len(ids) == len(set(ids)), "no duplicate pages"
+            assert len(out) >= n, "snapshot rows all returned"
+            return out
+    
+        for n in (499, 500, 501, 999, 1000, 1001):
+>           asyncio.run(_run(n, identical_ts=True))
+
+tests/test_handoff_regressions.py:806: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:204: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:127: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:719: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_handoff_regressions.py:799: in _run
+    out = await mgr.get_all_chunks(_uuid.uuid4())
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <machina.core.context.ContextManager object at 0x10d549cd0>
+session_id = UUID('0fd5667f-6d56-4609-afc8-09e03f20d573')
+
+    async def get_all_chunks(self, session_id: uuid.UUID) -> list[ContextChunk]:
+        """Fetch every active chunk for *session_id* (newest first).
+    
+        Keyset snapshot (5.7): pages by the (created_at, event_seq, id) cursor
+        (HELD-55; a same-created_at batch pages in event order rather than
+        falling back to the random UUID), dedupes by id, and returns exactly
+        the validated input snapshot. Callers replace only these IDs, so
+        concurrent inserts survive and competing compression cannot insert a
+        stale summary twice for the same rows without detection (id-set
+        comparison at the caller).
+        """
+        all_chunks: list[ContextChunk] = []
+        seen: set[uuid.UUID] = set()
+        before_time = None
+        before_id: uuid.UUID | None = None
+        before_seq: int | None = None
+        while True:
+            cursor_kwargs: dict = {
+                "limit": 500,
+                "before_time": before_time,
+                "before_id": before_id,
+            }
+            if before_seq is not None:
+                cursor_kwargs["before_seq"] = before_seq
+>           page = await self.get_chunks_before(session_id, **cursor_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: test_keyset_pagination_counts_and_concurrent_insert.<locals>._run.<locals>._page() got an unexpected keyword argument 'before_seq'. Did you mean 'before_id'?
+
+machina/core/context.py:737: TypeError
+________________________ test_owned_provider_close_once ________________________
+
+    def test_owned_provider_close_once():
+        import inspect
+    
+        from machina.core.agent_factory import close_agent_provider
+    
+>       assert "_owns_provider" in inspect.getsource(close_agent_provider)
+E       assert '_owns_provider' in 'async def close_agent_provider(agent, timeout: float = 5.0) -> None:\n    """Release owned RAG leases and close provi... finally:\n            await _close_owned_provider(agent, timeout)\n\n    await await_joined(release_dependencies())\n'
+E        +  where 'async def close_agent_provider(agent, timeout: float = 5.0) -> None:\n    """Release owned RAG leases and close provi... finally:\n            await _close_owned_provider(agent, timeout)\n\n    await await_joined(release_dependencies())\n' = <function getsource at 0x108230460>(<function close_agent_provider at 0x10d0a43b0>)
+E        +    where <function getsource at 0x108230460> = <module 'inspect' from '/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/inspect.py'>.getsource
+
+tests/test_integration_permissions.py:510: AssertionError
+____________ test_parent_cancellation_propagates_and_cancels_close _____________
+
+collector = <machina.core.metrics.MetricsCollector object at 0x10d4e6350>
+
+    async def test_parent_cancellation_propagates_and_cancels_close(collector):
+        started, cancelled = asyncio.Event(), asyncio.Event()
+    
+        async def close():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+    
+        task = asyncio.create_task(close_agent_provider(agent(close)))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(cancelled.wait(), 0.5)
+>       assert collector._counters["provider.close.cancelled"] == 1
+E       assert 0 == 1
+
+tests/test_provider_close_visibility.py:97: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.core.cleanup:cleanup.py:36 cleanup timeout service=owned provider error_type=none
+WARNING  machina.core.agent_factory:agent_factory.py:345 owned provider close timeout provider=SimpleNamespace elapsed_ms=5001.7 error_type=none
+=========================== short test summary info ============================
+FAILED tests/test_chaos.py::TestDatabaseChaos::test_agent_handles_db_connection_drop
+FAILED tests/test_handoff_regressions.py::test_keyset_pagination_counts_and_concurrent_insert
+FAILED tests/test_integration_permissions.py::test_owned_provider_close_once
+FAILED tests/test_provider_close_visibility.py::test_parent_cancellation_propagates_and_cancels_close
+4 failed in 5.75s

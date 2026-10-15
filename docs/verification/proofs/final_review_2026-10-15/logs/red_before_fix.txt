@@ -1,0 +1,320 @@
+FFFF.FFF.                                                                [100%]
+=================================== FAILURES ===================================
+_________________ test_cancelled_batch_records_completed_tool __________________
+
+sleep_tool = None
+
+    async def test_cancelled_batch_records_completed_tool(sleep_tool):
+        """A tool that finished before cancellation keeps its durable record."""
+        agent = _StubAgent()
+        response = LLMResponse(
+            content="",
+            model="test-model",
+            tool_calls=[
+                _tool_call("sleep_probe", {"delay": 5.0, "tag": "slow"}, 0),
+                _tool_call("sleep_probe", {"delay": 0.01, "tag": "fast"}, 1),
+            ],
+        )
+        pending: list[dict] = []
+        made: list[dict] = []
+    
+        task, events = await _drive_until_first_result(agent, response, made, pending, uuid.uuid4())
+        assert any(
+            event.type == "tool_result" and event.tool_result == "done-fast" for event in events
+        ), events
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    
+        recorded = [c for c in pending if c["payload"]["result_preview"] == "done-fast"]
+>       assert len(recorded) == 1, "completed tool record was dropped on cancellation"
+E       AssertionError: completed tool record was dropped on cancellation
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tests/test_final_review_fix_core_agent_context.py:120: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 01:04:58,266 [AUDIT] {"timestamp": 1792040698.266228, "event": "tool_call_start", "session_id": "7db81d7f-1ac8-4ffc-b863-babf000a808d", "tool_name": "sleep_probe"}
+2026-10-15 01:04:58,276 [AUDIT] {"timestamp": 1792040698.2768252, "event": "permission_allowed", "request_id": "2999da5de12f486e9a8dfc1cd984a6a4", "session_id": "7db81d7f-1ac8-4ffc-b863-babf000a808d", "turn_id": "", "agent_id": "test-agent", "operation": "tool.sleep_probe", "tool": "sleep_probe", "mode": "ask", "digest_prefix": "d3ec79a6fbf4b8db", "targets": [], "argv": [], "reason": "in-process operation"}
+2026-10-15 01:04:58,277 [AUDIT] {"timestamp": 1792040698.2772539, "event": "tool_call_start", "session_id": "7db81d7f-1ac8-4ffc-b863-babf000a808d", "tool_name": "sleep_probe"}
+2026-10-15 01:04:58,277 [AUDIT] {"timestamp": 1792040698.2777169, "event": "permission_allowed", "request_id": "ad9a1a8904a64a48827c5452840137d7", "session_id": "7db81d7f-1ac8-4ffc-b863-babf000a808d", "turn_id": "", "agent_id": "test-agent", "operation": "tool.sleep_probe", "tool": "sleep_probe", "mode": "ask", "digest_prefix": "d3ec79a6fbf4b8db", "targets": [], "argv": [], "reason": "in-process operation"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:251 {"timestamp": 1792040698.266228, "event": "tool_call_start", "session_id": "7db81d7f-1ac8-4ffc-b863-babf000a808d", "tool_name": "sleep_probe"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:251 {"timestamp": 1792040698.2768252, "event": "permission_allowed", "request_id": "2999da5de12f486e9a8dfc1cd984a6a4", "session_id": "7db81d7f-1ac8-4ffc-b863-babf000a808d", "turn_id": "", "agent_id": "test-agent", "operation": "tool.sleep_probe", "tool": "sleep_probe", "mode": "ask", "digest_prefix": "d3ec79a6fbf4b8db", "targets": [], "argv": [], "reason": "in-process operation"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:251 {"timestamp": 1792040698.2772539, "event": "tool_call_start", "session_id": "7db81d7f-1ac8-4ffc-b863-babf000a808d", "tool_name": "sleep_probe"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:251 {"timestamp": 1792040698.2777169, "event": "permission_allowed", "request_id": "ad9a1a8904a64a48827c5452840137d7", "session_id": "7db81d7f-1ac8-4ffc-b863-babf000a808d", "turn_id": "", "agent_id": "test-agent", "operation": "tool.sleep_probe", "tool": "sleep_probe", "mode": "ask", "digest_prefix": "d3ec79a6fbf4b8db", "targets": [], "argv": [], "reason": "in-process operation"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_______________ test_cancelled_batch_retires_completed_approval ________________
+
+sleep_tool = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bdfb650>
+
+    async def test_cancelled_batch_retires_completed_approval(sleep_tool, monkeypatch):
+        """A completed approved action must not stay in the claimed state."""
+    
+        class _FakeBroker:
+            def __init__(self) -> None:
+                self._n = 0
+                self.completed: list[tuple[str, str]] = []
+    
+            async def guard(self, req):
+                self._n += 1
+                req.approval_id = f"appr-{self._n}"
+                return req
+    
+            async def complete(self, request_id, outcome):
+                self.completed.append((request_id, outcome))
+                return True
+    
+        fake = _FakeBroker()
+        monkeypatch.setattr("machina.permissions.broker.permission_broker", fake)
+    
+        agent = _StubAgent()
+        response = LLMResponse(
+            content="",
+            model="test-model",
+            tool_calls=[
+                _tool_call("sleep_probe", {"delay": 5.0, "tag": "slow"}, 0),
+                _tool_call("sleep_probe", {"delay": 0.01, "tag": "fast"}, 1),
+            ],
+        )
+        pending: list[dict] = []
+        made: list[dict] = []
+    
+        task, _events = await _drive_until_first_result(agent, response, made, pending, uuid.uuid4())
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    
+        outcomes = {outcome for _rid, outcome in fake.completed}
+>       assert "completed" in outcomes, "a completed approved action stayed claimed"
+E       AssertionError: a completed approved action stayed claimed
+E       assert 'completed' in {'cancelled'}
+
+tests/test_final_review_fix_core_agent_context.py:163: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 01:04:58,328 [AUDIT] {"timestamp": 1792040698.3281128, "event": "tool_call_start", "session_id": "4951bd4e-a97d-4492-bfda-b6e65bf7e8b5", "tool_name": "sleep_probe"}
+2026-10-15 01:04:58,328 [AUDIT] {"timestamp": 1792040698.3286579, "event": "tool_call_start", "session_id": "4951bd4e-a97d-4492-bfda-b6e65bf7e8b5", "tool_name": "sleep_probe"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:251 {"timestamp": 1792040698.3281128, "event": "tool_call_start", "session_id": "4951bd4e-a97d-4492-bfda-b6e65bf7e8b5", "tool_name": "sleep_probe"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:251 {"timestamp": 1792040698.3286579, "event": "tool_call_start", "session_id": "4951bd4e-a97d-4492-bfda-b6e65bf7e8b5", "tool_name": "sleep_probe"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_____________ test_flush_retains_on_failure_and_clears_on_success ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bdc3460>
+
+    async def test_flush_retains_on_failure_and_clears_on_success(monkeypatch):
+        """code_review #6: clear only on a confirmed flush; retain on failure."""
+        import machina.core.agent as agent_mod
+    
+        agent = BaseReActAgent.__new__(BaseReActAgent)
+        agent.agent_id = "harness"
+        chunks = [
+            {
+                "session_id": uuid.uuid4(),
+                "agent_id": "harness",
+                "chunk_type": "user_message",
+                "payload": {"content": "x"},
+                "token_count": 1,
+            }
+        ]
+        calls = {"n": 0}
+    
+        async def flaky(_batch):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("db down")
+            return []
+    
+        monkeypatch.setattr(agent_mod.context_manager, "add_chunks_batch", flaky)
+    
+>       assert await agent._flush_pending_chunks(chunks) is False
+E       assert None is False
+
+tests/test_final_review_fix_core_agent_context.py:192: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.core.agent:agent.py:1340 Context flush failed (RuntimeError); continuing turn
+_____________ test_cancellation_safe_flush_keeps_chunks_on_failure _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10cd60750>
+
+    async def test_cancellation_safe_flush_keeps_chunks_on_failure(monkeypatch):
+        """The cancellation path must not clear a batch it never persisted."""
+        import machina.core.agent as agent_mod
+    
+        agent = BaseReActAgent.__new__(BaseReActAgent)
+        agent.agent_id = "harness"
+        chunks = [
+            {
+                "session_id": uuid.uuid4(),
+                "agent_id": "harness",
+                "chunk_type": "user_message",
+                "payload": {"content": "x"},
+                "token_count": 1,
+            }
+        ]
+        markers: list[dict] = []
+    
+        async def failing(_batch):
+            raise RuntimeError("db down")
+    
+        async def add_chunk(**kwargs):
+            markers.append(kwargs)
+            return None
+    
+        monkeypatch.setattr(agent_mod.context_manager, "add_chunks_batch", failing)
+        monkeypatch.setattr(agent_mod.context_manager, "add_chunk", add_chunk)
+    
+        await agent._flush_pending_cancellation_safe(chunks, uuid.uuid4())
+>       assert chunks, "failed cancellation flush must retain chunks, not clear them"
+E       AssertionError: failed cancellation flush must retain chunks, not clear them
+E       assert []
+
+tests/test_final_review_fix_core_agent_context.py:226: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.core.agent:agent.py:1340 Context flush failed (RuntimeError); continuing turn
+________________ test_agent_response_derives_all_plural_pauses _________________
+
+    def test_agent_response_derives_all_plural_pauses():
+        """F3: every delegated pause contributes, not only the singular first."""
+        p1 = {"request_id": "r1", "operation": "a", "session_id": "s"}
+        p2 = {"request_id": "r2", "operation": "b", "session_id": "s"}
+        derived = AgentResponse(
+            content="x",
+            tool_calls=[
+                {"tool": "delegate", "needs_approvals": [p1, p2]},
+                {"tool": "read_file", "needs_approval": {"request_id": "r3", "operation": "c"}},
+            ],
+        )
+>       assert [p["request_id"] for p in derived.needs_approval] == ["r1", "r2", "r3"]
+E       AssertionError: assert ['r3'] == ['r1', 'r2', 'r3']
+E         
+E         At index 0 diff: 'r3' != 'r1'
+E         Right contains 2 more items, first extra item: 'r2'
+E         Use -v to get more diff
+
+tests/test_final_review_fix_core_agent_context.py:269: AssertionError
+__________ test_same_created_at_batch_straddling_page_is_not_skipped ___________
+
+cursor_env = <machina.db.connection.Database object at 0x10cda4d60>
+
+    @pytest.mark.integration
+    @pytest.mark.db
+    async def test_same_created_at_batch_straddling_page_is_not_skipped(cursor_env):
+        """HELD-55 F1: a batch split by the page LIMIT must not be skipped.
+    
+        ``get_chunks_since`` orders by ``(created_at, event_seq NULLS LAST, id)``
+        but the cursor predicate/checkpoint used only ``(created_at, id)``. A
+        same-``created_at`` batch (one transaction -> identical created_at, random
+        UUIDs) straddling the ``LIMIT`` lets the id-max of the processed prefix
+        exceed unprocessed ids, which then never satisfy ``(created_at, id) >
+        checkpoint``. RED before the 3-key cursor: the second page returns nothing
+        and the watermark stalls on the first page's id-max.
+        """
+        database = cursor_env
+        from machina.core.serialization import payload_to_msgpack
+    
+        session_id = await database.fetchval(
+            "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
+        )
+        base = datetime(2026, 1, 1, tzinfo=UTC)
+        # Ids chosen so max(id of the first page) > id of an unprocessed row:
+        # the two earliest events carry the two largest UUIDs.
+        rows = [
+            (uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"), 1, "e0"),
+            (uuid.UUID("ffffffff-ffff-ffff-ffff-fffffffffffe"), 2, "e1"),
+            (uuid.UUID("00000000-0000-0000-0000-000000000002"), 3, "e2"),
+            (uuid.UUID("00000000-0000-0000-0000-000000000003"), 4, "e3"),
+        ]
+        for chunk_id, seq, label in rows:
+            await database.execute(
+                """INSERT INTO context_chunks
+                   (id, session_id, agent_id, chunk_type, payload_msgpack, created_at, event_seq)
+                   VALUES ($1, $2, 'harness', 'user_message', $3, $4, $5)""",
+                chunk_id,
+                session_id,
+                payload_to_msgpack({"content": label}),
+                base,
+                seq,
+            )
+    
+        agent = _agent(_plain_consolidator())
+        await agent._consolidate_memories(session_id)  # page 1 -> e0, e1
+        await agent._consolidate_memories(session_id)  # page 2 must reach e2, e3
+    
+        final = await _read_cursor(database, session_id)
+        assert final is not None
+>       assert final["id"] == str(rows[3][0]), (
+            f"same-created_at page boundary skipped rows: cursor {final['id']} != {rows[3][0]}"
+        )
+E       AssertionError: same-created_at page boundary skipped rows: cursor ffffffff-ffff-ffff-ffff-ffffffffffff != 00000000-0000-0000-0000-000000000003
+E       assert 'ffffffff-fff...-ffffffffffff' == '00000000-000...-000000000003'
+E         
+E         - 00000000-0000-0000-0000-000000000003
+E         + ffffffff-ffff-ffff-ffff-ffffffffffff
+
+tests/test_r5_f1_consolidation_cursor.py:268: AssertionError
+_________________ test_compaction_replace_preserves_event_seq __________________
+
+db_pool = <machina.db.connection.Database object at 0x10cda4770>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10cd1d700>
+
+    async def test_compaction_replace_preserves_event_seq(db_pool, monkeypatch):
+        """Compaction must not revert a created_at-tied batch to UUID order.
+    
+        The compressor drops ``event_seq`` when it rebuilds preserved chunks and
+        may present them in id order; the replace writer must recover each
+        preserved ordinal from the locked originals rather than re-deriving it from
+        insertion order (DEFAULT nextval).
+        """
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+            ids = await _seed_anti_correlated_batch(database, sid)
+    
+            # Preserved chunks: identity kept, event_seq dropped, supplied in
+            # id-descending order (the compressor's created_at tie-break).
+            preserved = [
+                ContextChunk(
+                    id=ids[label],
+                    session_id=sid,
+                    agent_id="harness",
+                    chunk_type="user_message",
+                    payload={"content": label},
+                    token_count=1,
+                    created_at=datetime(2020, 1, 1, tzinfo=UTC),
+                )
+                for label in ("e1", "e3", "e2", "e0")
+            ]
+            await cm.replace_chunks_by_ids(sid, list(ids.values()), preserved)
+    
+            rows = await database.fetch(
+                "SELECT id, event_seq FROM context_chunks WHERE session_id=$1", sid
+            )
+            got = {r["id"]: r["event_seq"] for r in rows}
+>           assert got == {ids["e0"]: 1, ids["e1"]: 2, ids["e2"]: 3, ids["e3"]: 4}, got
+E           AssertionError: {UUID('00000000-0000-0000-0000-000000000001'): 4, UUID('00000000-0000-0000-0000-000000000002'): 3, UUID('00000000-0000-0000-0000-000000000003'): 2, UUID('00000000-0000-0000-0000-000000000004'): 1}
+E           assert {UUID('000000...00000004'): 1} == {UUID('000000...00000003'): 4}
+E             
+E             Omitting 1 identical items, use -vv to show
+E             Differing items:
+E             {UUID('00000000-0000-0000-0000-000000000001'): 4} != {UUID('00000000-0000-0000-0000-000000000001'): 1}
+E             {UUID('00000000-0000-0000-0000-000000000003'): 2} != {UUID('00000000-0000-0000-0000-000000000003'): 4}
+E             {UUID('00000000-0000-0000-0000-000000000004'): 1} != {UUID('00000000-0000-0000-0000-000000000004'): 2}
+E             Use -v to get more diff
+
+tests/test_held_55_history_order.py:301: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_final_review_fix_core_agent_context.py::test_cancelled_batch_records_completed_tool
+FAILED tests/test_final_review_fix_core_agent_context.py::test_cancelled_batch_retires_completed_approval
+FAILED tests/test_final_review_fix_core_agent_context.py::test_flush_retains_on_failure_and_clears_on_success
+FAILED tests/test_final_review_fix_core_agent_context.py::test_cancellation_safe_flush_keeps_chunks_on_failure
+FAILED tests/test_final_review_fix_core_agent_context.py::test_agent_response_derives_all_plural_pauses
+FAILED tests/test_r5_f1_consolidation_cursor.py::test_same_created_at_batch_straddling_page_is_not_skipped
+FAILED tests/test_held_55_history_order.py::test_compaction_replace_preserves_event_seq
+7 failed, 2 passed in 0.84s

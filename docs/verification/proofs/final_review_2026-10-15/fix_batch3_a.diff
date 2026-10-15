@@ -1,0 +1,153 @@
+diff --git a/machina/api/routes/shared.py b/machina/api/routes/shared.py
+index ca1c293..72687ff 100644
+--- a/machina/api/routes/shared.py
++++ b/machina/api/routes/shared.py
+@@ -63,12 +63,18 @@ def _serialize_event(
+     protocol_version: int = 1,
+     session_id: str = "",
+     turn_id: str = "",
++    tool_is_error: bool | None = None,
+ ) -> dict[str, Any]:
+     """Convert a StreamEvent to a JSON-serializable dict.
+ 
+     When *_pre_redacted* is True the text content already passed through the
+     boundary-safe streaming redactor and must not be redacted a second time
+     (double redaction is harmless but the flag documents the contract).
++
++    *tool_is_error* forwards the engine's real failure flag for a tool result
++    (SSE v2 ``tool.complete.isError``); ``None`` leaves it to the protocol
++    default. Callers gate it to the canonical protocol so the v1 compatibility
++    shape is unchanged.
+     """
+     data: dict[str, Any] = {"type": event.type}
+     if event.type == "text":
+@@ -85,6 +91,10 @@ def _serialize_event(
+             data["outcome"] = event.tool_outcome
+         if getattr(event, "tool_call_id", ""):
+             data["id"] = event.tool_call_id
++        if tool_is_error is not None:
++            # P10: forward the engine's real failure flag; canonical_http_event
++            # maps it onto v2 ``tool.complete.isError`` instead of defaulting.
++            data["isError"] = bool(tool_is_error)
+     elif event.type == "token_usage":
+         data["tokens"] = event.tokens_used
+     elif event.type == "done" and event.response is not None:
+diff --git a/machina/api/routes/streaming.py b/machina/api/routes/streaming.py
+index cd07e82..f370beb 100644
+--- a/machina/api/routes/streaming.py
++++ b/machina/api/routes/streaming.py
+@@ -262,7 +262,15 @@ async def _stream_session(
+                                 tool_result=payload["result"],
+                                 tool_outcome=payload.get("outcome", ""),
+                                 tool_call_id=payload["id"],
+-                            )
++                            ),
++                            # P10: carry the engine's real failure flag on the
++                            # canonical wire; the v1 compatibility shape has no
++                            # isError field, so only v2 requests forward it.
++                            tool_is_error=(
++                                payload.get("isError", False)
++                                if req.protocolVersion == 2
++                                else None
++                            ),
+                         )
+                     )
+                 elif turn_event.kind == "needs_approval":
+diff --git a/machina/memory/redaction.py b/machina/memory/redaction.py
+index 3da83b7..39ef1c7 100644
+--- a/machina/memory/redaction.py
++++ b/machina/memory/redaction.py
+@@ -890,12 +890,17 @@ class StreamingSecretRedactor:
+     def flush(self) -> str:
+         """Redact and return any buffered remainder."""
+         if self._pem_open:
+-            # Oversized unterminated block: the marker was already emitted;
+-            # drop the remaining body tail rather than emitting any of it.
++            # Oversized unterminated block: the marker was already emitted, so
++            # the buffered body tail must never be emitted. The withheld prefix
++            # (text that preceded the block, held only because a partial secret
++            # rule reached the block) is not body material; emit it through the
++            # same whole-buffer redaction as the normal path instead of silently
++            # dropping it. Complete secrets inside it are still removed.
++            prefix = redact_secrets(self._pem_prefix).text if self._pem_prefix else ""
+             self._buf = ""
+             self._pem_prefix = ""
+             self._pem_open = False
+-            return ""
++            return prefix
+         if _open_pem_block_start(self._buf) is not None:
+             # Unterminated block under the cap: the whole-string PEM pattern
+             # needs the END marker to match, so fail closed instead of
+diff --git a/machina/observability/traces.py b/machina/observability/traces.py
+index c36f202..96acee7 100644
+--- a/machina/observability/traces.py
++++ b/machina/observability/traces.py
+@@ -835,6 +835,9 @@ def render_diagnostics(turn_id: str, *, max_chars: int = DIAGNOSTICS_MAX_CHARS)
+             del_bits = ", ".join(f"{k}={v}" for k, v in sorted(delegations["by_status"].items()))
+             dropped_tools = report["dropped_tool_spans"]
+             dropped_turns = report["dropped_turns"]
++            # P6: the usage ledger is a capped ring too; without the marker a
++            # capped ledger silently understates llm_calls/token totals.
++            dropped_ledger = report["ledger_dropped"]
+             text = (
+                 f"turn {report['turn_id']} session {report['session_id'] or '-'}"
+                 f" agent {report['agent_id'] or '-'}"
+@@ -842,8 +845,9 @@ def render_diagnostics(turn_id: str, *, max_chars: int = DIAGNOSTICS_MAX_CHARS)
+                 f"llm: {report['llm_calls']} calls,"
+                 f" {report['input_tokens']} in / {report['output_tokens']} out tokens"
+                 f" ({report['accounted_tokens']} accounted,"
+-                f" {report['unknown_calls']} unknown)\n"
+-                f"tools: {tools['total']}"
++                f" {report['unknown_calls']} unknown)"
++                + (f" (+{dropped_ledger} dropped)" if dropped_ledger else "")
++                + f"\ntools: {tools['total']}"
+                 + (f" ({tool_bits})" if tool_bits else "")
+                 + (f" (+{dropped_tools} dropped)" if dropped_tools else "")
+                 + f"\ndelegations: {delegations['total']}"
+diff --git a/tests/test_fm6_traces.py b/tests/test_fm6_traces.py
+index a97b040..c790926 100644
+--- a/tests/test_fm6_traces.py
++++ b/tests/test_fm6_traces.py
+@@ -55,6 +55,11 @@ def test_usage_ledger_is_capped_with_dropped_marker():
+     report = turn_report("t-ledger")
+     assert report["llm_calls"] == traces.MAX_LEDGER_ENTRIES_PER_TURN
+     assert report["ledger_dropped"] == 20
++    # P6: the rendered diagnostics must surface the dropped-ledger marker so a
++    # capped usage ledger does not silently understate llm_calls/tokens.
++    rendered = render_diagnostics("t-ledger")
++    llm_line = next(line for line in rendered.splitlines() if line.startswith("llm:"))
++    assert "(+20 dropped)" in llm_line, rendered
+     end_turn("t-ledger")
+ 
+ 
+diff --git a/tests/test_protocol_conformance.py b/tests/test_protocol_conformance.py
+index f1ac46b..9661bb0 100644
+--- a/tests/test_protocol_conformance.py
++++ b/tests/test_protocol_conformance.py
+@@ -50,6 +50,26 @@ def test_legacy_http_keeps_existing_shape():
+     }
+ 
+ 
++def test_v2_tool_complete_carries_real_iserror_flag():
++    """P10: v2 ``tool.complete`` must reflect the engine's failure flag rather
++    than defaulting to ``false``; the v1 compatibility shape is unchanged."""
++    failed = _serialize_event(
++        StreamEvent(type="tool_result", tool_name="terminal", tool_result="Error: boom"),
++        protocol_version=2,
++        session_id="session",
++        turn_id="turn",
++        tool_is_error=True,
++    )
++    assert failed["type"] == "tool.complete"
++    assert failed["isError"] is True
++
++    legacy = _serialize_event(
++        StreamEvent(type="tool_result", tool_name="terminal", tool_result="Error: boom")
++    )
++    assert legacy["type"] == "tool_result"
++    assert "isError" not in legacy
++
++
+ def test_schema_rejects_undeclared_fields_and_wrong_types():
+     from machina.protocol import wire_event
+ 

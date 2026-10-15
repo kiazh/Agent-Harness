@@ -19,6 +19,7 @@ import subprocess
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import aclosing
 from typing import Any, Protocol
 
 from machina import __version__
@@ -54,6 +55,7 @@ from machina.gateway.errors import (  # noqa: F401 — re-exported for clients a
     RpcError,
 )
 from machina.gateway.features._common import _bool
+from machina.gateway.features.mode import sync_execution_mode_env
 from machina.gateway.serializers import history_from_chunks, session_to_dict
 from machina.observability.diagnostics import record_failure
 from machina.observability.tracing import span
@@ -500,6 +502,11 @@ class Gateway:
                 if mode not in ("ask", "workspace", "sandbox", "full"):
                     raise RpcError(INVALID_PARAMS, "mode must be ask|workspace|sandbox|full")
                 config.set("execution_mode", mode)
+                # F1: Config.get prefers MACHINA_EXECUTION_MODE, so without
+                # the process-env sync a launcher --mode was silently ignored
+                # under a pre-existing .env shadow. Process-scoped only here
+                # (never persisted): --mode applies to this gateway process.
+                sync_execution_mode_env(mode, persist=False)
         if not self._db_ready:
             try:
                 await db.connect()
@@ -722,6 +729,14 @@ class Gateway:
                         env_key,
                         type(e).__name__,
                     )
+            elif key == "execution_mode":
+                # F1: Config.get reads MACHINA_EXECUTION_MODE before the
+                # in-memory value, so a global mode write is shadowed by the
+                # .env line `machina mode X` leaves behind unless the shadow
+                # is updated too. `value` is the coerced new value, never
+                # config.get (which still prefers the stale shadow). Process
+                # env always; .env in the durable path.
+                sync_execution_mode_env(str(value), persist=persist)
         result: dict[str, Any] = {"model": self.model, "provider": self.provider, "key": key}
         result["value"] = getattr(self, key) if key in ("model", "provider") else config.get(key)
         return result
@@ -986,56 +1001,63 @@ class Gateway:
                     # W2: the shared engine owns boundary-safe streaming redaction,
                     # tool-call pairing/truncation, token accounting and final
                     # capture; this loop only serializes semantic events.
-                    async for turn_event in engine.stream():
-                        if turn_event.kind == "delta":
-                            emit("message.delta", text=turn_event.payload["text"])
-                        elif turn_event.kind == "tool_start":
-                            self._record_stage(turn_id, "running_tool", session_id=sid)
-                            self._turn_progress[turn_id] = {
-                                "tokens": engine.tokens,
-                                "iterations": 0,
-                                "toolCalls": engine.tool_count,
-                            }
-                            emit(
-                                "tool.start",
-                                id=turn_event.payload["id"],
-                                name=turn_event.payload["name"],
-                                args=turn_event.payload["args"],
-                            )
-                        elif turn_event.kind == "tool_complete":
-                            payload = turn_event.payload
-                            emit(
-                                "tool.complete",
-                                id=payload["id"],
-                                name=payload["name"],
-                                result=payload["result"],
-                                truncated=payload["truncated"],
-                                isError=payload["isError"],
-                                **({"outcome": payload["outcome"]} if "outcome" in payload else {}),
-                            )
-                        elif turn_event.kind == "needs_approval":
-                            # Stream pause markers are surfaced by SSE as typed
-                            # frames; the gateway emits approval cards through the
-                            # broker handler only (never twice).
-                            continue
-                        elif turn_event.kind == "usage":
-                            self._turn_progress[turn_id] = {
-                                "tokens": engine.tokens,
-                                "iterations": 0,
-                                "toolCalls": engine.tool_count,
-                            }
-                            emit("usage", tokens=turn_event.payload["tokens"])
-                        elif turn_event.kind == "done":
-                            final_response = engine.final
-                            self._turn_progress[turn_id] = {
-                                "tokens": (
-                                    getattr(final_response, "tokens_used", 0) or engine.tokens
-                                ),
-                                "iterations": (getattr(final_response, "iterations", 0) or 0),
-                                "toolCalls": len(getattr(final_response, "tool_calls", None) or []),
-                            }
-                        else:
-                            logger.warning("Unknown turn event kind: %s", turn_event.kind)
+                    async with aclosing(engine.stream()) as events:
+                        async for turn_event in events:
+                            if turn_event.kind == "delta":
+                                emit("message.delta", text=turn_event.payload["text"])
+                            elif turn_event.kind == "tool_start":
+                                self._record_stage(turn_id, "running_tool", session_id=sid)
+                                self._turn_progress[turn_id] = {
+                                    "tokens": engine.tokens,
+                                    "iterations": 0,
+                                    "toolCalls": engine.tool_count,
+                                }
+                                emit(
+                                    "tool.start",
+                                    id=turn_event.payload["id"],
+                                    name=turn_event.payload["name"],
+                                    args=turn_event.payload["args"],
+                                )
+                            elif turn_event.kind == "tool_complete":
+                                payload = turn_event.payload
+                                emit(
+                                    "tool.complete",
+                                    id=payload["id"],
+                                    name=payload["name"],
+                                    result=payload["result"],
+                                    truncated=payload["truncated"],
+                                    isError=payload["isError"],
+                                    **(
+                                        {"outcome": payload["outcome"]}
+                                        if "outcome" in payload
+                                        else {}
+                                    ),
+                                )
+                            elif turn_event.kind == "needs_approval":
+                                # Stream pause markers are surfaced by SSE as typed
+                                # frames; the gateway emits approval cards through the
+                                # broker handler only (never twice).
+                                continue
+                            elif turn_event.kind == "usage":
+                                self._turn_progress[turn_id] = {
+                                    "tokens": engine.tokens,
+                                    "iterations": 0,
+                                    "toolCalls": engine.tool_count,
+                                }
+                                emit("usage", tokens=turn_event.payload["tokens"])
+                            elif turn_event.kind == "done":
+                                final_response = engine.final
+                                self._turn_progress[turn_id] = {
+                                    "tokens": (
+                                        getattr(final_response, "tokens_used", 0) or engine.tokens
+                                    ),
+                                    "iterations": (getattr(final_response, "iterations", 0) or 0),
+                                    "toolCalls": len(
+                                        getattr(final_response, "tool_calls", None) or []
+                                    ),
+                                }
+                            else:
+                                logger.warning("Unknown turn event kind: %s", turn_event.kind)
             except asyncio.CancelledError:
                 # AH-AUDIT-028: do NOT emit terminal completion here. Emit a
                 # stopping state (UI stays blocked), run cleanup + ownership

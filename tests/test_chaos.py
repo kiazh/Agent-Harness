@@ -604,7 +604,9 @@ class TestDatabaseChaos:
         The run path accumulates chunks and persists them through
         ``context_manager.add_chunks_batch`` — patching ``add_chunk`` (as the
         old version did) never fires. The second batch (the assistant message)
-        fails here; the turn must still return a response.
+        fails here; the turn must still return a response, and the failed batch
+        must be RETAINED and retried by the turn-close cleanup rather than
+        silently dropped.
         """
         provider = AsyncMock()
         provider.complete = AsyncMock(
@@ -622,11 +624,18 @@ class TestDatabaseChaos:
 
             with patch("machina.core.agent.context_manager") as mock_cm:
                 # The real seam: the run path flushes via add_chunks_batch.
-                # First flush (user message) succeeds, second (assistant
-                # message) hits the dropped connection.
-                mock_cm.add_chunks_batch = AsyncMock(
-                    side_effect=[None, Exception("Connection lost")]
-                )
+                # Snapshot each offered batch (the live pending list is cleared
+                # after success, so a stored reference would not prove what was
+                # persisted). First flush (user message) succeeds, second
+                # (assistant message) hits the dropped connection.
+                batches: list[list[dict]] = []
+
+                async def _flush(chunks):
+                    batches.append(list(chunks))
+                    if len(batches) == 2:
+                        raise Exception("Connection lost")
+
+                mock_cm.add_chunks_batch = AsyncMock(side_effect=_flush)
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
@@ -635,8 +644,12 @@ class TestDatabaseChaos:
                 response = await agent.run(mock_session.id, "test", verbose=False)
                 assert response is not None
                 assert response.content == "test"
-                # The failure was injected at the real seam and actually ran.
-                assert mock_cm.add_chunks_batch.await_count == 2
+                # The failure was injected at the real seam and actually ran:
+                # two flushes during the turn plus one retained-batch retry from
+                # the turn-close cleanup. The retried batch is exactly the one
+                # whose flush failed — proof it was retained, not dropped.
+                assert len(batches) == 3
+                assert batches[2] == batches[1]
 
     async def test_agent_handles_slow_db(self, mock_session):
         """Agent should handle slow database batch writes."""

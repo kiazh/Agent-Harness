@@ -14,7 +14,7 @@ Falsifiable acceptance:
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -124,19 +124,12 @@ async def test_artifact_present_completes(delegation):
     assert delegation.recorded[-1]["status"] == "complete"
 
 
-async def test_artifact_missing_errors_honestly(delegation, monkeypatch):
+async def test_artifact_missing_errors_honestly(delegation):
     """R4-028 (delete): missing artifact -> error, no phantom backtrack.
 
-    The deleted code called ``should_write_first(0, True)`` and discarded the
-    return, forcing no write at all while the comment claimed a "forced
-    synthesize/write attempt". This pins the real behavior: status "error",
-    the reason naming the path, a terminal error row, and no backtrack claim
-    (the helper must never be called again).
+    This pins the real behavior: status "error", the reason naming the path, a
+    terminal error row, and no backtrack claim.
     """
-    import machina.core.progress as progress
-
-    spy = MagicMock(return_value=True)
-    monkeypatch.setattr(progress, "should_write_first", spy)
     orch = delegation.build(_ok_child(delegation))
     result = await orch.delegate("coder", "work", expected_artifact_path="missing.md")
     assert result.status == "error"
@@ -144,13 +137,9 @@ async def test_artifact_missing_errors_honestly(delegation, monkeypatch):
     assert "backtrack" not in result.response.lower()
     assert delegation.recorded[-1]["status"] == "error"
     assert "missing.md" in delegation.recorded[-1]["response"]
-    spy.assert_not_called()
 
 
-async def test_empty_file_errors(delegation, monkeypatch):
-    import machina.core.progress as progress
-
-    monkeypatch.setattr(progress, "should_write_first", MagicMock(return_value=True))
+async def test_empty_file_errors(delegation):
     (delegation.ws / "empty.md").write_text("")
     orch = delegation.build(_ok_child(delegation))
     result = await orch.delegate("coder", "work", expected_artifact_path="empty.md")
@@ -158,10 +147,7 @@ async def test_empty_file_errors(delegation, monkeypatch):
     assert "empty.md" in result.response
 
 
-async def test_directory_artifact_errors(delegation, monkeypatch):
-    import machina.core.progress as progress
-
-    monkeypatch.setattr(progress, "should_write_first", MagicMock(return_value=True))
+async def test_directory_artifact_errors(delegation):
     (delegation.ws / "adir").mkdir()
     orch = delegation.build(_ok_child(delegation))
     result = await orch.delegate("coder", "work", expected_artifact_path="adir")
@@ -169,24 +155,15 @@ async def test_directory_artifact_errors(delegation, monkeypatch):
     assert "adir" in result.response
 
 
-async def test_no_contract_unchanged(delegation, monkeypatch):
+async def test_no_contract_unchanged(delegation):
     """Without new kwargs, missing artifact must not fail (zero behavior change)."""
-    import machina.core.progress as progress
-
-    spy = MagicMock(return_value=True)
-    monkeypatch.setattr(progress, "should_write_first", spy)
     orch = delegation.build(_ok_child(delegation, content="all done"))
     result = await orch.delegate("coder", "work")
     assert result.status == "complete"
     assert result.response == "all done"
-    spy.assert_not_called()
 
 
-async def test_waiting_approval_bypasses_verification(delegation, monkeypatch):
-    import machina.core.progress as progress
-
-    spy = MagicMock(return_value=True)
-    monkeypatch.setattr(progress, "should_write_first", spy)
+async def test_waiting_approval_bypasses_verification(delegation):
     pause = {
         "request_id": "r1",
         "session_id": "s",
@@ -205,16 +182,10 @@ async def test_waiting_approval_bypasses_verification(delegation, monkeypatch):
         "coder", "work", expected_artifact_path="never-written.md"
     )
     assert result.status == "waiting_approval"
-    spy.assert_not_called()
 
 
-async def test_cancelled_mid_write_propagates_without_verification(delegation, monkeypatch):
+async def test_cancelled_mid_write_propagates_without_verification(delegation):
     import asyncio
-
-    import machina.core.progress as progress
-
-    spy = MagicMock(return_value=True)
-    monkeypatch.setattr(progress, "should_write_first", spy)
 
     class Child:
         async def run(self, session_id, *_args, **_kwargs):
@@ -223,7 +194,6 @@ async def test_cancelled_mid_write_propagates_without_verification(delegation, m
 
     with pytest.raises(asyncio.CancelledError):
         await delegation.build(Child()).delegate("coder", "work", expected_artifact_path="x.md")
-    spy.assert_not_called()
 
 
 async def test_absolute_inside_workspace_ok(delegation):
@@ -235,10 +205,7 @@ async def test_absolute_inside_workspace_ok(delegation):
     assert result.status == "complete"
 
 
-async def test_orchestrator_direct_escape_is_error_not_raise(delegation, monkeypatch):
-    import machina.core.progress as progress
-
-    monkeypatch.setattr(progress, "should_write_first", MagicMock(return_value=True))
+async def test_orchestrator_direct_escape_is_error_not_raise(delegation):
     orch = delegation.build(_ok_child(delegation))
     result = await orch.delegate("coder", "work", expected_artifact_path="/etc/passwd")
     assert result.status == "error"

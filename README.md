@@ -758,9 +758,13 @@ end state on real components (PostgreSQL rows, indexed RAG chunks, tool and
 API outcomes) and writes its proof to `docs/verification/proofs/`. Run:
 
 ```bash
-python tools/e2e_gate.py                  # j1..j9; j4/j9 skip without Firecrawl / opencode+registration
-python tools/e2e_gate.py --journeys j1,j5 # cheap real subset
-python tools/e2e_gate.py --json /tmp/e2e.json
+# The gate refuses a non-test database unless `--db-url` names it (the flag is
+# the consent). The default .env DATABASE_URL database is `machina` (non-test):
+DB=postgresql://postgres:postgres@localhost:5432/machina
+python tools/e2e_gate.py --db-url "$DB"     # j1..j9; j4/j9 skip without Firecrawl / opencode+registration
+python tools/e2e_gate.py --db-url "$DB" --journeys j1,j5 # cheap real subset
+python tools/e2e_gate.py --db-url "$DB" --json /tmp/e2e.json
+# Or point MACHINA_DATABASE_URL/DATABASE_URL at a test-named DB and run flagless.
 ```
 
 Journeys j1–j9 cover memory consolidation roundtrip, live web research and
@@ -770,7 +774,8 @@ cross-transport turn parity, the provider/usage facade, and the
 OpenCode → Machina MCP-server roundtrip (j9; skips without `opencode` and a
 registered `machina` server). Exit code is 0
 only when no journey failed (skips allowed), 1 on any failure and 2 on
-usage/environment errors; every run writes
+usage/environment errors, including the non-test-database refusal above; every
+run writes
 `<UTC date>-e2e-gate.json`/`.md` under `docs/verification/proofs/`. The
 latest recorded full run (2026-10-14) passed all nine journeys
 (9 PASS / 0 FAIL / 0 SKIP;

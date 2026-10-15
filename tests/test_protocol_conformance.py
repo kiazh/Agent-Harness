@@ -50,6 +50,26 @@ def test_legacy_http_keeps_existing_shape():
     }
 
 
+def test_v2_tool_complete_carries_real_iserror_flag():
+    """P10: v2 ``tool.complete`` must reflect the engine's failure flag rather
+    than defaulting to ``false``; the v1 compatibility shape is unchanged."""
+    failed = _serialize_event(
+        StreamEvent(type="tool_result", tool_name="terminal", tool_result="Error: boom"),
+        protocol_version=2,
+        session_id="session",
+        turn_id="turn",
+        tool_is_error=True,
+    )
+    assert failed["type"] == "tool.complete"
+    assert failed["isError"] is True
+
+    legacy = _serialize_event(
+        StreamEvent(type="tool_result", tool_name="terminal", tool_result="Error: boom")
+    )
+    assert legacy["type"] == "tool_result"
+    assert "isError" not in legacy
+
+
 def test_schema_rejects_undeclared_fields_and_wrong_types():
     from machina.protocol import wire_event
 

@@ -1,0 +1,8 @@
+unformatted: File would be reformatted
+   --> tests/test_final_review_permissions_views.py:183:1
+    |
+182 |     assert approved["proposal"], "durable resume still needs the reviewable proposal"
+    -
+    |
+
+1 file would be reformatted, 3 files already formatted

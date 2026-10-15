@@ -835,6 +835,9 @@ def render_diagnostics(turn_id: str, *, max_chars: int = DIAGNOSTICS_MAX_CHARS) 
             del_bits = ", ".join(f"{k}={v}" for k, v in sorted(delegations["by_status"].items()))
             dropped_tools = report["dropped_tool_spans"]
             dropped_turns = report["dropped_turns"]
+            # P6: the usage ledger is a capped ring too; without the marker a
+            # capped ledger silently understates llm_calls/token totals.
+            dropped_ledger = report["ledger_dropped"]
             text = (
                 f"turn {report['turn_id']} session {report['session_id'] or '-'}"
                 f" agent {report['agent_id'] or '-'}"
@@ -842,8 +845,9 @@ def render_diagnostics(turn_id: str, *, max_chars: int = DIAGNOSTICS_MAX_CHARS) 
                 f"llm: {report['llm_calls']} calls,"
                 f" {report['input_tokens']} in / {report['output_tokens']} out tokens"
                 f" ({report['accounted_tokens']} accounted,"
-                f" {report['unknown_calls']} unknown)\n"
-                f"tools: {tools['total']}"
+                f" {report['unknown_calls']} unknown)"
+                + (f" (+{dropped_ledger} dropped)" if dropped_ledger else "")
+                + f"\ntools: {tools['total']}"
                 + (f" ({tool_bits})" if tool_bits else "")
                 + (f" (+{dropped_tools} dropped)" if dropped_tools else "")
                 + f"\ndelegations: {delegations['total']}"

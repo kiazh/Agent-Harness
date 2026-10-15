@@ -8,6 +8,7 @@ Shared by the sessions router (prompt/chat) and the approvals router
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import sys
@@ -63,6 +64,16 @@ async def _stream_session(
     # first iteration so an unconsumed stream never renews forever;
     # stopped when the generator exits; crash expiry recovery preserved.
     _renew_state: dict[str, Any] = {}
+    # F07: one shared execution Context for the whole turn's step tasks. The
+    # agent sets growth-episode / RSI ContextVars while preparing the turn
+    # (inside the first step's task); because asyncio Tasks copy the creator's
+    # context, a fresh task+context per `__anext__` hid those writes from later
+    # steps and from the done handler that runs `_complete_growth` — growth
+    # episodes never completed. Driving every step task in one shared Context
+    # keeps the writes visible for the rest of the turn. Same principle as
+    # R4-010: the driver that creates the step tasks owns the ContextVar
+    # lifetime. Armed per-turn (empty until the drive loop starts).
+    _step_context: dict[str, contextvars.Context] = {}
     _ownership_lost = asyncio.Event()
     # The renewal interval is owned by machina.api.app (kept there as a
     # patch target). Read it off the loaded app module instead of
@@ -74,7 +85,15 @@ async def _stream_session(
     _renew_interval = getattr(_app_module, "CLAIM_RENEW_INTERVAL_SECONDS", 30.0)
 
     async def _owned_step(awaitable, timeout: float):
-        task = asyncio.ensure_future(awaitable)
+        # F07: run steps in the turn's shared Context once armed so ContextVars
+        # the agent writes during preparation survive across steps. Before the
+        # drive loop arms it (the agent build step) keeps the default per-task
+        # context copy.
+        context = _step_context.get("ctx")
+        if context is None:
+            task = asyncio.ensure_future(awaitable)
+        else:
+            task = asyncio.get_running_loop().create_task(awaitable, context=context)
         task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         _renew_state["active"] = task
         lost = asyncio.create_task(_ownership_lost.wait())
@@ -146,10 +165,26 @@ async def _stream_session(
             boundary="app.create_app",
             renew_interval_s=_renew_interval,
         )
+
+        async def close_turn():
+            from machina.core.background_tasks import await_joined
+
+            async def finish():
+                try:
+                    if stream is not None:
+                        await stream.aclose()
+                finally:
+                    closed = await engine.close(cancelled=_stream_cancelled)
+                return closed
+
+            return await await_joined(finish())
+
         engine.start_renewal(ownership_lost=_ownership_lost)
-        # R4-010: driver-owned turn scope — every `_owned_step` task copies
-        # this context, so the scope is visible to all steps and the reset
-        # stays in the context that created the token.
+        # R4-010: driver-owned turn scope — every `_owned_step` task runs in a
+        # context that carries this scope (the stream steps share the armed
+        # context below; the agent-build step copies this one), so the scope is
+        # visible to all steps and the reset stays in the context that created
+        # the token.
         #
         # R4-064 follow-up (stopped here, deliberately): no OTel span around
         # this drive loop. An async generator can be resumed by one task and
@@ -188,6 +223,12 @@ async def _stream_session(
 
                 resume_token = resume_approval_var.set(str(resume[0].get("request_id", "")))
             engine.attach(agent)
+            # F07: arm the shared step Context after the transport-owned resume
+            # ContextVar is set, so every agent step (and the done handler) sees
+            # it together with the growth/RSI state the agent writes while
+            # preparing. Copied from THIS driver context, which already owns the
+            # turn scope entered above.
+            _step_context["ctx"] = contextvars.copy_context()
             stream = engine.stream()
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
@@ -235,7 +276,13 @@ async def _stream_session(
                                 tool_result=payload["result"],
                                 tool_outcome=payload.get("outcome", ""),
                                 tool_call_id=payload["id"],
-                            )
+                            ),
+                            # P10: carry the engine's real failure flag on the
+                            # canonical wire; the v1 compatibility shape has no
+                            # isError field, so only v2 requests forward it.
+                            tool_is_error=(
+                                payload.get("isError", False) if req.protocolVersion == 2 else None
+                            ),
                         )
                     )
                 elif turn_event.kind == "needs_approval":
@@ -342,6 +389,8 @@ async def _stream_session(
             _stream_cancelled = True
             raise
         finally:
+            if isinstance(sys.exc_info()[1], (GeneratorExit, asyncio.CancelledError)):
+                _stream_cancelled = True
             end_turn_scope(turn_scope_token)
             _record_stage("cleanup_started")
             if resume_token is not None:
@@ -354,37 +403,32 @@ async def _stream_session(
                     # can run in a different task context; the resumed
                     # request context is already gone.
                     pass
-            active = _renew_state.get("active")
-            if active is not None and not active.done():
-                active.cancel()
-                await asyncio.wait({active}, timeout=0.1)
-            if active is not None and not active.done():
-                from machina.core.runtime import runtime_services
+            from machina.core.background_tasks import await_joined
 
-                async def retire_execution() -> None:
-                    # Keep ownership until the actual operation unwinds.
-                    # Runtime shutdown observes a bound and quarantines this
-                    # observer too; it cannot safely release a live execution.
-                    while not active.done():
+            async def cleanup():
+                active = _renew_state.get("active")
+                if active is not None and not active.done():
+                    active.cancel()
+                    await asyncio.wait({active}, timeout=0.1)
+                if active is not None and not active.done():
+                    from machina.core.runtime import runtime_services
+
+                    async def retire_execution():
                         try:
-                            await asyncio.shield(active)
+                            await await_joined(active)
                         except asyncio.CancelledError:
-                            continue
-                        except Exception as exc:
-                            record_failure("app.retire_execution", exc)
-                            break
-                    try:
-                        if stream is not None:
-                            await stream.aclose()
-                    finally:
-                        # W2: bounded cleanup contract owned by the engine —
-                        # join optional work -> provider close -> stop renewal
-                        # -> shielded bounded release -> renewal join. Runs
-                        # only after the resistant execution actually unwound.
-                        await engine.close(cancelled=True)
+                            pass
+                        except Exception as error:
+                            record_failure("app.retire_execution", error)
+                        await close_turn()
 
-                runtime_services.track(active)
-                runtime_services.track(asyncio.create_task(retire_execution()))
+                    runtime_services.track(active)
+                    runtime_services.track(asyncio.create_task(retire_execution()))
+                    return None
+                return await close_turn()
+
+            close = await await_joined(cleanup())
+            if close is None:
                 if not _stream_cancelled:
                     yield frame(
                         {
@@ -394,12 +438,6 @@ async def _stream_session(
                         }
                     )
             else:
-                # H-01/H-02/H-03/H-06: the bounded cleanup contract is owned
-                # by the engine: join optional work -> provider close -> stop
-                # renewal -> shielded bounded claim release -> join renewal.
-                # Ordinary failures are reported inside close() and returned
-                # here; a release failure must not produce a terminal event.
-                close = await engine.close(cancelled=_stream_cancelled)
                 _release_failed = close.release_failed
                 # H-03: Auto-compaction is fire-and-forget background work.
                 # Never blocks [DONE] or holds the stream open.

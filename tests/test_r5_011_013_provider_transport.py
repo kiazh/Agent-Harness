@@ -20,14 +20,10 @@ client.post); cache keys, the SSE parser, and the token buckets are real.
 from __future__ import annotations
 
 import json
-import pathlib
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-
-_PROVIDER_DIR = pathlib.Path(__file__).resolve().parent.parent / "machina" / "core" / "provider"
-_SSE_FILES = ("direct.py", "anthropic.py", "chatgpt.py", "copilot.py", "openrouter.py")
 
 
 @pytest.fixture
@@ -162,19 +158,11 @@ async def test_r5_g2_sse_parser_tolerates_missing_space():
     assert sse_event("event:") == ""
     assert sse_event("data: x") is None
     assert sse_field("data:x", "data") == "x"
-
-
-def test_r5_g2_no_duplicated_sse_prefixes():
-    """All SSE sites route through the shared parser; narrow literals are gone."""
-    for fname in _SSE_FILES:
-        src = (_PROVIDER_DIR / fname).read_text()
-        assert 'startswith("data: ")' not in src, fname
-        assert "sse_data" in src, fname
-    anthropic_src = (_PROVIDER_DIR / "anthropic.py").read_text()
-    assert 'startswith("event: ")' not in anthropic_src
-    assert "sse_event" in anthropic_src
-    # Ollama streams NDJSON, not SSE — it must not grow an SSE data prefix.
-    assert "sse_data" not in (_PROVIDER_DIR / "ollama.py").read_text()
+    # A single leading UTF-8 BOM is ignored (a BOM-prefixed first frame must
+    # not drop its payload); a second BOM is payload.
+    assert sse_data('\ufeffdata:{"a": 1}') == '{"a": 1}'
+    assert sse_event("\ufeffevent:message_start") == "message_start"
+    assert sse_data("\ufeff\ufeffdata: x") is None
 
 
 class _MockStreamResponse:
@@ -295,6 +283,102 @@ async def test_r5_g2_openrouter_stream_no_space_frames(_high_rate_limit):
     assert texts == ["Hey"], texts
     done = next(event for event in events if event.type == "done")
     assert done.response.content == "Hey"
+
+
+async def test_r5_g2_chatgpt_stream_no_space_bom_frames(_high_rate_limit):
+    """ChatGPTProvider consumes spaceless `data:` frames (BOM-prefixed first).
+
+    Behavioral replacement for the removed source scan: drive the real Codex
+    Responses stream path so the shared parser is proven by parsed events, not
+    by source text. A BOM on the first frame exercises the same normalization
+    the scan used to imply.
+    """
+    from machina.core.provider.chatgpt import ChatGPTProvider
+
+    provider = ChatGPTProvider.__new__(ChatGPTProvider)
+    provider.model = ChatGPTProvider.DEFAULT_MODEL
+    provider._default_effort = ""
+    provider._rate_limiter = AsyncMock()
+    provider._rate_limit_key = "chatgpt"
+    provider._auth_path = None
+    provider._account_hint = MagicMock(return_value="")
+    provider._resolve_tokens = AsyncMock(return_value={"access_token": "k", "account_id": "acct"})
+    delta = {
+        "type": "response.output_text.delta",
+        "item_id": "msg_1",
+        "output_index": 0,
+        "delta": "Hello",
+    }
+    completed = {
+        "type": "response.completed",
+        "response": {"id": "r1", "model": provider.model, "status": "completed"},
+    }
+    provider.client = _streaming_client(
+        f"\ufeffdata:{json.dumps(delta)}\ndata:{json.dumps(completed)}\n".encode()
+    )
+    events = [
+        event async for event in provider.stream_complete([{"role": "user", "content": "hi"}])
+    ]
+    texts = [event.content for event in events if event.type == "text"]
+    assert texts == ["Hello"], texts
+    done = next(event for event in events if event.type == "done")
+    assert done.response.content == "Hello"
+
+
+async def test_r5_g2_copilot_stream_no_space_frames(_high_rate_limit):
+    """CopilotProvider consumes spaceless `data:` / `data:[DONE]` frames."""
+    from machina.core.provider.copilot import CopilotProvider
+
+    provider = CopilotProvider.__new__(CopilotProvider)
+    provider.model = "gpt-4o"
+    provider._default_effort = ""
+    provider._rate_limiter = AsyncMock()
+    provider._rate_limit_key = "copilot"
+    provider._auth_path = None
+    provider._resolve_tokens = AsyncMock(return_value={"token": "k"})
+    chunk = {"choices": [{"index": 0, "delta": {"content": "Hey"}}]}
+    stop = {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+    provider.client = _streaming_client(
+        f"data:{json.dumps(chunk)}\ndata:{json.dumps(stop)}\ndata:[DONE]\n".encode()
+    )
+    events = [
+        event async for event in provider.stream_complete([{"role": "user", "content": "hi"}])
+    ]
+    texts = [event.content for event in events if event.type == "text"]
+    assert texts == ["Hey"], texts
+    done = next(event for event in events if event.type == "done")
+    assert done.response.content == "Hey"
+
+
+async def test_r5_g2_ollama_ndjson_needs_no_sse_prefix(_high_rate_limit):
+    """Ollama streams NDJSON: a bare JSON line parses with no `data:` prefix.
+
+    Behavioral replacement for the old `sse_data` source scan of ollama.py: if
+    the NDJSON path were routed through the SSE parser, this unprefixed line
+    would be dropped and no text would be emitted.
+    """
+    from machina.core.provider.ollama import OllamaProvider
+
+    provider = OllamaProvider.__new__(OllamaProvider)
+    provider.model = "llama3.1"
+    provider.base_url = "http://127.0.0.1:11434"
+    provider._default_effort = ""
+    provider._rate_limiter = AsyncMock()
+    provider._rate_limit_key = "ollama"
+    body = (
+        json.dumps({"model": "llama3.1", "message": {"content": "Hi"}, "done": False})
+        + "\n"
+        + json.dumps({"model": "llama3.1", "message": {"content": ""}, "done": True})
+        + "\n"
+    )
+    provider.client = _streaming_client(body.encode())
+    events = [
+        event async for event in provider.stream_complete([{"role": "user", "content": "hi"}])
+    ]
+    texts = [event.content for event in events if event.type == "text"]
+    assert texts == ["Hi"], texts
+    done = next(event for event in events if event.type == "done")
+    assert done.response.content == "Hi"
 
 
 # ─── G3: reload reaches live providers ───────────────────────────────────────

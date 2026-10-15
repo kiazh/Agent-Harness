@@ -201,7 +201,17 @@ def sensitive_path(value: str, root: Path | None = None) -> bool:
     # revspec can never hide a credential file. `C:` is a drive letter, not
     # a revspec.
     if ":" in text and not (len(text) > 1 and text[1] == ":"):
-        parts.extend(p.lower() for p in text.split(":", 1)[1].split("/") if p)
+        rev_tail = text.split(":", 1)[1]
+        # R4-060/F1: git's index-stage revspec is `:[<n>:]<path>` — the
+        # revision half may be EMPTY (`:path`) or an all-digit stage
+        # (`:0:path`). A first-colon split alone leaves `0:credentials`,
+        # which matches no sensitive name, so the credential read escaped
+        # review. Drop an all-digit stage prefix so the path half classifies
+        # exactly like `HEAD:path`.
+        stage, sep, rest = rev_tail.partition(":")
+        if sep and stage.isdigit():
+            rev_tail = rest
+        parts.extend(p.lower() for p in rev_tail.split("/") if p)
     parts = [_backup_stripped(p) for p in parts]
     private_dirs = {".ssh", ".aws", ".gnupg", ".azure", ".kube"}
     private_files = {
@@ -456,12 +466,24 @@ def _recursive_traversal(argv: list[str], cwd: str) -> bool:
                 return True
             if arg.startswith("-d") and not arg.startswith("--") and arg[2:] == "recurse":
                 return True
-            if (
-                arg.startswith("-")
-                and not arg.startswith("--")
-                and any(ch in arg[1:] for ch in ("r", "R"))
-            ):
-                return True
+            if arg.startswith("-") and not arg.startswith("--") and len(arg) > 1:
+                cluster = arg[1:]
+                if any(ch in cluster for ch in ("r", "R")):
+                    return True
+                # F2: `-d ACTION` is value-taking, so within a compact
+                # cluster `d` may follow boolean flags (`-id recurse`,
+                # `-sd recurse`). The exact (`-d recurse`), attached
+                # (`-drecurse`) and `=` forms above miss that position; a
+                # `recurse` value here walks directories, including hidden
+                # files, without review. Only flag when the ACTION value is
+                # actually `recurse`, so `grep -id TOKEN file` stays routine.
+                position = cluster.find("d")
+                if position != -1:
+                    value = cluster[position + 1 :]
+                    if not value and index + 1 < len(args):
+                        value = args[index + 1]
+                    if value == "recurse":
+                        return True
         return False
     if name == "rg":
         # ripgrep searches recursively by default but skips hidden files.

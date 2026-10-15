@@ -21,7 +21,7 @@ router = APIRouter()
 async def index_document(req: CreateDocumentRequest) -> dict[str, Any]:
     """Index a document into the RAG pipeline."""
     from machina.rag.loaders import Document
-    from machina.tools.rag import get_rag_pipeline
+    from machina.tools.rag import acquire_rag_pipeline, release_rag_pipeline
 
     session = await session_manager.get(req.sessionId)
     if session is None:
@@ -29,8 +29,9 @@ async def index_document(req: CreateDocumentRequest) -> dict[str, Any]:
     agent = req.agent or session.agent_id
     if agent != session.agent_id:
         raise HTTPException(403, "agent does not own this session")
+    pipeline = None
     try:
-        pipeline = await get_rag_pipeline()
+        pipeline = await acquire_rag_pipeline()
         chunks = await pipeline.index_document(
             Document(content=req.content, source=req.source),
             session_id=req.sessionId,
@@ -40,6 +41,9 @@ async def index_document(req: CreateDocumentRequest) -> dict[str, Any]:
     except Exception:
         logger.exception("Document indexing failed")
         raise HTTPException(502, "document indexing failed") from None
+    finally:
+        if pipeline is not None:
+            await release_rag_pipeline(pipeline)
     return {"chunksIndexed": len(chunks), "source": req.source}
 
 
@@ -51,7 +55,7 @@ async def search_documents(
     agent: str | None = None,
 ) -> dict[str, Any]:
     """Search indexed documents."""
-    from machina.tools.rag import get_rag_pipeline
+    from machina.tools.rag import acquire_rag_pipeline, release_rag_pipeline
 
     session = await session_manager.get(sessionId)
     if session is None:
@@ -59,12 +63,16 @@ async def search_documents(
     agent = agent or session.agent_id
     if agent != session.agent_id:
         raise HTTPException(403, "agent does not own this session")
+    pipeline = None
     try:
-        pipeline = await get_rag_pipeline()
+        pipeline = await acquire_rag_pipeline()
         results = await pipeline.search(query=query, session_id=sessionId, top_k=topK)
     except Exception:
         logger.exception("Document search failed")
         raise HTTPException(502, "document search failed") from None
+    finally:
+        if pipeline is not None:
+            await release_rag_pipeline(pipeline)
     return {
         "results": [
             {

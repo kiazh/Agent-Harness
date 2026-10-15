@@ -850,3 +850,89 @@ def test_provenance_reports_repo_source(tmp_path, monkeypatch):
     assert _provenance_of(registry, skill) == "url:https://github.com/o/r"
     plain = SimpleNamespace(name="plain", source_type="local", file_path="/none/SKILL.md")
     assert _provenance_of(registry, plain) == "local"
+
+
+async def test_cancelled_stage_cleans_clone_acquired_by_worker(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+
+    from machina.tools import repo as repo_tools
+
+    entered, release = threading.Event(), threading.Event()
+    root = tmp_path / "machina-repo-stage-probe" / "repo"
+
+    def clone(source):
+        root.mkdir(parents=True)
+        entered.set()
+        assert release.wait(5)
+        return root, "revision"
+
+    monkeypatch.setattr(repo_install, "clone_repo", clone)
+    task = asyncio.create_task(repo_tools.repo_stage("https://github.com/o/r"))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not root.parent.exists()
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("activate", [False, True])
+async def test_cancelled_repo_mutation_preserves_public_result(tmp_path, monkeypatch, activate):
+    import asyncio
+    import threading
+
+    from machina.core.background_tasks import CompletedOnCancellation
+    from machina.tools import repo as repo_tools
+
+    root = tmp_path / "cloneparent" / "repo"
+    root.mkdir(parents=True)
+    revision = make_repo(root, {"skills/alpha/SKILL.md": ALPHA_SKILL})
+    monkeypatch.setattr(repo_install, "staging_root", lambda: tmp_path / "staging")
+    monkeypatch.setattr(repo_install, "clone_repo", lambda source: (root, revision))
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setattr(repo_tools, "skills_dir_for_install", lambda: skills)
+    monkeypatch.setattr(repo_tools.skill_registry, "load_all", lambda **kwargs: None)
+    if activate:
+        staged = await repo_tools.repo_stage("https://github.com/o/r")
+        digest = staged.split("DIGEST:")[-1]
+    entered, release = threading.Event(), threading.Event()
+    method = "activate_plan" if activate else "write_staged_plan"
+    original = getattr(repo_install, method)
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(repo_install, method, gated)
+    operation = (
+        repo_tools.repo_activate(digest)
+        if activate
+        else repo_tools.repo_stage("https://github.com/o/r")
+    )
+    task = asyncio.create_task(operation)
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(CompletedOnCancellation) as caught:
+            await task
+        assert "alpha" in caught.value.result
+        if activate:
+            assert (skills / "alpha" / "SKILL.md").exists()
+            assert caught.value.result.startswith("Installed")
+        else:
+            digest = caught.value.result.split("DIGEST:")[-1]
+            repo_install.load_staged_plan(digest)
+        assert not root.parent.exists()
+    finally:
+        release.set()

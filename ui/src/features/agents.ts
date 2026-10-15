@@ -96,40 +96,40 @@ export const agentsCommand: Command = {
 				return;
 			}
 			case "save": {
-			const args = requireArgs(rest, "/agents save <name> [description]");
-			// First token is the agent name; the remainder is the description.
-			const [name, ...descWords] = args.split(/\s+/);
-			const desc = descWords.join(" ").trim() || `Custom agent: ${name}`;
-			const { agent } = await host.request<AgentSaveResult>("agents.save", {
-				name: name!.toLowerCase(),
-				description: desc,
-				systemPrompt: "",
-				tools: [],
-			});
-			host.print(`Saved agent "${agent.name}".`, "success");
-			return;
-		}
-		case "history": {
-			const limit = parseInt(rest) || 50;
-			const { messages } = await host.request<AgentHistoryResult>("agents.history", {
-				sessionId: host.session()?.id,
-				limit,
-			});
-			if (!messages.length) {
-				host.print("No agent messages yet.", "plain");
+				const saveArgs = requireArgs(rest, "/agents save <name> [description]");
+				// First token is the agent name; the remainder is the description.
+				const [name, ...descWords] = saveArgs.split(/\s+/);
+				const desc = descWords.join(" ").trim() || `Custom agent: ${name}`;
+				const { agent } = await host.request<AgentSaveResult>("agents.save", {
+					name: name!.toLowerCase(),
+					description: desc,
+					systemPrompt: "",
+					tools: [],
+				});
+				host.print(`Saved agent "${agent.name}".`, "success");
 				return;
 			}
-			host.print(
-				table(
-					["From", "To", "Status", "Tokens", "When"],
-					messages.map((m) => [m.fromAgent, m.toAgent, m.status, String(m.tokens), when(m.createdAt)]),
-					60,
-				),
-				"plain",
+			case "history": {
+				const limit = parseInt(rest) || 50;
+				const { messages } = await host.request<AgentHistoryResult>("agents.history", {
+					sessionId: host.session()?.id,
+					limit,
+				});
+				if (!messages.length) {
+					host.print("No agent messages yet.", "plain");
+					return;
+				}
+				host.print(
+					table(
+						["From", "To", "Status", "Tokens", "When"],
+						messages.map((m) => [m.fromAgent, m.toAgent, m.status, String(m.tokens), when(m.createdAt)]),
+						60,
+					),
+					"plain",
 				);
-			return;
-		}
-		case "delete": {
+				return;
+			}
+			case "delete": {
 				const name = requireArgs(rest, "/agents delete <name>");
 				if (!(await confirm(host, `Delete agent "${name}"?`, "Delete"))) {
 					host.print("Kept the agent.", "plain");

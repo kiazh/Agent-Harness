@@ -1,0 +1,13 @@
+# architecture-layers after fix (2026-10-15T04:59:32Z)
+# NOTE: failures below are in core/agent.py and core/provider/* — files changed by
+# other review lanes, not machina/tools/file.py (this lane).
+        )
+E       AssertionError: core/provider package grew past its ceiling of 4958 lines: 4986
+E       assert 4986 <= 4958
+
+tests/test_architecture_layers.py:469: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_architecture_layers.py::test_god_file_ceilings_only_fall[core/provider/audit.py-219]
+FAILED tests/test_architecture_layers.py::test_god_file_ceilings_only_fall[core/provider/sse.py-46]
+FAILED tests/test_architecture_layers.py::test_provider_package_total_only_falls
+3 failed, 23 passed in 1.65s

@@ -1,0 +1,183 @@
+FFF.F...........F...........                                             [100%]
+=================================== FAILURES ===================================
+________________ test_harness_nonzero_exit_cannot_score_success ________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2168/test_harness_nonzero_exit_cann0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ada2650>
+
+    def test_harness_nonzero_exit_cannot_score_success(tmp_path: Path, monkeypatch) -> None:
+        """A harness that exits non-zero after legitimate edits is not a success.
+    
+        RED before P2-1: the graded copy still passes and the edit stays inside the
+        source allowlist, so the old verdict credited ``success=True`` even though
+        ``harness_exit_code == 2``.
+        """
+        task_dir = tmp_path / "task"
+        test_path = _green_fixture(task_dir)
+        _stub_opencode(
+            tmp_path,
+            monkeypatch,
+            body='(root / "calc.py").write_text(' + repr(_CALC_FIXED) + ")",
+            exit_code=2,
+        )
+        result = head_to_head.run_one(
+            "opencode", _opencode_args(tmp_path, test_path), task_dir, Path(sys.executable)
+        )
+        assert result["harness_exit_code"] == 2, result
+        assert result.get("error") is None, result
+        # The grade itself is clean — the crash is the only failure signal.
+        assert result["tests_passed"] == 1, result
+        assert result["tests_failed"] == 0, result
+        assert result["test_files_unchanged"] is True, result
+>       assert result["success"] is False, result
+E       AssertionError: {'harness': 'opencode', 'run_dir': '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2...est_harness_nonzero_exit_cann0/runs/task/opencode', 'session_id': 'ses-harness-exit-proof', 'wall_seconds': 0.193, ...}
+E       assert True is False
+
+tests/test_final_review_fix_research_metrics.py:134: AssertionError
+----------------------------- Captured stderr call -----------------------------
+[head_to_head] opencode db not found: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2168/test_harness_nonzero_exit_cann0/absent-opencode.db
+____________ test_harness_error_cannot_score_success_on_green_suite ____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2168/test_harness_error_cannot_scor0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ada1ba0>
+
+    def test_harness_error_cannot_score_success_on_green_suite(tmp_path: Path, monkeypatch) -> None:
+        """A harness that raised before running must never score success.
+    
+        RED before P2-1: ``run_one`` catches the error, records ``result['error']``,
+        then still grades the pristine green copy → ``success=True``.
+        """
+        task_dir = tmp_path / "task"
+        test_path = _green_fixture(task_dir)
+    
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("machina session setup failed")
+    
+        monkeypatch.setattr(head_to_head, "run_machina", _boom)
+        result = head_to_head.run_one(
+            "machina", _machina_args(tmp_path, test_path), task_dir, Path(sys.executable)
+        )
+        assert "RuntimeError" in (result.get("error") or ""), result
+        assert result["tests_passed"] == 1, result
+        assert result["tests_failed"] == 0, result
+        assert result["test_files_unchanged"] is True, result
+>       assert result["success"] is False, result
+E       AssertionError: {'harness': 'machina', 'run_dir': '/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-21..._error_cannot_scor0/runs/task/machina', 'error': 'RuntimeError: machina session setup failed', 'timed_out': False, ...}
+E       assert True is False
+
+tests/test_final_review_fix_research_metrics.py:157: AssertionError
+_________ test_identity_no_injected_transitions_reports_undefined_rate _________
+
+db_pool = <machina.db.connection.Database object at 0x10ae0ed50>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a459910>
+
+    async def test_identity_no_injected_transitions_reports_undefined_rate(
+        db_pool, monkeypatch
+    ) -> None:
+        monkeypatch.setattr("machina.research.identity_eval.db", db_pool)
+        monkeypatch.setattr("machina.memory.identity.db", db_pool)
+        scenarios = [
+            {
+                "baseline": {"known_facts": {"reliability": 1.0}},
+                "steps": [
+                    {
+                        "content": "benign adjustment one",
+                        "proposed": {"known_facts": {"reliability": 0.9}},
+                        "injected": False,
+                    },
+                    {
+                        "content": "benign adjustment two",
+                        "proposed": {"known_facts": {"reliability": 0.85}},
+                        "injected": False,
+                    },
+                ],
+            }
+        ]
+        before = await db_pool.fetchval("SELECT COUNT(*) FROM agent_belief_history")
+        result = await evaluate_identity_scenarios(scenarios)
+        # ``injected_transitions`` is the counter that makes the absence explicit.
+        assert result.injected_transitions == 0
+        # RED before P3-3: this was 0.0, indistinguishable from "all accepted".
+>       assert result.attack_rejection_rate is None
+E       assert 0.0 is None
+E        +  where 0.0 = DriftMetrics(scenarios=1, transitions=2, injected_transitions=0, attack_rejection_rate=0.0, benign_acceptance_rate=1.0, quarantined_memories=0).attack_rejection_rate
+
+tests/test_final_review_fix_research_metrics.py:192: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 00:52:00,936 [AUDIT] {"timestamp": 1792039920.93643, "event": "belief_transition", "agent_id": "identity-benchmark-68a96e7a-200b-471d-95fc-ded323a84b18", "drift_score": 0.09999999999999998, "contained": false, "quarantined_count": 0}
+2026-10-15 00:52:00,938 [AUDIT] {"timestamp": 1792039920.938751, "event": "belief_transition", "agent_id": "identity-benchmark-68a96e7a-200b-471d-95fc-ded323a84b18", "drift_score": 0.050000000000000044, "contained": false, "quarantined_count": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:225 {"timestamp": 1792039920.93643, "event": "belief_transition", "agent_id": "identity-benchmark-68a96e7a-200b-471d-95fc-ded323a84b18", "drift_score": 0.09999999999999998, "contained": false, "quarantined_count": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:225 {"timestamp": 1792039920.938751, "event": "belief_transition", "agent_id": "identity-benchmark-68a96e7a-200b-471d-95fc-ded323a84b18", "drift_score": 0.050000000000000044, "contained": false, "quarantined_count": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+______________ test_title_only_scores_evidence_when_title_matches ______________
+
+db_pool = <machina.db.connection.Database object at 0x10a4c5940>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a47a6c0>
+
+    async def test_title_only_scores_evidence_when_title_matches(db_pool, monkeypatch) -> None:
+        """A matched title identifies its session; that session's evidence is scored.
+    
+        RED before F11: the ranking was built from ``hit.chunk_id``, always ``None``
+        for title hits, so the title-only metric was a structural zero.
+        """
+        monkeypatch.setattr("machina.core.context.db", db_pool)
+        monkeypatch.setattr("machina.core.session.db", db_pool)
+        monkeypatch.setattr("machina.core.session_recall.db", db_pool)
+        dataset = [
+            Conversation(
+                turns=(DialogueTurn("D1:1", "Ada", "The telescope observed a nebula"),),
+                questions=(Question("Which telescope observed a nebula?", ("D1:1",)),),
+            )
+        ]
+        before = await db_pool.fetchval("SELECT COUNT(*) FROM context_archive")
+        metrics, latency_ms = await evaluate_session_recall(
+            dataset, k=1, turns_per_session=1, title_only=True
+        )
+        assert metrics.search_mode == "title-only"
+>       assert metrics.hit_rate == 1
+E       AssertionError: assert 0.0 == 1
+E        +  where 0.0 = RetrievalMetrics(questions=1, skipped_questions=0, evidence_recall=0.0, hit_rate=0.0, mean_reciprocal_rank=0.0, mean_retrieved_bytes=0.0, k=1, search_mode='title-only', components={}, rerank_stats={}).hit_rate
+
+tests/test_final_review_fix_research_metrics.py:242: AssertionError
+________ test_session_recall_title_only_backend_scores_matched_session _________
+
+db_pool = <machina.db.connection.Database object at 0x10a4ca650>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a501a90>
+
+    async def test_session_recall_title_only_backend_scores_matched_session(db_pool, monkeypatch):
+        """Title-only hits map to their session's evidence, not to a chunk id.
+    
+        Regression for F11: title hits carry ``chunk_id=None``, so the old ranking
+        (built from the chunk→dialogue table) was always empty. With one turn per
+        session the production-parity title is the evidence itself, so a title-only
+        search must now surface it (previously a structural zero).
+        """
+        monkeypatch.setattr("machina.core.context.db", db_pool)
+        monkeypatch.setattr("machina.core.session.db", db_pool)
+        monkeypatch.setattr("machina.core.session_recall.db", db_pool)
+        dataset = [
+            Conversation(
+                turns=(
+                    DialogueTurn("D1:1", "Ada", "The telescope observed a nebula"),
+                    DialogueTurn("D1:2", "Ben", "The orchid blooms at sunrise"),
+                ),
+                questions=(Question("Which telescope observed a nebula?", ("D1:1",)),),
+            )
+        ]
+        metrics, latency_ms = await evaluate_session_recall(
+            dataset, k=1, turns_per_session=1, title_only=True
+        )
+>       assert metrics.hit_rate == 1
+E       AssertionError: assert 0.0 == 1
+E        +  where 0.0 = RetrievalMetrics(questions=1, skipped_questions=0, evidence_recall=0.0, hit_rate=0.0, mean_reciprocal_rank=0.0, mean_retrieved_bytes=0.0, k=1, search_mode='title-only', components={}, rerank_stats={}).hit_rate
+
+tests/test_research_phase2.py:271: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_final_review_fix_research_metrics.py::test_harness_nonzero_exit_cannot_score_success
+FAILED tests/test_final_review_fix_research_metrics.py::test_harness_error_cannot_score_success_on_green_suite
+FAILED tests/test_final_review_fix_research_metrics.py::test_identity_no_injected_transitions_reports_undefined_rate
+FAILED tests/test_final_review_fix_research_metrics.py::test_title_only_scores_evidence_when_title_matches
+FAILED tests/test_research_phase2.py::test_session_recall_title_only_backend_scores_matched_session
+5 failed, 23 passed in 2.53s

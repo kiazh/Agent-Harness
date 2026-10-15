@@ -157,7 +157,7 @@ _CORE_IMPORT_CEILINGS = {
 # machina/research/benchmark.py's architecture section (round-2 review N6:
 # the hand-mirrored literal drifted once already). Moves only with the delta
 # table documented inside test_deferred_import_count_ratchet.
-DEFERRED_IMPORT_CAP = 689
+DEFERRED_IMPORT_CAP = 713
 
 
 def test_module_level_core_imports_only_shrink():
@@ -272,6 +272,16 @@ def test_deferred_import_count_ratchet():
     #   ports+observability seam (test_architecture_pairs pins that set).
     #   Census 687 -> 688 over the committed base (measured); the cap is
     #   unchanged at 689 because it already binds the grown census.
+    #   no-mistakes gate review rounds (2026-10-15, R1-R24): 689 -> 712
+    #   (+23). agent.py +5 (joined teardown + premature-exit finalization),
+    #   connectors/service.py +4, agent_factory.py +4 (provider ownership
+    #   scope), api/routes/streaming.py +2 (relay closure), connectors/
+    #   management.py +2, connectors/store.py +2 (layering: the core import
+    #   moved from module scope into the two async wrappers), core/usage.py
+    #   +2, core/turn_engine.py +1, tools/file.py +1.
+    #   gate-reconciliation follow-up (2026-10-15): +1 agent_factory.py
+    #   (cancel_and_join deferred import in close_agent_provider).
+    #   Census 713, cap 713.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
@@ -391,6 +401,17 @@ def test_deferred_import_count_ratchet():
 #         max_iterations surface and added the PB-1 flush log-and-continue
 #         (+9 net), then R5-F1 serialized the consolidation cursor
 #         read+extract+checkpoint under the advisory lock (+46).
+#     +103 core/agent.py (2110 -> 2213, final-review core/runtime fix lane):
+#         HELD-55 F1 3-key consolidation cursor — reader 2-/3-tuple parse +
+#         seq-aware persist + non-built-in since unpacking (+21);
+#         F02 cancellation finalization — `_tool_entry` / `_record_tool_action`
+#         extraction (Phase D body deduped, net +25), `_finalize_completed_tools`
+#         (+27) and the Phase C/D cancellation guards (+10); core-runtime F2
+#         `run()` immediate-flush cancellation wrapper mirroring `run_stream`
+#         (+6); code_review #6 truthful flush contract — `bool` return +
+#         confirmed-flush clearing in `_flush_pending_cancellation_safe` (+15).
+#         Offset by the removed duplicated Phase D recording body. No
+#         unreviewed growth may land on top of this.
 #     Provider package +178:
 #      +72 core/provider/audit.py (R5-N; URL-credential redaction — userinfo
 #          passwords and credential query/fragment values, shared by audit
@@ -404,27 +425,44 @@ def test_deferred_import_count_ratchet():
 #      +3 core/provider/anthropic.py, +2 chatgpt.py, +2 copilot.py,
 #          +1 direct.py, +1 openrouter.py (R5-GH shared-parser wiring).
 #     Package total 4780 -> 4958 by exactly this delta.
+#   Final-review redaction wave (2026-10-15): +44 provider lines —
+#     +35 core/provider/audit.py (219 -> 254): URL/presigned-credential
+#     redaction (Azure sig / AWS X-Amz-Signature / X-Goog forms), the DB
+#     password group consumes to the last @, password-only userinfo, and
+#     reserved event/timestamp kwargs. +9 core/provider/sse.py (46 -> 55):
+#     one leading UTF-8 BOM is stripped in the shared field parser.
+#     Package total 4958 -> 5002 by exactly this delta.
+#   no-mistakes gate review rounds (2026-10-15, R1-R24): one joined-teardown
+#   ownership contract across the agent/streaming/connectors boundaries.
+#     +54 core/agent.py (2213 -> 2267): joined teardown, premature-exit
+#         finalization (CancelledError/GeneratorExit/disconnect), flush
+#         persistence joins, retirement result handling.
+#     +4 core/provider/chatgpt.py (680 -> 684) and +4 copilot.py (427 -> 431):
+#         relay closure joins around provider streams.
+#     -7 core/provider/audit.py (254 -> 247): redundant signature entries
+#         removed (suffix rules already cover them).
+#     Package total 5002 -> 5003 by exactly this delta (-7 +4 +4).
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
-    ("core/agent.py", 2110),
+    ("core/agent.py", 2267),
     ("core/compression.py", 999),
     ("core/provider/__init__.py", 53),
     ("core/provider/_log.py", 10),
     ("core/provider/reasoning.py", 61),
     ("core/provider/specs.py", 188),
-    ("core/provider/audit.py", 219),
+    ("core/provider/audit.py", 247),
     ("core/provider/rate_limit.py", 120),
     ("core/provider/caches.py", 97),
     ("core/provider/transport.py", 382),
     ("core/provider/base.py", 60),
-    ("core/provider/sse.py", 46),
+    ("core/provider/sse.py", 55),
     ("core/provider/openrouter.py", 608),
     ("core/provider/ollama.py", 388),
     ("core/provider/direct.py", 348),
     ("core/provider/anthropic.py", 580),
-    ("core/provider/chatgpt.py", 680),
+    ("core/provider/chatgpt.py", 684),
     ("core/provider/factory.py", 138),
     ("core/provider/catalog.py", 553),
-    ("core/provider/copilot.py", 427),
+    ("core/provider/copilot.py", 431),
 )
 
 
@@ -449,7 +487,7 @@ def test_god_file_ceilings_only_fall(relative_path, ceiling):
 # 4780 = 5501 - 720 for the vendor-compliance removal (claude.py + gemini.py
 #        deleted) - 8 (factory.py branches/imports) - 2 (__init__.py exports)
 #        + 9 (specs.py: the Kimi Code spec + registry comment, same wave).
-_PROVIDER_PACKAGE_TOTAL_CEILING = 4958
+_PROVIDER_PACKAGE_TOTAL_CEILING = 5003
 
 
 def test_provider_package_total_only_falls():

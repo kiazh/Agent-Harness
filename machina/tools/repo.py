@@ -16,6 +16,7 @@ import shutil
 from machina.skills import repo_install
 from machina.skills.registry import skill_registry
 from machina.tools.base import registry
+from machina.tools.file import _run_worker_joined
 
 logger = logging.getLogger(__name__)
 
@@ -53,25 +54,39 @@ async def repo_stage(url: str) -> str:
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
     clone_parent = None
-    try:
-        repo_dir, revision = await asyncio.to_thread(repo_install.clone_repo, source)
+
+    def clone():
+        nonlocal clone_parent
+        repo_dir, revision = repo_install.clone_repo(source)
         clone_parent = repo_dir.parent
-    except repo_install.RepoInstallError as exc:
-        return f"Error: {exc}"
-    except OSError:
-        logger.warning("repo staging clone failed", exc_info=True)
-        return "Error: staging failed (filesystem error)"
+        return repo_dir, revision
+
     try:
-        plan = await asyncio.to_thread(repo_install.scan_repo, repo_dir, source, revision)
-        await asyncio.to_thread(repo_install.write_staged_plan, plan, repo_dir)
+        repo_dir, revision = await _run_worker_joined(clone)
+        plan = await _run_worker_joined(lambda: repo_install.scan_repo(repo_dir, source, revision))
+
+        def publish():
+            nonlocal clone_parent
+            try:
+                repo_install.write_staged_plan(plan, repo_dir)
+                return _stage_result(plan, source, revision)
+            finally:
+                shutil.rmtree(clone_parent)
+                clone_parent = None
+
+        result = await _run_worker_joined(publish, capture_result=True)
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
     except OSError:
-        logger.warning("repo staging write failed", exc_info=True)
+        logger.warning("repo staging failed", exc_info=True)
         return "Error: staging failed (filesystem error)"
     finally:
         if clone_parent is not None:
-            await asyncio.to_thread(shutil.rmtree, clone_parent, ignore_errors=True)
+            await _run_worker_joined(lambda: shutil.rmtree(clone_parent))
+    return result
+
+
+def _stage_result(plan, source, revision) -> str:
     summary = plan.summary()
     lines = [
         f"Staged {source.url} at {revision[:12]} (plan {plan.digest[:16]}...).",
@@ -132,14 +147,19 @@ async def repo_stage(url: str) -> str:
 async def repo_activate(digest: str) -> str:
     try:
         detail, staged = await asyncio.to_thread(repo_install.load_staged_plan, digest)
-        installed = await asyncio.to_thread(
-            repo_install.activate_plan, detail, staged, skills_dir_for_install()
+        skills_dir = skills_dir_for_install()
+        return await _run_worker_joined(
+            lambda: _activate_result(detail, staged, skills_dir), capture_result=True
         )
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
     except OSError:
         logger.warning("repo activation I/O failed", exc_info=True)
         return "Error: activation failed (filesystem error)"
+
+
+def _activate_result(detail, staged, skills_dir) -> str:
+    installed = repo_install.activate_plan(detail, staged, skills_dir)
     if not installed:
         return "No skills to install from this plan. Nothing was changed."
     try:

@@ -782,14 +782,31 @@ def test_keyset_pagination_counts_and_concurrent_insert():
 
         store.extend(_mk(i) for i in range(n))
         calls = {"pages": 0}
+        seq_floor = -9223372036854775808  # matches context.NULL_EVENT_SEQ_DESC
 
-        async def _page(session_id, limit=500, before_time=None, before_id=None, chunk_type=None):
+        def _seq(chunk):
+            # Mirror the reader's COALESCE(event_seq, <bigint floor>).
+            return chunk.event_seq if chunk.event_seq is not None else seq_floor
+
+        async def _page(
+            session_id,
+            limit=500,
+            before_time=None,
+            before_id=None,
+            before_seq=None,
+            chunk_type=None,
+        ):
             calls["pages"] += 1
-            ordered = sorted(store, key=lambda c: (c.created_at, str(c.id)), reverse=True)
+            # 3-key keyset (created_at, event_seq, id), newest first — the same
+            # cursor contract get_chunks_before implements.
+            ordered = sorted(store, key=lambda c: (c.created_at, _seq(c), str(c.id)), reverse=True)
             if before_time is not None:
-                ordered = [
-                    c for c in ordered if (c.created_at, str(c.id)) < (before_time, str(before_id))
-                ]
+                cursor = (
+                    before_time,
+                    before_seq if before_seq is not None else seq_floor,
+                    str(before_id),
+                )
+                ordered = [c for c in ordered if (c.created_at, _seq(c), str(c.id)) < cursor]
             # Concurrent insert mid-pagination: newest row appears once.
             if calls["pages"] == 1 and n >= 500:
                 store.append(_mk(10**6))

@@ -1,0 +1,46 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_growth_state_survives_across_stream_steps ________________
+
+stream_env = namespace(client=<httpx.AsyncClient object at 0x10a5facf0>, app=<fastapi.applications.FastAPI object at 0x10a5fa120>, ...h=<_pytest.monkeypatch.MonkeyPatch object at 0x10b01c3e0>, pool=<machina.db.connection.Database object at 0x10af82d50>)
+
+    async def test_growth_state_survives_across_stream_steps(stream_env):
+        """The done step must see state the first step set (F07)."""
+        agent = _GrowthProbeAgent()
+    
+        # The route imports the builder at call time, so patching the module
+        # attribute is enough; nothing else about the route is replaced.
+        async def _build_probe(session):
+            return agent
+    
+        stream_env.monkeypatch.setattr(
+            "machina.core.agent_factory.build_agent_for_session", _build_probe
+        )
+        sid = await _create_session(stream_env)
+    
+        response = await stream_env.client.post(
+            f"/api/v1/sessions/{sid}/prompt",
+            json={"text": "hello", "protocolVersion": 1},
+        )
+        assert response.status_code == 200, response.text
+        frames = [
+            json.loads(line[6:])
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and line != "data: [DONE]"
+        ]
+        assert frames[-1]["type"] == "done"
+    
+        # RED before the fix: every step ran in its own Context copy, so the
+        # done step read the ContextVar *defaults* ("UNSET"/None), not step 1's
+        # values — the real ``_complete_growth`` would then skip the episode.
+>       assert agent.observed_episode == _EPISODE, (
+            "growth episode did not survive from preparation into the done step"
+        )
+E       AssertionError: growth episode did not survive from preparation into the done step
+E       assert None == UUID('00096f35-ad85-4667-bfc1-68a0dcc20017')
+E        +  where None = <tests.test_f07_streaming_growth_scope._GrowthProbeAgent object at 0x10a5fb4d0>.observed_episode
+
+tests/test_f07_streaming_growth_scope.py:160: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_f07_streaming_growth_scope.py::test_growth_state_survives_across_stream_steps
+1 failed in 0.52s

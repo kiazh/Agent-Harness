@@ -1,0 +1,17 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 6 items
+
+tests/test_final_review_fix_research_metrics.py::test_harness_nonzero_exit_cannot_score_success PASSED [ 16%]
+tests/test_final_review_fix_research_metrics.py::test_harness_error_cannot_score_success_on_green_suite PASSED [ 33%]
+tests/test_final_review_fix_research_metrics.py::test_identity_no_injected_transitions_reports_undefined_rate PASSED [ 50%]
+tests/test_final_review_fix_research_metrics.py::test_identity_with_injected_transitions_still_reports_rate PASSED [ 66%]
+tests/test_final_review_fix_research_metrics.py::test_title_only_scores_evidence_when_title_matches PASSED [ 83%]
+tests/test_final_review_fix_research_metrics.py::test_title_only_does_not_credit_an_unmatched_title PASSED [100%]
+
+============================== 6 passed in 6.92s ===============================

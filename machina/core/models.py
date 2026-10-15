@@ -57,6 +57,11 @@ class ContextChunk:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     accessed_at: datetime | None = None
     document_source: str | None = None
+    # HELD-55 ordinal: durable per-event sequence assigned in original event
+    # order. Additive and optional — None for legacy rows (sorts NULLS LAST).
+    # The consolidation cursor carries it so a same-created_at batch that
+    # straddles a page boundary is never skipped.
+    event_seq: int | None = None
 
 
 @dataclass
@@ -117,9 +122,13 @@ class AgentResponse:
     def __post_init__(self) -> None:
         """Derive typed pauses from tool entries (AH-AUDIT-022).
 
-        Every construction site is covered automatically: entries carrying
-        a needs_approval marker contribute their pause record. Explicitly
-        passed entries are merged (deduplicated by request_id).
+        Every construction site is covered automatically: entries carrying a
+        ``needs_approval`` (singular) or ``needs_approvals`` (plural) marker
+        contribute their pause record. The plural list wins when present and
+        truthy — mirroring ``turn_flow.collect_pauses`` — so a delegated tool
+        that paused N>1 approvals contributes all of them, never only the
+        first; the singular remains the fallback. Explicitly passed entries
+        are merged (deduplicated by request_id).
         """
         try:
             seen = {
@@ -130,10 +139,13 @@ class AgentResponse:
             for entry in self.tool_calls or []:
                 if not isinstance(entry, dict):
                     continue
-                pause = entry.get("needs_approval")
-                if isinstance(pause, dict) and pause.get("request_id"):
-                    if str(pause["request_id"]) not in seen:
-                        seen.add(str(pause["request_id"]))
+                pauses = entry.get("needs_approvals") or [entry.get("needs_approval")]
+                for pause in pauses:
+                    if not isinstance(pause, dict) or not pause.get("request_id"):
+                        continue
+                    request_id = str(pause["request_id"])
+                    if request_id not in seen:
+                        seen.add(request_id)
                         self.needs_approval.append(dict(pause))
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.

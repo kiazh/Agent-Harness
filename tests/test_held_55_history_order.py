@@ -11,12 +11,14 @@ and leaves the UUID (``id``) as the final fallback.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import msgpack
 import pytest
 
 import machina.core.context as ctxmod
 from machina.core.context import ContextManager
+from machina.core.models import ContextChunk
 from tests.support.schema import isolated_schema
 
 pytestmark = [pytest.mark.integration, pytest.mark.db]
@@ -232,3 +234,126 @@ async def test_legacy_rows_keep_uuid_fallback_tiebreak(db_pool, monkeypatch):
         expected_ids = sorted((str(i) for i in ids), reverse=True)
         got = await cm.get_chunks(sid, limit=10)
         assert [str(c.id) for c in got] == expected_ids
+
+
+async def _seed_anti_correlated_batch(database, sid, *, base=None):
+    """Seed one created_at-tied batch whose id order is NOT event order.
+
+    Returns ``{label: uuid}``. ``event_seq`` runs e0..e3 while the UUIDs are
+    deliberately anti-correlated, so any writer that re-derives ordinals from
+    insertion/row order reintroduces UUID order.
+    """
+    base = base or datetime(2020, 1, 1, tzinfo=UTC)
+    ids = {
+        "e0": uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        "e1": uuid.UUID("00000000-0000-0000-0000-000000000004"),
+        "e2": uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        "e3": uuid.UUID("00000000-0000-0000-0000-000000000003"),
+    }
+    for seq, label in enumerate(("e0", "e1", "e2", "e3"), start=1):
+        await database.execute(
+            "INSERT INTO context_chunks"
+            "(id, session_id, agent_id, chunk_type, payload_msgpack, created_at, event_seq) "
+            "VALUES ($1, $2, 'harness', 'user_message', $3, $4::timestamptz, $5)",
+            ids[label],
+            sid,
+            msgpack.packb({"content": label}, use_bin_type=True),
+            base,
+            seq,
+        )
+    return ids
+
+
+async def test_compaction_replace_preserves_event_seq(db_pool, monkeypatch):
+    """Compaction must not revert a created_at-tied batch to UUID order.
+
+    The compressor drops ``event_seq`` when it rebuilds preserved chunks and
+    may present them in id order; the replace writer must recover each
+    preserved ordinal from the locked originals rather than re-deriving it from
+    insertion order (DEFAULT nextval).
+    """
+    async with isolated_schema(db_pool) as (_schema, database):
+        monkeypatch.setattr(ctxmod, "db", database)
+        cm = ContextManager()
+        sid = await _session(database)
+        ids = await _seed_anti_correlated_batch(database, sid)
+
+        # Preserved chunks: identity kept, event_seq dropped, supplied in
+        # id-descending order (the compressor's created_at tie-break).
+        preserved = [
+            ContextChunk(
+                id=ids[label],
+                session_id=sid,
+                agent_id="harness",
+                chunk_type="user_message",
+                payload={"content": label},
+                token_count=1,
+                created_at=datetime(2020, 1, 1, tzinfo=UTC),
+            )
+            for label in ("e1", "e3", "e2", "e0")
+        ]
+        await cm.replace_chunks_by_ids(sid, list(ids.values()), preserved)
+
+        rows = await database.fetch(
+            "SELECT id, event_seq FROM context_chunks WHERE session_id=$1", sid
+        )
+        got = {r["id"]: r["event_seq"] for r in rows}
+        assert got == {ids["e0"]: 1, ids["e1"]: 2, ids["e2"]: 3, ids["e3"]: 4}, got
+        ordered = [c.payload["content"] for c in await cm.get_chunks_since(sid, limit=10)]
+        assert ordered == ["e0", "e1", "e2", "e3"]
+
+
+async def test_fork_preserves_event_seq(db_pool, monkeypatch):
+    """A fork copies ordinals verbatim; it must not re-derive them."""
+    import machina.core.session as sessmod
+    from machina.core.session import SessionManager
+
+    async with isolated_schema(db_pool) as (_schema, database):
+        monkeypatch.setattr(ctxmod, "db", database)
+        monkeypatch.setattr(sessmod, "db", database)
+        sid = await _session(database)
+        await _seed_anti_correlated_batch(database, sid)
+        # Explicit inserts bypass the column DEFAULT, so advance the sequence
+        # past the seeded ordinals: a fork that re-derives ordinals would then
+        # draw fresh (1001+) values instead of copying 1..4.
+        await database.execute("SELECT setval('context_chunks_event_seq', 1000)")
+
+        child = await SessionManager().fork(sid)
+        parent_rows = {
+            r["id"]: r["event_seq"]
+            for r in await database.fetch(
+                "SELECT id, event_seq FROM context_chunks WHERE session_id=$1", sid
+            )
+        }
+        child_rows = await database.fetch(
+            "SELECT event_seq FROM context_chunks WHERE session_id=$1 ORDER BY event_seq",
+            child.id,
+        )
+        child_seqs = [r["event_seq"] for r in child_rows]
+        assert child_seqs == [1, 2, 3, 4], child_seqs
+        assert child_seqs == sorted(parent_rows.values())
+
+
+async def test_snapshot_keeps_null_ordinal_cursor_after_nonnull_history(db_pool, monkeypatch):
+    from machina.core.serialization import payload_to_msgpack
+
+    async with isolated_schema(db_pool) as (_schema, database):
+        monkeypatch.setattr(ctxmod, "db", database)
+        cm = ContextManager()
+        sid = await _session(database)
+        await database.executemany(
+            "INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, created_at, event_seq) "
+            "VALUES ($1, $2, 'harness', 'user_message', $3, '2020-01-01'::timestamptz, $4)",
+            [
+                (
+                    uuid.UUID(int=i),
+                    sid,
+                    payload_to_msgpack({"content": str(i)}),
+                    i if i <= 500 else None,
+                )
+                for i in range(1, 1002)
+            ],
+        )
+        chunks = await cm.get_all_chunks(sid)
+        assert len(chunks) == 1001
+        assert len({chunk.id for chunk in chunks}) == 1001

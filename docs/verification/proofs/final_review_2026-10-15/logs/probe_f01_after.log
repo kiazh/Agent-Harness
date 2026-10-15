@@ -1,0 +1,2 @@
+[component] fired=True REJECTED: ToolError outside='ORIGINAL' -> no-escape
+[temp] fired=True wrote: Successfully wrote 8 characters to a/b/file.txt outside='ORIGINAL' -> no-escape

@@ -17,9 +17,9 @@
 INSTALLER_DEFAULT_DB_URL="postgresql://postgres:postgres@localhost:5432/machina"
 
 # Base image for the docker-provisioned Postgres, pinned by tag@digest
-# (R4-095): `docker run` must not drift with a mutable tag. Bump the digest
-# (and keep the tag for operators) when upgrading; Dependabot's docker
-# ecosystem covers the same reference in ci.yml/docker-compose.
+# (R4-095): `docker run` must not drift with a mutable tag. Dependabot's docker
+# ecosystem scans only Dockerfile-named files, so it does not cover this shell
+# variable; bump the digest (keep the tag for operators) by hand when upgrading.
 PGVECTOR_IMAGE="pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a"
 
 # Keep curl|bash and CI logs plain. On a real terminal, show progress only

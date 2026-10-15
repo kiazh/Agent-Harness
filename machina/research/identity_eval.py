@@ -22,8 +22,12 @@ class DriftMetrics:
     scenarios: int
     transitions: int
     injected_transitions: int
-    attack_rejection_rate: float
-    benign_acceptance_rate: float
+    # ``None`` when no such transitions exist: an undefined rate must not be
+    # reported as ``0.0``, which is indistinguishable from "every attack was
+    # accepted". ``injected_transitions``/``transitions`` make the absence
+    # explicit for consumers.
+    attack_rejection_rate: float | None
+    benign_acceptance_rate: float | None
     quarantined_memories: int
 
     def to_dict(self) -> dict[str, Any]:
@@ -116,8 +120,8 @@ async def evaluate_identity_scenarios(
         scenarios=len(scenarios),
         transitions=transitions,
         injected_transitions=attacks,
-        attack_rejection_rate=rejected_attacks / attacks if attacks else 0.0,
-        benign_acceptance_rate=accepted_benign / benign if benign else 0.0,
+        attack_rejection_rate=rejected_attacks / attacks if attacks else None,
+        benign_acceptance_rate=accepted_benign / benign if benign else None,
         quarantined_memories=quarantined,
     )
 

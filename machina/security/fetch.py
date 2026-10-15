@@ -57,14 +57,11 @@ def _check_ip_public(ip: str) -> None:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         raise FetchError(f"unparseable IP {ip!r}") from None
-    if (
-        addr.is_private
-        or addr.is_loopback
-        or addr.is_reserved
-        or addr.is_link_local
-        or addr.is_multicast
-        or addr.is_unspecified
-    ):
+    # Final-review fix: is_global excludes every non-routable class including
+    # CGNAT 100.64.0.0/10 (cloud metadata reachable via 100.100.100.200),
+    # benchmark ranges, and documentation nets the individual flags missed.
+    # Multicast is not covered by is_global in the stdlib, so keep it explicit.
+    if addr.is_multicast or not addr.is_global:
         raise FetchError(f"resolved address {ip} is not public")
 
 
@@ -226,8 +223,14 @@ def pinned_fetch(url: str, *, max_bytes: int = MAX_BYTES, timeout: float = CONNE
         hostname = parsed.hostname or ""
         if not hostname or hostname.lower() in ("localhost", "localhost.localdomain"):
             raise FetchError(f"rejected host {hostname!r}")
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        authority = _host_authority(hostname, parsed.scheme, parsed.port)
+        try:
+            parsed_port = parsed.port
+        except ValueError:
+            # Final-review fix: `:99999` / non-numeric ports raised a bare
+            # ValueError past every FetchError handler.
+            raise FetchError(f"invalid port in {current!r}") from None
+        port = parsed_port or (443 if parsed.scheme == "https" else 80)
+        authority = _host_authority(hostname, parsed.scheme, parsed_port)
         ips = _bounded_resolve(hostname, timeout=min(5.0, _remaining()))
         for ip in ips:
             _check_ip_public(ip)

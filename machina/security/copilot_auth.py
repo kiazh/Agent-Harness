@@ -48,6 +48,7 @@ DEVICE_SCOPE = "read:user"
 DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 DEVICE_POLL_INTERVAL = 5.0
 DEVICE_POLL_SAFETY_MARGIN = 3.0
+DEVICE_POLL_MAX_WAIT = 60.0
 DEFAULT_DEVICE_TIMEOUT = 300.0
 
 # Token families the Copilot API exchanges; classic PATs (ghp_*) are rejected.
@@ -429,10 +430,20 @@ def device_flow_poll(
     wait = max(1.0, float(interval)) + DEVICE_POLL_SAFETY_MARGIN
     try:
         while time.monotonic() < deadline:
-            sleep(wait)
+            sleep_left = min(wait, max(0.0, deadline - time.monotonic()))
+            while sleep_left > 0:
+                piece = min(sleep_left, DEVICE_POLL_MAX_WAIT, max(0.0, deadline - time.monotonic()))
+                if piece <= 0:
+                    break
+                sleep(piece)
+                sleep_left -= piece
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
                 response = http.post(
                     ACCESS_TOKEN_URL,
+                    timeout=min(_DEFAULT_TIMEOUT, remaining),
                     headers=_form_headers(),
                     content=urlencode(
                         {

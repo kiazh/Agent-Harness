@@ -810,6 +810,14 @@ async def get_approval(request_id: str) -> dict | None:
 
 
 async def find_pending(session_id: str, digest: str) -> dict | None:
+    """Newest pending action for this session+digest, through ``public_view``.
+
+    F4/R4-105b: the raw ``target`` column is persisted unredacted, so the
+    record handed to transports (``NeedsApproval``) is redacted at this view
+    boundary exactly like ``get_approval``/``list_pending``. Selection is
+    unchanged (session + digest + status + recency); only the rendered view
+    is redacted.
+    """
     db = await _db()
     if db is not None:
         try:
@@ -821,7 +829,7 @@ async def find_pending(session_id: str, digest: str) -> dict | None:
                 digest,
             )
             if row:
-                return _with_completeness(dict(row))
+                return public_view(_with_completeness(dict(row)))
         except Exception as error:
             logger.error("durable approval read failed (%s)", type(error).__name__)
             raise
@@ -834,7 +842,7 @@ async def find_pending(session_id: str, digest: str) -> dict | None:
                 and rec.get("status") == "pending"
                 and not rec.get("consumed")
             ):
-                return dict(rec)
+                return public_view(dict(rec))
     return None
 
 
@@ -844,6 +852,11 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
     Legacy rows without a reviewable proposal never resume: a digest alone
     is not informed approval (AH-AUDIT-005). The caller creates a fresh
     approval card instead (fail closed).
+
+    F4/R4-105b: like ``get_approval``/``list_pending``, the returned record is
+    passed through ``public_view`` — the raw top-level ``target`` column must
+    not reach transports. The proposal-presence selection check runs on the
+    raw row before redaction, so resume semantics are unchanged.
     """
     db = await _db()
     if db is not None:
@@ -859,7 +872,7 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
             if row:
                 candidate = dict(row)
                 if candidate.get("proposal"):
-                    return _with_completeness(candidate)
+                    return public_view(_with_completeness(candidate))
                 return None
         except Exception as error:
             logger.error("durable approval read failed (%s)", type(error).__name__)
@@ -877,7 +890,7 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
                 and not rec.get("durable")
                 and rec.get("proposal")
             ):
-                return _with_completeness(rec)
+                return public_view(_with_completeness(rec))
     return None
 
 

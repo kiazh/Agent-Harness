@@ -55,9 +55,9 @@ async def _shared_rag_pipeline():
     if not _rag_enabled():
         return None
     try:
-        from machina.tools.rag import get_rag_pipeline
+        from machina.tools.rag import acquire_rag_pipeline
 
-        return await get_rag_pipeline()
+        return await acquire_rag_pipeline()
     except Exception:
         return None
 
@@ -136,57 +136,77 @@ async def build_agent_for_session(
 
     llm = get_provider(provider=provider_name, model=model)
 
-    # Shared dependencies (lazy, never eager cloud instantiation).
-    memory_retriever = None
-    memory_consolidator = None
-    if _memory_enabled():
-        try:
-            from machina.memory.retriever import MemoryRetriever
-            from machina.memory.store import memory_store
+    rag_pipeline = None
+    try:
+        # Shared dependencies (lazy, never eager cloud instantiation).
+        memory_retriever = None
+        memory_consolidator = None
+        if _memory_enabled():
+            try:
+                from machina.memory.retriever import MemoryRetriever
+                from machina.memory.store import memory_store
 
-            memory_retriever = MemoryRetriever(store=memory_store)
-        except Exception:
-            memory_retriever = None
-        try:
-            from machina.memory.consolidator import MemoryConsolidator
+                memory_retriever = MemoryRetriever(store=memory_store)
+            except Exception:
+                memory_retriever = None
+            try:
+                from machina.memory.consolidator import MemoryConsolidator
 
-            # Extraction is an LLM job: the consolidator must carry the
-            # session provider, or every consolidation fails with
-            # "no LLM provider available for memory extraction".
-            memory_consolidator = MemoryConsolidator(llm_provider=llm)
-        except Exception:
-            memory_consolidator = None
+                # Extraction is an LLM job: the consolidator must carry the
+                # session provider, or every consolidation fails with
+                # "no LLM provider available for memory extraction".
+                memory_consolidator = MemoryConsolidator(llm_provider=llm)
+            except Exception:
+                memory_consolidator = None
 
-    rag_pipeline = await _shared_rag_pipeline()
+        rag_pipeline = await _shared_rag_pipeline()
 
-    # Authority caps (LP-08): key presence/None semantics, never truthiness.
-    # tools absent/None = no parent restriction; [] = zero permitted tools.
-    # Intersect definition and parent tools; enforce the result at execution
-    # (allowed_tools is checked per tool call in the agent loop).
-    if authority is not None and "tools" in authority:
-        parent_tools = authority["tools"]
-        if parent_tools is None:
-            pass
-        elif allowed_tools is None:
-            allowed_tools = list(parent_tools)
-        else:
-            allowed_tools = [t for t in allowed_tools if t in parent_tools]
+        # Authority caps (LP-08): key presence/None semantics, never truthiness.
+        # tools absent/None = no parent restriction; [] = zero permitted tools.
+        # Intersect definition and parent tools; enforce the result at execution
+        # (allowed_tools is checked per tool call in the agent loop).
+        if authority is not None and "tools" in authority:
+            parent_tools = authority["tools"]
+            if parent_tools is None:
+                pass
+            elif allowed_tools is None:
+                allowed_tools = list(parent_tools)
+            else:
+                allowed_tools = [t for t in allowed_tools if t in parent_tools]
 
-    from machina.soulspec.adapters import MachinaAdapter
+        from machina.soulspec.adapters import MachinaAdapter
 
-    agent = ReActAgent(
-        provider=llm,
-        agent_id=agent_id,
-        system_prompt=system_prompt,
-        memory_retriever=memory_retriever,
-        memory_consolidator=memory_consolidator,
-        rag_pipeline=rag_pipeline,
-        allowed_tools=allowed_tools,
-        soul_spec=MachinaAdapter.to_soulspec(definition).to_storage_dict()
-        if definition is not None
-        else None,
-    )
+        soul_spec = (
+            MachinaAdapter.to_soulspec(definition).to_storage_dict()
+            if definition is not None
+            else None
+        )
+        agent = ReActAgent(
+            provider=llm,
+            agent_id=agent_id,
+            system_prompt=system_prompt,
+            memory_retriever=memory_retriever,
+            memory_consolidator=memory_consolidator,
+            rag_pipeline=rag_pipeline,
+            allowed_tools=allowed_tools,
+            soul_spec=soul_spec,
+        )
+    except BaseException:
+        from machina.core.background_tasks import await_joined
+
+        async def release_dependencies():
+            try:
+                await _close_orphaned_provider(llm)
+            finally:
+                if rag_pipeline is not None:
+                    from machina.tools.rag import release_rag_pipeline
+
+                    await release_rag_pipeline(rag_pipeline)
+
+        await await_joined(release_dependencies())
+        raise
     # Mark ownership so callers close only providers they created (AH-023).
+    agent._owns_rag_pipeline = rag_pipeline is not None
     agent._owns_provider = True  # type: ignore[attr-defined]
     agent._authority = authority or {}  # type: ignore[attr-defined]
     return agent
@@ -278,11 +298,45 @@ def check_mode_cap(parent_authority: dict | None, requested_mode: str) -> None:
 
 
 async def close_agent_provider(agent, timeout: float = 5.0) -> None:
-    """Close only owned providers, recording sanitized outcomes within a deadline.
+    """Release owned RAG leases and close providers with sanitized reporting.
 
-    Claim release remains the caller's independent finally. Resistant cleanup
-    remains strongly referenced until it retires; cancellation still propagates.
+    Claim release remains the caller's independent finally. An owned provider
+    is closed exactly once (AH-023). Resistant cleanup remains strongly
+    referenced until it retires.
+
+    Cancellation contract: a caller cancelling this call cancels the INNER
+    close (it observes ``CancelledError`` and ``bounded_cleanup`` records
+    ``provider.close.cancelled``), then bounded-joins it, then re-raises — so
+    the cancellation both reaches the in-flight close and never abandons a
+    half-closed provider. A genuinely wedged close still retires through the
+    independent timeout/quarantine path.
     """
+    import asyncio
+
+    from machina.core.cleanup import cancel_and_join
+
+    async def release_dependencies():
+        try:
+            if getattr(agent, "_owns_rag_pipeline", False):
+                from machina.tools.rag import release_rag_pipeline
+
+                agent._owns_rag_pipeline = False
+                await release_rag_pipeline(agent.rag_pipeline)
+        finally:
+            await _close_owned_provider(agent, timeout)
+
+    operation = asyncio.ensure_future(release_dependencies())
+    try:
+        await asyncio.shield(operation)
+    except asyncio.CancelledError:
+        # Cancel the in-flight close first (the inner close observes the
+        # CancelledError and is counted), bounded-join it so nothing outlives
+        # this call, then propagate the caller's cancellation.
+        await cancel_and_join([operation], timeout, "owned provider")
+        raise
+
+
+async def _close_owned_provider(agent, timeout: float) -> None:
     import asyncio
     import inspect
     import logging
@@ -292,6 +346,7 @@ async def close_agent_provider(agent, timeout: float = 5.0) -> None:
 
     if not getattr(agent, "_owns_provider", False):
         return
+    agent._owns_provider = False
     provider = getattr(agent, "provider", None)
     close = getattr(provider, "close", None)
     if not callable(close):
@@ -328,3 +383,19 @@ async def close_agent_provider(agent, timeout: float = 5.0) -> None:
         # are secondary to the turn and must be reported here.
         if "result" not in locals() or not inspect.isawaitable(result):
             report("failed", error)
+
+
+async def _close_orphaned_provider(provider, timeout: float = 5.0) -> None:
+    """Close a provider whose agent construction failed (F4, 2026-10-15 review).
+
+    ``get_provider`` returns an HTTP-client-owning transport before the
+    definition export / ``ReActAgent`` construction that adopts it can fail.
+    Reuses the audited owner-aware close contract through a minimal owner shim
+    so the pool is released with the same bounded, sanitized reporting. A close
+    failure is reported, never masks the construction error being raised.
+    """
+    from types import SimpleNamespace
+
+    if provider is None:
+        return
+    await close_agent_provider(SimpleNamespace(provider=provider, _owns_provider=True), timeout)

@@ -38,15 +38,20 @@ substrings and short excerpts. Standalone proofs follow
 
 ## 3. Running the gate
 
+The gate writes real sessions, chunks and memories, so it refuses a non-test
+database unless `--db-url` names it explicitly — the flag is the consent. The
+documented default `.env` database is `machina` (no "test"), so pass it (or
+point `MACHINA_DATABASE_URL`/`DATABASE_URL` at a test-named DB and run flagless):
+
 ```bash
 # all journeys (j4 self-skips when Firecrawl is down; j9 without opencode + registration)
-python tools/e2e_gate.py
+python tools/e2e_gate.py --db-url postgresql://postgres:postgres@localhost:5432/machina
 
 # cheap real subset
-python tools/e2e_gate.py --journeys j1,j5
+python tools/e2e_gate.py --db-url postgresql://postgres:postgres@localhost:5432/machina --journeys j1,j5
 
 # extra JSON report at a custom path
-python tools/e2e_gate.py --journeys j1,j2,j3,j5 --json /tmp/e2e.json
+python tools/e2e_gate.py --db-url postgresql://postgres:postgres@localhost:5432/machina --journeys j1,j2,j3,j5 --json /tmp/e2e.json
 ```
 
 Journeys (real DeepSeek, real network, repo `.env` PostgreSQL, self-hosted
@@ -64,12 +69,19 @@ Firecrawl on `localhost:3002`):
 | j8 | provider facade: config-resolved `get_provider` + real `usage_store.complete_call` returns the fixture text and a durable `llm_usage` row (`status=complete`, known tokens); `machina status` exits 0 with a `Chat provider` line |
 | j9 | Machina-as-MCP-server: `opencode run` drives the `machina_chat` shim tool, the reply token round-trips in the OpenCode transcript, and a fresh Machina session's `context_chunks` rows contain the token (SKIP unless `opencode` is installed and the project has a registered `machina` MCP server) |
 
-Exit codes: `0` no failures (skips allowed), `1` at least one FAIL, `2` usage
-or missing venv. A SKIP is missing evidence, not a pass — name it in the
-change record.
+Exit codes: `0` no failures (skips allowed), `1` at least one FAIL, `2` usage,
+the database guard, or missing venv. A SKIP is missing evidence, not a pass —
+name it in the change record.
 
 Notes that keep the gate honest:
 
+- Database guard: without `--db-url` the gate reads only the environment
+  (`MACHINA_DATABASE_URL` then `DATABASE_URL`), never a config file, and exits
+  `2` before any journey when that is unset, is not postgres, or names a
+  non-test database. "Test-like" is a substring heuristic (`is_test_database`:
+  the name need only contain "test"), so `latest`/`contest`/`attest` pass
+  without `--db-url` — treat the flag as the real consent, not the name check.
+  A blank `--db-url` value is treated as absent.
 - Fixtures must be collision-proof: memory consolidation deduplicates content
   against stored rows, so j1 uses a unique pet name per run.
 - Never widen an assertion to make it pass; fix the feature or record a

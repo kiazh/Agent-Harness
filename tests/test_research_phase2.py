@@ -245,7 +245,14 @@ async def test_session_recall_backend_scores_across_sessions_and_cleans_up(db_po
     assert await db_pool.fetchval("SELECT COUNT(*) FROM context_archive") == before
 
 
-async def test_session_recall_title_only_backend_returns_no_evidence(db_pool, monkeypatch):
+async def test_session_recall_title_only_backend_scores_matched_session(db_pool, monkeypatch):
+    """Title-only hits map to their session's evidence, not to a chunk id.
+
+    Regression for F11: title hits carry ``chunk_id=None``, so the old ranking
+    (built from the chunk→dialogue table) was always empty. With one turn per
+    session the production-parity title is the evidence itself, so a title-only
+    search must now surface it (previously a structural zero).
+    """
     monkeypatch.setattr("machina.core.context.db", db_pool)
     monkeypatch.setattr("machina.core.session.db", db_pool)
     monkeypatch.setattr("machina.core.session_recall.db", db_pool)
@@ -261,7 +268,7 @@ async def test_session_recall_title_only_backend_returns_no_evidence(db_pool, mo
     metrics, latency_ms = await evaluate_session_recall(
         dataset, k=1, turns_per_session=1, title_only=True
     )
-    assert metrics.hit_rate == 0
+    assert metrics.hit_rate == 1
     assert latency_ms >= 0
 
 

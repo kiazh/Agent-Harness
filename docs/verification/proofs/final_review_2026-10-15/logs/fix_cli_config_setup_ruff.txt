@@ -1,0 +1,3 @@
+== ruff ==
+All checks passed!
+exit=0

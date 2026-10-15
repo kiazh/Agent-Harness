@@ -22,7 +22,8 @@ Design notes
   whole fixture copy is hashed before/after, except the derived agent edit
   surface (:func:`editable_paths`) and volatile caches/git metadata; anything
   else the agent touches - including new files - fails the integrity check. A
-  run only scores ``success`` with parsed ``failed == 0`` and ≥1 passed.
+  run only scores ``success`` when the harness exited ``0`` without a recorded
+  error AND the graded run has parsed ``failed == 0`` and ≥1 passed.
 * Secrets are never printed: only session ids, counts, and timings.
 
 Usage
@@ -755,7 +756,9 @@ def run_one(harness: str, args: argparse.Namespace, task_dir: Path, venv_python:
             "removed": sorted(set(hashes_before) - set(hashes_after)),
         }
     result["success"] = bool(
-        grade_result["exit_code"] == 0
+        not result.get("error")
+        and result.get("harness_exit_code") == 0
+        and grade_result["exit_code"] == 0
         and grade_result["passed"] > 0
         and result["tests_failed"] == 0
         and unchanged

@@ -16,7 +16,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { ArgumentAwareAutocompleteProvider } from "./autocomplete.ts";
-import { parseCommand, splitSub } from "./commands.ts";
+import { parseCommand, splitSub, type ParsedCommand } from "./commands.ts";
 import { ComposerBox, Footer, header, Picker, SecretForm, TextForm, ThinkingIndicator } from "./components.ts";
 import { Menu } from "./components/Menu.ts";
 import { OAuthProgress } from "./components/OAuthProgress.ts";
@@ -114,8 +114,6 @@ export class App implements FeatureHost {
 	private readonly sessionRecency: string[] = [];
 	/** Timers for the local watchdog (diagnostic deadline, not ownership). */
 	private readonly inFlightTimers = new Map<string, NodeJS.Timeout>();
-	/** The session ID of the most recent in-flight turn (for cancel). */
-	private inFlightSessionId: string | undefined;
 	private sessionTokens = 0;
 	/** Preserved token counts per session so switchTo does not lose them. */
 	private readonly sessionTokensById = new Map<string, number>();
@@ -1068,12 +1066,10 @@ export class App implements FeatureHost {
 
 		this.editor.setText("");
 
-		// Never keep secrets in input history: /keys set carries a raw value.
-		// The subcommand is case-insensitive (splitSub lowercases it), matching
-		// the /keys dispatcher; a raw startsWith("set") check let "/KEYS SET"
-		// and "/keys Set" slip the secret into history.
-		const secret = command?.name === "keys" && splitSub(command.args)[0] === "set";
-        if (!secret) this.editor.addToHistory(draft.text);
+		// Never keep secrets in input history: `/keys set KEY VALUE` carries a
+		// raw value, and the unsupported `/provider add <name> <url> <key>`
+		// form carries one in its ignored third token (see commandCarriesSecret).
+        if (!commandCarriesSecret(command)) this.editor.addToHistory(draft.text);
 		if (command) {
 			await runCommand(command, this);
 		} else {
@@ -1118,7 +1114,6 @@ export class App implements FeatureHost {
 		this.transcript.addUser(text);
 		this.setRunning(true);
 		this.inFlight.add(sessionId);
-		this.inFlightSessionId = sessionId;
 		// Register the submitting record before dispatch: gateway work is
 		// asynchronous and events can arrive before the RPC result.
 		const record = this.turnRecord(sessionId);
@@ -1225,9 +1220,6 @@ export class App implements FeatureHost {
 		if (timer) {
 			clearTimeout(timer);
 			this.inFlightTimers.delete(sessionId);
-		}
-		if (this.inFlightSessionId === sessionId) {
-			this.inFlightSessionId = undefined;
 		}
 	}
 
@@ -1660,6 +1652,24 @@ export class App implements FeatureHost {
 
 function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * True when a slash command embeds a raw secret that must never reach the
+ * editor's input history.
+ *
+ * `/keys set KEY VALUE` is the documented secret form. `/provider add <name>
+ * <url> <key>` is NOT: `addProvider` (features/settings.ts) reads only the
+ * name and URL and always prompts for the key through a masked editor, so a
+ * third token is ignored — but a user may still type it, and it would
+ * otherwise be stashed in the session's recalled history. Both subcommands are
+ * matched case-insensitively (splitSub lowercases the head).
+ */
+export function commandCarriesSecret(command: ParsedCommand | undefined): boolean {
+	if (!command) return false;
+	const [sub, rest] = splitSub(command.args);
+	if (command.name === "keys") return sub === "set";
+	return command.name === "provider" && sub === "add" && rest.split(/\s+/).filter(Boolean).length > 2;
 }
 
 /** Routing identity for an event: the transport turn (origin for approvals is matched separately). */

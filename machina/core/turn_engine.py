@@ -182,6 +182,8 @@ class TurnEngine:
         self._renewal_join_timeout_s = renewal_join_timeout_s
         self._max_tool_result_chars = max_tool_result_chars
         self._agent: Any | None = None
+        self._source: Any | None = None
+        self._source_task: asyncio.Task | None = None
         self._redactor = StreamingSecretRedactor()
         self._tail_flushed = False
         self._final: Any | None = None
@@ -317,10 +319,35 @@ class TurnEngine:
             source = agent.run_stream(
                 self.spec.session_id, self.spec.text, verbose=self.spec.verbose, **stream_kwargs
             )
-        async for event in source:
-            translated = self._translate(event)
-            if translated is not None:
-                yield translated
+        self._source = source
+        try:
+            while True:
+                self._source_task = asyncio.current_task()
+                try:
+                    event = await anext(source)
+                except StopAsyncIteration:
+                    break
+                finally:
+                    self._source_task = None
+                translated = self._translate(event)
+                if translated is not None:
+                    yield translated
+        finally:
+            await self._close_source()
+
+    async def _close_source(self) -> None:
+        from machina.core.background_tasks import await_joined
+
+        driver = self._source_task
+        if driver is not None and driver is not asyncio.current_task() and not driver.done():
+            driver.cancel()
+            await await_joined(asyncio.gather(driver, return_exceptions=True))
+        source = self._source
+        if source is not None:
+            try:
+                await await_joined(source.aclose())
+            finally:
+                self._source = None
 
     def _translate(self, event: Any) -> TurnEvent | None:
         """Map one agent ``StreamEvent`` to its semantic counterpart."""
@@ -478,6 +505,7 @@ class TurnEngine:
         self._stage("cleanup_started")
         agent = self._agent
         try:
+            await self._close_source()
             if agent is not None:
                 self._stage("joining_optional_work")
                 try:

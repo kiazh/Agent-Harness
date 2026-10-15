@@ -1,0 +1,24 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 13 items
+
+tests/test_final_review_connectors_fixes.py::test_grouped_long_body_under_a_count_is_refused[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] PASSED [  7%]
+tests/test_final_review_connectors_fixes.py::test_grouped_long_body_under_a_count_is_refused[a?|b?|c?|d?|e?|f?|g?|h?|i?|j?|k?|l?|m?|n?|o?|p?|q?|r?|s?|t?|u?|v?|w?|x?|y?|z?] PASSED [ 15%]
+tests/test_final_review_connectors_fixes.py::test_long_body_small_count_and_atom_counts_stay_accepted PASSED [ 23%]
+tests/test_final_review_connectors_fixes.py::test_failed_replace_keeps_newer_concurrent_config PASSED [ 30%]
+tests/test_final_review_connectors_fixes.py::test_failed_new_add_keeps_newer_concurrent_config PASSED [ 38%]
+tests/test_final_review_connectors_fixes.py::test_failed_add_without_interference_still_compensates PASSED [ 46%]
+tests/test_final_review_connectors_fixes.py::test_agent_mcp_connect_refuses_stdio_in_sandbox PASSED [ 53%]
+tests/test_final_review_connectors_fixes.py::test_connect_and_discover_refuses_stdio_in_sandbox PASSED [ 61%]
+tests/test_final_review_connectors_fixes.py::test_connect_and_discover_allows_http_in_sandbox PASSED [ 69%]
+tests/test_final_review_connectors_fixes.py::test_store_flock_uses_nonblocking_acquisition PASSED [ 76%]
+tests/test_final_review_connectors_fixes.py::test_async_store_write_stays_off_the_event_loop PASSED [ 84%]
+tests/test_final_review_connectors_fixes.py::test_async_store_write_times_out_typed_when_lock_is_held PASSED [ 92%]
+tests/test_final_review_connectors_fixes.py::test_config_lock_not_held_during_auth_cache_refresh PASSED [100%]
+
+============================== 13 passed in 0.67s ==============================

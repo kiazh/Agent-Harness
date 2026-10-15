@@ -1,0 +1,25 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 265 items
+
+tests/test_r5_011_013_provider_transport.py ...........                  [  4%]
+tests/test_final_review_2026_10_15_fix_batch3.py .......                 [  6%]
+tests/test_repo_install.py ..................................            [ 19%]
+tests/test_fm6_repo_install.py ...                                       [ 20%]
+tests/test_fm6_skill_read.py ........................................... [ 36%]
+........................................................................ [ 64%]
+..................................                                       [ 76%]
+tests/test_audit_lifecycle.py ....                                       [ 78%]
+tests/test_audit_shutdown.py .                                           [ 78%]
+tests/test_fm6_audit.py ...                                              [ 80%]
+tests/test_r5_018_audit_redaction.py ..........                          [ 83%]
+tests/test_r5_nb_source_redaction.py .......                             [ 86%]
+tests/test_observability_payload_boundary.py ........                    [ 89%]
+tests/test_final_review_2026_10_15_providers.py ........................ [ 98%]
+....                                                                     [100%]
+
+============================= 265 passed in 5.69s ==============================

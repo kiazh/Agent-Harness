@@ -10,9 +10,11 @@ the cache-invalidation contract.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -26,15 +28,40 @@ if _WINDOWS:
 else:
     import fcntl
 
+#: Bound on acquiring the connector-inventory write lock. Writes are short
+#: (read + atomic replace); a peer holding the lock longer than this is treated
+#: as unavailable instead of blocking the caller (or a worker's event loop)
+#: without bound. POSIX ``flock`` offers no timeout, so acquisition is a
+#: nonblocking poll up to this deadline; Windows ``LK_LOCK`` is already bounded
+#: (~10s of 1s retries) and keeps its idiom.
+STORE_LOCK_TIMEOUT_SECONDS = 10.0
+#: Delay between nonblocking acquisition attempts while a peer holds the lock.
+_STORE_LOCK_POLL_SECONDS = 0.05
+
+
+class ConnectorRevisionChanged(ConfigError):
+    """A conditional mutation was superseded by another writer."""
+
+
+class ConnectorStoreBusy(ConfigError):
+    """The connector inventory lock was not acquired within its bound.
+
+    The message names only the lock file, never configuration material.
+    """
+
 
 class ConnectorStore:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(
+        self, path: Path | None = None, *, lock_timeout: float = STORE_LOCK_TIMEOUT_SECONDS
+    ) -> None:
         self.path = Path(path) if path is not None else Path.home() / ".machina" / "mcp.json"
+        self._lock_timeout = max(0.0, float(lock_timeout))
 
     @contextmanager
     def _locked(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(str(self.path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        lock_path = str(self.path) + ".lock"
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         acquired = False
         try:
             if _WINDOWS:
@@ -44,9 +71,26 @@ class ConnectorStore:
                     os.write(fd, b"\0")
                 os.lseek(fd, 0, os.SEEK_SET)
                 msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                acquired = True
             else:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            acquired = True
+                # Nonblocking acquisition under a deadline: a held lock must
+                # never park the calling thread (which may be the event loop)
+                # indefinitely.
+                deadline = time.monotonic() + self._lock_timeout
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except OSError:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise ConnectorStoreBusy(
+                                "connector inventory lock busy; another process is "
+                                f"holding {lock_path}"
+                            ) from None
+                        time.sleep(min(_STORE_LOCK_POLL_SECONDS, remaining))
+                        continue
+                    acquired = True
+                    break
             yield
         finally:
             try:
@@ -58,6 +102,28 @@ class ConnectorStore:
                         fcntl.flock(fd, fcntl.LOCK_UN)
             finally:
                 os.close(fd)
+
+    async def configure_async(
+        self, fields: dict[str, Any], *, expected_revision: int | None = None
+    ) -> ConnectorConfig:
+        """Persist a configuration without parking the event loop on the lock."""
+        from machina.core.background_tasks import await_joined
+
+        return await await_joined(
+            asyncio.to_thread(self.configure, fields, expected_revision=expected_revision),
+            capture_result=True,
+        )
+
+    async def remove_async(
+        self, connector_id: str, *, expected_revision: int | None = None
+    ) -> bool:
+        """Remove a configuration without parking the event loop on the lock."""
+        from machina.core.background_tasks import await_joined
+
+        return await await_joined(
+            asyncio.to_thread(self.remove, connector_id, expected_revision=expected_revision),
+            capture_result=True,
+        )
 
     def load(self) -> tuple[int, list[ConnectorConfig]]:
         # Atomic replacement makes read-only loading safe without creating files.
@@ -104,10 +170,16 @@ class ConnectorStore:
         except TypeError:
             raise ConfigError("invalid connector configuration") from None
 
-    def configure(self, fields: dict[str, Any]) -> ConnectorConfig:
+    def configure(
+        self, fields: dict[str, Any], *, expected_revision: int | None = None
+    ) -> ConnectorConfig:
         config = self.validate_input(fields)
         with self._locked():
             generation, configs = self.load()
+            if expected_revision is not None and not any(
+                c.id == config.id and c.revision == expected_revision for c in configs
+            ):
+                raise ConnectorRevisionChanged("connector revision changed")
             revisions = self._revisions(configs)
             config.revision = revisions.get(config.id, 0) + 1
             revisions[config.id] = config.revision
@@ -115,9 +187,13 @@ class ConnectorStore:
             self._write(generation + 1, configs, revisions)
         return config
 
-    def remove(self, connector_id: str) -> bool:
+    def remove(self, connector_id: str, *, expected_revision: int | None = None) -> bool:
         with self._locked():
             generation, configs = self.load()
+            if expected_revision is not None and not any(
+                c.id == connector_id and c.revision == expected_revision for c in configs
+            ):
+                raise ConnectorRevisionChanged("connector revision changed")
             if not any(c.id == connector_id for c in configs):
                 return False
             revisions = self._revisions(configs)

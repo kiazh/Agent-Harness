@@ -1,0 +1,22 @@
+== F1 sensitive_path ==
+  ':0:credentials'         -> True
+  ':credentials'           -> True
+  'HEAD:credentials'       -> True
+  ':2:id_rsa'              -> True
+  ':0:credentials.1'       -> True
+  'HEAD:.env.example'      -> False
+  ':0:.env.example'        -> False
+  'HEAD:README.md'         -> False
+  ':0:README.md'           -> False
+== F2 _recursive_traversal ==
+  grep -id recurse TOKEN .     -> True
+  grep -sd recurse TOKEN .     -> True
+  grep -End recurse TOKEN .    -> True
+  grep -id TOKEN file          -> False
+  grep -C 2 TOKEN file         -> False
+== F1 decide ==
+  git show :0:credentials      -> pending (sensitive capability requires explicit approval: credential_access)
+  git show :credentials        -> pending (sensitive capability requires explicit approval: credential_access)
+== F2 decide ==
+  grep -id recurse TOKEN .     -> pending (sensitive capability requires explicit approval: opaque_execution_review)
+  grep -id TOKEN file          -> allowed (routine trusted project command)
