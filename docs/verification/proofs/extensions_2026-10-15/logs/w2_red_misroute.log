@@ -1,0 +1,27 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_default_catalog_routes_worker_retry_to_background_jobs __________
+
+    def test_default_catalog_routes_worker_retry_to_background_jobs():
+        """'retry' must attribute worker queries to background-jobs, not llm-provider.
+    
+        Both skills used to carry a bare 'retry' trigger; the resulting tie let
+        text scoring hand "add retry logic to the worker" to llm-provider, which
+        also mislabeled the requested workflow (SKILLS_adversarial_review.md W2).
+        Provider-domain retry queries must still lead with llm-provider.
+        """
+        from machina.skills.runtime import rank_skills
+    
+        skills = SkillRegistry()
+        worker = [s.name for s in rank_skills(skills, "add retry logic to the worker")]
+>       assert worker[0] == "background-jobs", worker[:3]
+E       AssertionError: ['llm-provider', 'background-jobs', 'ecc-cost-aware-llm-pipeline']
+E       assert 'llm-provider' == 'background-jobs'
+E         
+E         - background-jobs
+E         + llm-provider
+
+tests/test_fm6_triggers.py:73: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_fm6_triggers.py::test_default_catalog_routes_worker_retry_to_background_jobs
+1 failed in 0.39s

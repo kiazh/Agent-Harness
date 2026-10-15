@@ -106,3 +106,28 @@ def test_repository_skills_still_load_after_normalization():
     names = {skill.name for skill in registry.list_skills()}
     assert {"ecc-deep-research", "ecc-python-patterns", "ecc-tdd-workflow"} <= names
     assert registry.get("ecc-python-patterns").enabled is True
+
+
+def test_first_party_catalog_loads_with_zero_skips():
+    """Every non-ECC skills/<name> must load; a silent skip is a failure.
+
+    ``load_all`` skips content that trips the scanner best-effort (warning
+    only), so a phrase like a literal "system prompt" mention can drop a
+    skill while every suite stays green. Pin catalog completeness directly.
+    """
+    from pathlib import Path
+
+    from machina.skills.registry import SkillRegistry
+
+    root = Path(__file__).resolve().parents[1] / "skills"
+    expected = {
+        path.name
+        for path in root.iterdir()
+        if path.is_dir() and path.name != "ecc" and (path / "SKILL.md").is_file()
+    }
+    assert expected, "no first-party skill directories found"
+
+    registry = SkillRegistry()
+    registry.load_all()
+    loaded = {skill.name for skill in registry.list_skills()}
+    assert expected <= loaded, f"silently skipped: {sorted(expected - loaded)}"

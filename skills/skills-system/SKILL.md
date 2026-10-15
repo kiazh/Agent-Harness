@@ -18,11 +18,11 @@ version: 1.0.0
 | Skill | Practice |
 |---|---|
 | SKILL.md parsing | Parse YAML frontmatter + content |
-| Trigger matching | Embedding-based trigger matching |
+| Trigger matching | Keyword/IDF trigger matching with whole-word boundaries |
 | Progressive disclosure | Load metadata always, content on trigger |
 | Skill composition | Skill chaining: search → extract → summarize |
 | Skill curator | Track usage, archive stale skills |
-| Skill templates | Jinja2 templates for skill prompts |
+| Skill templates | SKILL.md templates for repeatable workflows |
 | Skill marketplace | Community-curated skill sharing |
 
 ## Key Resources

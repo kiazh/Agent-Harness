@@ -58,6 +58,25 @@ def test_rank_activates_cpp_trigger_skill(tmp_path):
     assert [s.name for s in rank_skills(skills, "c++builder internals")] == []
 
 
+def test_default_catalog_routes_worker_retry_to_background_jobs():
+    """'retry' must attribute worker queries to background-jobs, not llm-provider.
+
+    Both skills used to carry a bare 'retry' trigger; the resulting tie let
+    text scoring hand "add retry logic to the worker" to llm-provider, which
+    also mislabeled the requested workflow (SKILLS_adversarial_review.md W2).
+    Provider-domain retry queries must still lead with llm-provider.
+    """
+    from machina.skills.runtime import rank_skills
+
+    skills = SkillRegistry()
+    worker = [s.name for s in rank_skills(skills, "add retry logic to the worker")]
+    assert worker[0] == "background-jobs", worker[:3]
+    provider = [
+        s.name for s in rank_skills(skills, "configure retries for the openrouter provider")
+    ]
+    assert provider[0] == "llm-provider", provider[:3]
+
+
 def test_workflow_selects_skill_by_non_word_ending_trigger(tmp_path, monkeypatch):
     from machina.skills.workflow import plan_workflow
 

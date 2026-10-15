@@ -8,7 +8,6 @@ triggers:
   - "streaming"
   - "tool calling"
   - "token count"
-  - "retry"
 version: 1.0.0
 ---
 

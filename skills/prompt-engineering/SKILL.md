@@ -19,7 +19,7 @@ version: 1.0.0
 | System instructions | Write instruction sections for different agent roles |
 | Few-shot examples | Design few-shot examples for tool calling |
 | Context assembly | Implement prompt assembler with token budget |
-| Prompt templates | Jinja2 template library for common patterns |
+| Prompt templates | Reusable template library for common patterns |
 | Prompt testing | A/B test prompts on benchmark tasks |
 
 ## Key Resources

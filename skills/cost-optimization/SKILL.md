@@ -21,7 +21,7 @@ version: 1.0.0
 | Prompt caching | Cache the system instructions and skill content |
 | Model selection | Route simple tasks to cheaper models |
 | Batch processing | Batch embedding requests |
-| Cost monitoring | Cost dashboard per session/agent |
+| Cost monitoring | Token and budget usage per session/agent (`machina usage`) |
 | Cache-aware eviction | Eviction that keeps prompt cache warm |
 
 ## Key Resources

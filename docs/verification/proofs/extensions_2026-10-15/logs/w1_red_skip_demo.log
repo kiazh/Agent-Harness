@@ -1,0 +1,39 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_first_party_catalog_loads_with_zero_skips ________________
+
+    def test_first_party_catalog_loads_with_zero_skips():
+        """Every non-ECC skills/<name> must load; a silent skip is a failure.
+    
+        ``load_all`` skips content that trips the scanner best-effort (warning
+        only), so a phrase like a literal "system prompt" mention can drop a
+        skill while every suite stays green. Pin catalog completeness directly.
+        """
+        from pathlib import Path
+    
+        from machina.skills.registry import SkillRegistry
+    
+        root = Path(__file__).resolve().parents[1] / "skills"
+        expected = {
+            path.name
+            for path in root.iterdir()
+            if path.is_dir() and path.name != "ecc" and (path / "SKILL.md").is_file()
+        }
+        assert expected, "no first-party skill directories found"
+    
+        registry = SkillRegistry()
+        registry.load_all()
+        loaded = {skill.name for skill in registry.list_skills()}
+>       assert expected <= loaded, f"silently skipped: {sorted(expected - loaded)}"
+E       AssertionError: silently skipped: ['prompt-engineering']
+E       assert {'alembic-mig...ization', ...} <= {'alembic-mig...ization', ...}
+E         
+E         Extra items in the left set:
+E         'prompt-engineering'
+
+tests/test_fm6_scanner.py:133: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.skills.registry:registry.py:687 Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+=========================== short test summary info ============================
+FAILED tests/test_fm6_scanner.py::test_first_party_catalog_loads_with_zero_skips
+1 failed in 0.36s
