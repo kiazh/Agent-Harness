@@ -8,6 +8,7 @@ import os
 import secrets
 import stat
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from machina.core.config import config
@@ -433,6 +434,38 @@ def _atomic_write_file(file_path: Path, content: str, *, mode: int | None = None
     _fsync_dir_best_effort(directory)
 
 
+async def _run_worker_joined(operation: Callable[[], str]) -> str:
+    """Run *operation* in a worker thread, joining it on cancellation.
+
+    Cancelling the await of ``asyncio.to_thread`` stops the *await*, not the
+    worker thread. A cancelled write can therefore still perform its final
+    ``os.replace`` after the turn reported cancelled and released ownership,
+    clobbering an edit from a newer turn or a user (finding 4). To keep
+    execution ownership until the filesystem effects are complete, the worker
+    future is created explicitly and shielded so caller cancellation cannot
+    detach it, and cancellation is joined to the worker's completion before
+    ``CancelledError`` propagates. Each join is itself shielded, so a repeated
+    cancellation cannot orphan the running thread mid-write.
+    """
+    worker: asyncio.Future[str] = asyncio.ensure_future(asyncio.to_thread(operation))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # Repeated cancel: keep joining so the write always finishes
+                # its effects before ownership is released.
+                continue
+            except Exception as exc:
+                # The worker's own failure is secondary to the cancellation;
+                # surface it in logs rather than losing it silently.
+                logger.warning("File write worker failed during cancellation: %s", exc)
+                break
+        raise
+
+
 # read_file paging bounds: the byte gate applies to the selected lines (not
 # the whole file) so large files can be read a page at a time. Lines are
 # consumed in bounded pieces so a pathological single-line file is never
@@ -763,7 +796,7 @@ async def write_file(path: str, content: str) -> str:
                 raise
             return f"Successfully wrote {len(content)} characters to {path}"
 
-        return await asyncio.to_thread(_write)
+        return await _run_worker_joined(_write)
     except Exception as e:
         raise ToolError(f"Error writing file: {e}") from e
 
