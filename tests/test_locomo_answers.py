@@ -20,6 +20,7 @@ from machina.research.locomo import (
     StubProvider,
     evaluate_answers,
     generate_answer,
+    load_locomo,
     token_f1,
 )
 
@@ -378,6 +379,68 @@ def test_answer_metrics_to_dict():
 
 
 # ---------------------------------------------------------------------------
+# load_locomo — type validation contract (R4-092e)
+# ---------------------------------------------------------------------------
+
+
+def _locomo_sample(turn: dict) -> list[dict]:
+    return [
+        {
+            "conversation": {"session_1": [turn]},
+            "qa": [
+                {
+                    "question": "Where did Ada move?",
+                    "answer": "Toronto",
+                    "evidence": ["D1:1"],
+                    "category": 1,
+                }
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("text", 123),
+        ("text", None),
+        ("text", ["I moved to Toronto."]),
+        ("speaker", {"name": "Ada"}),
+        ("speaker", 7),
+    ],
+)
+def test_load_locomo_rejects_non_string_turn_fields(tmp_path, field, value):
+    """RED before R4-092e: non-string text/speaker passed through silently."""
+    turn = {"dia_id": "D1:1", "speaker": "Ada", "text": "I moved to Toronto."}
+    turn[field] = value
+    path = tmp_path / "locomo-bad.json"
+    path.write_text(json.dumps(_locomo_sample(turn)), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="text and speaker must be strings"):
+        load_locomo(path)
+
+
+def test_load_locomo_tolerates_missing_turn_fields_as_empty(tmp_path):
+    """Fields stay optional (default ""); only a wrong *type* is rejected."""
+    path = tmp_path / "locomo-min.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "conversation": {"session_1": [{"dia_id": "D1:1"}]},
+                    "qa": [{"question": "Where?", "answer": "", "evidence": []}],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (conversation,) = load_locomo(path)
+    assert conversation.turns[0].text == ""
+    assert conversation.turns[0].speaker == ""
+
+
+# ---------------------------------------------------------------------------
 # Integration: load_locomo + evaluate_answers with a JSON file
 # ---------------------------------------------------------------------------
 
@@ -408,8 +471,6 @@ async def test_end_to_end_with_locomo_json(tmp_path):
         ),
         encoding="utf-8",
     )
-    from machina.research.locomo import load_locomo
-
     conversations = load_locomo(path)
     provider = StubProvider(answer="Toronto")
     metrics = await evaluate_answers(conversations, provider)

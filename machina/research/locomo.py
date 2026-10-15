@@ -12,6 +12,7 @@ import json
 import math
 import re
 import statistics
+import sys
 import time
 import uuid
 from collections import Counter
@@ -83,9 +84,11 @@ def load_locomo(path: str | Path) -> tuple[Conversation, ...]:
             for row in rows:
                 if not isinstance(row, dict) or not isinstance(row.get("dia_id"), str):
                     raise ValueError("dialogue turn needs dia_id")
-                turns.append(
-                    DialogueTurn(row["dia_id"], row.get("speaker", ""), row.get("text", ""))
-                )
+                speaker = row.get("speaker", "")
+                text = row.get("text", "")
+                if not isinstance(speaker, str) or not isinstance(text, str):
+                    raise ValueError("dialogue turn text and speaker must be strings")
+                turns.append(DialogueTurn(row["dia_id"], speaker, text))
         if len({turn.dia_id for turn in turns}) != len(turns):
             raise ValueError("duplicate dialogue ID")
         questions = []
@@ -530,8 +533,20 @@ async def evaluate_session_recall(
                     [identifiers[hit.chunk_id] for hit in hits if hit.chunk_id in identifiers]
                 )
         finally:
+            # One failed delete must not skip the remaining sessions or mask
+            # the error that triggered cleanup.
+            in_flight = sys.exc_info()[1]
+            cleanup_errors: list[str] = []
             for session_id in session_ids:
-                await session_manager.delete(session_id)
+                try:
+                    await session_manager.delete(session_id)
+                except Exception as exc:
+                    cleanup_errors.append(f"session {session_id}: {type(exc).__name__}: {exc}")
+            if cleanup_errors:
+                message = "LoCoMo session cleanup failed: " + "; ".join(cleanup_errors)
+                if in_flight is None:
+                    raise RuntimeError(message)
+                in_flight.add_note(message)
     metrics = replace(
         evaluate_rankings(conversations, rankings, k=k),
         search_mode="keyword-only" if not title_only else "title-only",
@@ -590,6 +605,9 @@ def _normalize_answer(text: Any) -> str:
     Numeric values render with ``format(value, "g")``: ``str(2024.0)`` would
     otherwise produce "2024.0", whose punctuation stripping mangles the year
     into "20240". Booleans stay textual even though ``bool`` is an ``int``.
+
+    A decimal point *between digits* is meaningful and survives the strip:
+    gold ``3.5`` must not score against a wrong prediction of ``35``.
     """
     if text is None:
         return ""
@@ -598,7 +616,11 @@ def _normalize_answer(text: Any) -> str:
     else:
         text = str(text)
     text = text.lower()
-    text = re.sub(r"[^\w\s]", "", text)
+    text = re.sub(
+        r"(?P<decimal>(?<=\d)\.(?=\d))|[^\w\s]",
+        lambda match: match.group("decimal") or "",
+        text,
+    )
     return " ".join(text.split())
 
 

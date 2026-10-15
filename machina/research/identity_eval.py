@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -90,14 +91,27 @@ async def evaluate_identity_scenarios(
                     benign += 1
                     accepted_benign += result.accepted
         finally:
-            await db.execute("DELETE FROM agent_belief_history WHERE agent_id = $1", agent_id)
-            await db.execute("DELETE FROM memories WHERE agent_id = $1", agent_id)
-            await db.execute("DELETE FROM agent_beliefs WHERE agent_id = $1", agent_id)
-            await db.execute("DELETE FROM memory_provenance WHERE source_agent = $1", agent_id)
-            await db.execute(
-                "DELETE FROM shared_memory_deliveries WHERE recipient_agent = $1", agent_id
-            )
-            await db.execute("DELETE FROM learning_reviews WHERE agent_id = $1", agent_id)
+            # One failed delete must not skip the remaining tables or mask
+            # the error that triggered cleanup.
+            in_flight = sys.exc_info()[1]
+            cleanup_errors: list[str] = []
+            for label, statement in (
+                ("belief history", "DELETE FROM agent_belief_history WHERE agent_id = $1"),
+                ("memories", "DELETE FROM memories WHERE agent_id = $1"),
+                ("beliefs", "DELETE FROM agent_beliefs WHERE agent_id = $1"),
+                ("provenance", "DELETE FROM memory_provenance WHERE source_agent = $1"),
+                ("deliveries", "DELETE FROM shared_memory_deliveries WHERE recipient_agent = $1"),
+                ("reviews", "DELETE FROM learning_reviews WHERE agent_id = $1"),
+            ):
+                try:
+                    await db.execute(statement, agent_id)
+                except Exception as exc:
+                    cleanup_errors.append(f"{label}: {type(exc).__name__}: {exc}")
+            if cleanup_errors:
+                message = "identity benchmark cleanup failed: " + "; ".join(cleanup_errors)
+                if in_flight is None:
+                    raise RuntimeError(message)
+                in_flight.add_note(message)
     return DriftMetrics(
         scenarios=len(scenarios),
         transitions=transitions,

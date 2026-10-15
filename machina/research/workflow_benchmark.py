@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import statistics
+import sys
 import time
 import uuid
 from datetime import UTC, datetime
@@ -52,18 +53,26 @@ async def compare(dsn: str, iterations: int = 5) -> dict:
             run_id = uuid.uuid4()
             native_ids.append(run_id)
             start = time.perf_counter()
-            assert await native.start(run_id, session_id, agent_id, "database effect") == "pending"
-            assert await native.resume(run_id, agent_id, "approve") == "complete"
+            # Explicit checks, never `assert`: -O strips asserts and would
+            # silently skip the measured work (fabricated timings).
+            status = await native.start(run_id, session_id, agent_id, "database effect")
+            if status != "pending":
+                raise RuntimeError(f"native start returned {status!r}, expected 'pending'")
+            status = await native.resume(run_id, agent_id, "approve")
+            if status != "complete":
+                raise RuntimeError(f"native resume returned {status!r}, expected 'complete'")
             native_samples.append((time.perf_counter() - start) * 1000)
         async with GraphApprovalTrial(database, dsn) as graph:
             for _ in range(iterations):
                 run_id = uuid.uuid4()
                 graph_ids.append(run_id)
                 start = time.perf_counter()
-                assert (
-                    await graph.start(run_id, session_id, agent_id, "database effect") == "pending"
-                )
-                assert await graph.resume(run_id, agent_id, "approve") == "complete"
+                status = await graph.start(run_id, session_id, agent_id, "database effect")
+                if status != "pending":
+                    raise RuntimeError(f"langgraph start returned {status!r}, expected 'pending'")
+                status = await graph.resume(run_id, agent_id, "approve")
+                if status != "complete":
+                    raise RuntimeError(f"langgraph resume returned {status!r}, expected 'complete'")
                 graph_samples.append((time.perf_counter() - start) * 1000)
             checkpoint_rows = await graph.checkpoint_count(graph_ids)
             for run_id in graph_ids:
@@ -81,17 +90,40 @@ async def compare(dsn: str, iterations: int = 5) -> dict:
             "scope": "approval plus idempotent PostgreSQL insert; no LLM, tool gateway, or streaming",
         }
     finally:
+        # One failed delete must not skip the remaining cleanup steps or mask
+        # the error that triggered cleanup. Every step runs; if anything
+        # failed, surface it after the full cleanup (as a note when an
+        # original error is already propagating).
+        in_flight = sys.exc_info()[1]
+        cleanup_errors: list[str] = []
         if native_ids or graph_ids:
-            await database.execute(
-                "DELETE FROM workflow_trial_effects WHERE run_id = ANY($1::uuid[])",
-                native_ids + graph_ids,
-            )
+            try:
+                await database.execute(
+                    "DELETE FROM workflow_trial_effects WHERE run_id = ANY($1::uuid[])",
+                    native_ids + graph_ids,
+                )
+            except Exception as exc:
+                cleanup_errors.append(f"effects: {type(exc).__name__}: {exc}")
         if native_ids:
-            await database.execute(
-                "DELETE FROM workflow_trial_runs WHERE id = ANY($1::uuid[])", native_ids
-            )
-        await database.execute("DELETE FROM sessions WHERE id = $1", session_id)
-        await database.close()
+            try:
+                await database.execute(
+                    "DELETE FROM workflow_trial_runs WHERE id = ANY($1::uuid[])", native_ids
+                )
+            except Exception as exc:
+                cleanup_errors.append(f"trial runs: {type(exc).__name__}: {exc}")
+        try:
+            await database.execute("DELETE FROM sessions WHERE id = $1", session_id)
+        except Exception as exc:
+            cleanup_errors.append(f"session: {type(exc).__name__}: {exc}")
+        try:
+            await database.close()
+        except Exception as exc:
+            cleanup_errors.append(f"close: {type(exc).__name__}: {exc}")
+        if cleanup_errors:
+            message = "workflow benchmark cleanup failed: " + "; ".join(cleanup_errors)
+            if in_flight is None:
+                raise RuntimeError(message)
+            in_flight.add_note(message)
 
 
 def main() -> None:

@@ -57,6 +57,12 @@ from machina.research.locomo import (
 # message otherwise.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Subprocess sections must be bounded: an unbounded child (suite/UI) would
+# hang the whole benchmark with no way to notice. A timed-out section is
+# reported as an error so main() exits non-zero.
+_SUITE_TIMEOUT_SECONDS = 3600
+_UI_TIMEOUT_SECONDS = 900
+
 # 2026-10-13 incident constants (user-confirmed DeepSeek usage).
 _INCIDENT = {
     "tokens": 2_119_552,
@@ -387,20 +393,29 @@ def _comparisons(results: dict) -> dict:
 
 def _suite() -> dict:
     started = time.monotonic()
-    out = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "tests/",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-        ],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        out = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=_SUITE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "summary": "",
+            "error": f"backend suite timed out after {_SUITE_TIMEOUT_SECONDS}s",
+            "wall_seconds": round(time.monotonic() - started, 1),
+            "exit_code": 1,
+        }
     elapsed = time.monotonic() - started
     summary = ""
     for line in reversed(out.stdout.splitlines()):
@@ -413,7 +428,21 @@ def _suite() -> dict:
 def _ui() -> dict:
     ui_dir = _REPO_ROOT / "ui"
     started = time.monotonic()
-    out = subprocess.run(["npm", "run", "check"], cwd=ui_dir, capture_output=True, text=True)
+    try:
+        out = subprocess.run(
+            ["npm", "run", "check"],
+            cwd=ui_dir,
+            capture_output=True,
+            text=True,
+            timeout=_UI_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "counts": {},
+            "error": f"UI check timed out after {_UI_TIMEOUT_SECONDS}s",
+            "wall_seconds": round(time.monotonic() - started, 1),
+            "exit_code": 1,
+        }
     elapsed = time.monotonic() - started
     counts = {}
     for line in out.stdout.splitlines():
@@ -476,6 +505,16 @@ def main(argv: list[str] | None = None) -> int:
 
     wanted = {s.strip() for s in args.section.split(",") if s.strip()}
     results: dict = {}
+    failures: list[str] = []
+
+    def _record(name: str, payload: dict) -> None:
+        """Track failed sections so the process exits non-zero (honest CI)."""
+        error = payload.get("error")
+        if error:
+            failures.append(f"{name}: {error}")
+        elif payload.get("exit_code") not in (None, 0):
+            failures.append(f"{name}: exit code {payload['exit_code']}")
+
     runners = {
         "environment": _environment,
         "replay": _incident_replay,
@@ -499,16 +538,19 @@ def main(argv: list[str] | None = None) -> int:
         payload["_section_seconds"] = round(time.monotonic() - started, 2)
         results[name] = payload
         _print_section(name, payload)
+        _record(name, payload)
 
     if args.with_suite:
         _print_section("suite", {"running": "full backend suite — this takes minutes"})
         payload = _suite()
         results["suite"] = payload
         _print_section("suite", payload)
+        _record("suite", payload)
     if args.with_ui:
         payload = _ui()
         results["ui"] = payload
         _print_section("ui", payload)
+        _record("ui", payload)
 
     comparisons = _comparisons(results)
     results["comparisons"] = comparisons
@@ -517,6 +559,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         Path(args.json).write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"\nJSON written: {args.json}")
+    if failures:
+        print("\nfailed sections:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
     print("\ndone.")
     return 0
 
