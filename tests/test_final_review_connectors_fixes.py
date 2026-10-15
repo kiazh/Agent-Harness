@@ -367,7 +367,7 @@ def test_store_rejects_superseded_compensation(tmp_path, remove):
     store = ConnectorStore(tmp_path / "connectors.json")
     fields = {"id": "demo", "transport": "stdio", "command": "echo"}
     first = store.configure(fields)
-    newer = store.configure({**fields, "args": ["new"]})
+    newer = store.configure({**fields, "argv": ["new"]})
     with pytest.raises(ConnectorRevisionChanged):
         if remove:
             store.remove("demo", expected_revision=first.revision)
