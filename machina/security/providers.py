@@ -398,6 +398,14 @@ def remove_provider(name: str) -> dict[str, Any] | None:
     registered (idempotent: a second removal cleans nothing and says so by
     reporting ``None``). The report stays honest when a trace was already
     gone (e.g. ``envLineRemoved`` is False when ``.env`` had no line).
+
+    The store entry removal AND the credential cleanup (``.env`` line,
+    process environment, secret cache) share one store-lock hold: a
+    concurrent re-add of the same provider blocks until the removal is fully
+    done (or completes first, in which case this removal takes the fresh
+    entry down as the newest operation). Either serial order is safe; what
+    cannot happen is the old removal deleting a replacement credential while
+    the provider stays registered.
     """
     normalized = str(name or "").strip().lower()
     with _store_lock():
@@ -411,17 +419,17 @@ def remove_provider(name: str) -> dict[str, Any] | None:
         )
         del store["providers"][normalized]
         _save_store(store)
-    env_line_removed = False
-    env_var_removed = False
-    if env_name:
-        try:
-            if find_env_file().is_file() and env_name in read_env_values():
-                env_line_removed = bool(remove_env_values([env_name]))
-        except (OSError, ValueError) as exc:
-            # Best-effort, but never silent: the report says the line survived.
-            record_failure("security.providers.remove_env", exc)
-        env_var_removed = os.environ.pop(env_name, None) is not None
-        invalidate_secret_cache()
+        env_line_removed = False
+        env_var_removed = False
+        if env_name:
+            try:
+                if find_env_file().is_file() and env_name in read_env_values():
+                    env_line_removed = bool(remove_env_values([env_name]))
+            except (OSError, ValueError) as exc:
+                # Best-effort, but never silent: the report says the line survived.
+                record_failure("security.providers.remove_env", exc)
+            env_var_removed = os.environ.pop(env_name, None) is not None
+            invalidate_secret_cache()
     return {
         "provider": normalized,
         "storeEntry": True,

@@ -252,10 +252,21 @@ def import_from_gh_cli(
     The gh credential store is only read. Existing Machina tokens win unless
     *force* is set. A token gh holds that the Copilot API cannot use (a
     classic PAT) raises the typed error instead of storing something broken.
+
+    Publication is fenced like the device path: the authentication generation
+    (and a store-content snapshot) is captured before the slow ``gh`` probe /
+    account lookup, and the publish happens under the store lock only when
+    the generation is unchanged, the store was not removed out of band, and
+    (unless *force*) no credential appeared meanwhile. A logout racing the
+    import therefore stays removed, and a device login completing mid-import
+    is not overwritten. A re-import issued *after* the logout/login captures
+    the new generation and still succeeds, so intentional re-import is
+    preserved. A logout racing the publish gate itself (``fenced_logout``
+    does not take the store lock) undoes our own write and reports no import.
     """
     target = Path(path) if path is not None else auth_path()
-    if not force and load_tokens(target) is not None:
-        return None
+    generation = store_fence.credential_generation(target)
+    snapshot = store_fence.store_fingerprint(target)
     token = _probe_gh_token()
     if not token:
         return None
@@ -266,8 +277,31 @@ def import_from_gh_cli(
             code="copilot_token_unsupported",
         )
     account = fetch_account(token, client=client) if fetch_login else None
-    save_tokens({"token": token, "account": account}, target)
-    return load_tokens(target)
+    with store_fence.store_lock(target):
+        if store_fence.credential_generation(target) != generation:
+            # A logout invalidated this store while the import was reading
+            # the gh credential: never republish revoked credentials.
+            return None
+        was_present, _ = snapshot
+        now_present, _ = store_fence.store_fingerprint(target)
+        if was_present and not now_present:
+            # The store was removed out of band without a generation bump;
+            # that state is indistinguishable from a revocation.
+            return None
+        if not force and load_tokens(target) is not None:
+            # A newer credential (e.g. a device login that completed while
+            # the probe was in flight) won; the stale import stays out.
+            return None
+        save_tokens({"token": token, "account": account}, target)
+        published = load_tokens(target)
+        if store_fence.credential_generation(target) != generation:
+            # A logout raced the publish gate itself: undo our own write so
+            # the store stays removed.
+            if published is not None and published.get("token") == str(token).strip():
+                with suppress(FileNotFoundError):
+                    target.unlink()
+            return None
+        return published
 
 
 def logout(*, path: str | Path | None = None) -> bool:
