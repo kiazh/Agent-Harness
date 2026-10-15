@@ -1,0 +1,20 @@
+drwxr-xr-x@  20 shadow  staff    640 Oct 15 12:49 .
+drwxr-xr-x@   5 shadow  staff    160 Oct 15 12:49 ..
+lrwxr-xr-x@   1 shadow  staff    117 Oct 15 12:49 .env.example -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/.env.example
+drwxr-xr-x@   3 shadow  staff     96 Oct 15 12:48 benchmarks
+-rwxr-xr-x@   1 shadow  staff   1720 Oct 15 12:48 bootstrap-links.sh
+-rw-r--r--@   1 shadow  staff   2137 Oct 15 12:48 conftest.py
+lrwxr-xr-x@   1 shadow  staff    123 Oct 15 12:49 docker-compose.yml -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/docker-compose.yml
+lrwxr-xr-x@   1 shadow  staff    109 Oct 15 12:49 docs -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/docs
+lrwxr-xr-x@   1 shadow  staff    115 Oct 15 12:49 install.sh -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/install.sh
+lrwxr-xr-x@   1 shadow  staff    112 Oct 15 12:49 machina -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/machina
+-rw-r--r--@   1 shadow  staff    715 Oct 15 12:48 Makefile
+-rw-r--r--@   1 shadow  staff    877 Oct 15 12:48 pyproject.toml
+-rw-r--r--@   1 shadow  staff   3493 Oct 15 12:49 README.md
+lrwxr-xr-x@   1 shadow  staff    113 Oct 15 12:49 research -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/research
+-rwxr-xr-x@   1 shadow  staff   1644 Oct 15 12:48 run-tests.sh
+lrwxr-xr-x@   1 shadow  staff    112 Oct 15 12:49 scripts -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/scripts
+lrwxr-xr-x@   1 shadow  staff    111 Oct 15 12:49 skills -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/skills
+drwxr-xr-x@ 352 shadow  staff  11264 Oct 15 12:46 tests
+lrwxr-xr-x@   1 shadow  staff    110 Oct 15 12:49 tools -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/tools
+lrwxr-xr-x@   1 shadow  staff    107 Oct 15 12:49 ui -> /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/lane_t_tests_migration/Machina-Harness/ui

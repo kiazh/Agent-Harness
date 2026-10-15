@@ -1,0 +1,246 @@
+FFFFFFF...F.                                                             [100%]
+=================================== FAILURES ===================================
+_ test_recursive_dereferencing_copy_of_outside_file_requires_review[cp -RL source clone] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2403/test_recursive_dereferencing_c0/workspace')
+command = 'cp -RL source clone'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cp -RL source clone",
+            "cp -R --dereference source clone",
+            "uv run cp -RL source clone",
+            "cp -RL source/sub clone",
+        ],
+    )
+    def test_recursive_dereferencing_copy_of_outside_file_requires_review(workspace, command):
+        """A dereferenced descendant resolving outside the workspace gates review."""
+        _outside_secret(workspace)
+        nested = workspace / "source" / "sub"
+        nested.mkdir()
+        (nested / "deep").symlink_to(workspace.parent / "outside-private" / "private.txt")
+    
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('cp -RL source clone', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_holistic_review_l4_permissions_2026_10_15.py:74: AssertionError
+_ test_recursive_dereferencing_copy_of_outside_file_requires_review[cp -R --dereference source clone] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2403/test_recursive_dereferencing_c1/workspace')
+command = 'cp -R --dereference source clone'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cp -RL source clone",
+            "cp -R --dereference source clone",
+            "uv run cp -RL source clone",
+            "cp -RL source/sub clone",
+        ],
+    )
+    def test_recursive_dereferencing_copy_of_outside_file_requires_review(workspace, command):
+        """A dereferenced descendant resolving outside the workspace gates review."""
+        _outside_secret(workspace)
+        nested = workspace / "source" / "sub"
+        nested.mkdir()
+        (nested / "deep").symlink_to(workspace.parent / "outside-private" / "private.txt")
+    
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('cp -R --dereference source clone', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_holistic_review_l4_permissions_2026_10_15.py:74: AssertionError
+_ test_recursive_dereferencing_copy_of_outside_file_requires_review[uv run cp -RL source clone] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2403/test_recursive_dereferencing_c2/workspace')
+command = 'uv run cp -RL source clone'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cp -RL source clone",
+            "cp -R --dereference source clone",
+            "uv run cp -RL source clone",
+            "cp -RL source/sub clone",
+        ],
+    )
+    def test_recursive_dereferencing_copy_of_outside_file_requires_review(workspace, command):
+        """A dereferenced descendant resolving outside the workspace gates review."""
+        _outside_secret(workspace)
+        nested = workspace / "source" / "sub"
+        nested.mkdir()
+        (nested / "deep").symlink_to(workspace.parent / "outside-private" / "private.txt")
+    
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('uv run cp -RL source clone', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_holistic_review_l4_permissions_2026_10_15.py:74: AssertionError
+_ test_recursive_dereferencing_copy_of_outside_file_requires_review[cp -RL source/sub clone] _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2403/test_recursive_dereferencing_c3/workspace')
+command = 'cp -RL source/sub clone'
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cp -RL source clone",
+            "cp -R --dereference source clone",
+            "uv run cp -RL source clone",
+            "cp -RL source/sub clone",
+        ],
+    )
+    def test_recursive_dereferencing_copy_of_outside_file_requires_review(workspace, command):
+        """A dereferenced descendant resolving outside the workspace gates review."""
+        _outside_secret(workspace)
+        nested = workspace / "source" / "sub"
+        nested.mkdir()
+        (nested / "deep").symlink_to(workspace.parent / "outside-private" / "private.txt")
+    
+        decision = decide(_terminal_request(command))
+>       assert decision.verdict == "pending", (command, decision.reason)
+E       AssertionError: ('cp -RL source/sub clone', 'routine trusted project command')
+E       assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_holistic_review_l4_permissions_2026_10_15.py:74: AssertionError
+____ test_recursive_dereferencing_copy_of_credential_target_requires_review ____
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2403/test_recursive_dereferencing_c4/workspace')
+
+    def test_recursive_dereferencing_copy_of_credential_target_requires_review(workspace):
+        """A dereferenced descendant holding credential material gates exactly
+        like a direct credential read, inside or outside the workspace."""
+        (workspace / ".env").write_text("FAKE_SECRET=1\n", encoding="utf-8")
+        source = workspace / "source"
+        source.mkdir()
+        (source / "config").symlink_to(workspace / ".env")
+    
+        inside = decide(_terminal_request("cp -RL source clone"))
+>       assert inside.verdict == "pending"
+E       AssertionError: assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_holistic_review_l4_permissions_2026_10_15.py:87: AssertionError
+____ test_recursive_dereferencing_copy_of_outside_directory_requires_review ____
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2403/test_recursive_dereferencing_c5/workspace')
+
+    def test_recursive_dereferencing_copy_of_outside_directory_requires_review(workspace):
+        """A link to an outside directory (no protected/sensitive names inside)
+        still escapes containment when dereferenced."""
+        outside = workspace.parent / "outside-tree" / "stuff"
+        outside.mkdir(parents=True)
+        (outside / "plain.txt").write_text("outside bytes\n", encoding="utf-8")
+        source = workspace / "source"
+        source.mkdir()
+        (source / "tree").symlink_to(outside, target_is_directory=True)
+    
+        decision = decide(_terminal_request("cp -RL source clone"))
+>       assert decision.verdict == "pending"
+E       AssertionError: assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_holistic_review_l4_permissions_2026_10_15.py:111: AssertionError
+_ test_recursive_dereferencing_copy_of_sensitive_pair_through_link_requires_review _
+
+workspace = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2403/test_recursive_dereferencing_c6/workspace')
+
+    def test_recursive_dereferencing_copy_of_sensitive_pair_through_link_requires_review(
+        workspace,
+    ):
+        """A tree also walked literally is classified again through a link: the
+        link renames the ancestry, so ``etc/passwd`` under an innocuous link name
+        is no longer sensitive by path and would leak as ``clone/data/passwd``."""
+        source = workspace / "source"
+        (source / "etc").mkdir(parents=True)
+        (source / "etc" / "passwd").write_text("root:x:0:0\n", encoding="utf-8")
+        (source / "data").symlink_to(source / "etc", target_is_directory=True)
+    
+        decision = decide(_terminal_request("cp -RL source clone"))
+>       assert decision.verdict == "pending"
+E       AssertionError: assert 'allowed' == 'pending'
+E         
+E         - pending
+E         + allowed
+
+tests/test_holistic_review_l4_permissions_2026_10_15.py:127: AssertionError
+_________________ test_search_files_ignores_a_swapped_symlink __________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2403/test_search_files_ignores_a_sw0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10bbabd90>
+
+    async def test_search_files_ignores_a_swapped_symlink(tmp_path, monkeypatch):
+        """The matcher re-opens by pathname; a swap after validation must not
+        redirect the read to the outside file that the swap now targets."""
+        from machina.tools import builtins
+    
+        root = tmp_path / "workspace"
+        root.mkdir()
+        monkeypatch.setattr(config, "workspace_root", str(root))
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "private.txt").write_text("OUTSIDE-PRIVATE-CONTENT\n", encoding="utf-8")
+        (root / "notes.txt").write_text("public notes\n", encoding="utf-8")
+        link = root / "link.txt"
+        link.symlink_to(root / "notes.txt")  # inside target at validation time
+    
+        real_create = asyncio.create_subprocess_exec
+        swapped = False
+    
+        async def create_with_swap(*args, **kwargs):
+            # Controlled swap at the validation/read boundary: the matcher is
+            # about to re-open `link.txt` by pathname.
+            nonlocal swapped
+            if not swapped:
+                swapped = True
+                link.unlink()
+                link.symlink_to(outside / "private.txt")
+            return await real_create(*args, **kwargs)
+    
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", create_with_swap)
+        # Search a substring of the outside line so the no-match report cannot be
+        # confused with the leaked content line itself.
+        result = await builtins.search_files("PRIVATE-CONTENT", ".")
+    
+        assert swapped, "the controlled swap never ran"
+        # The swap really redirects a plain pathname open...
+        assert (root / "link.txt").read_text(encoding="utf-8").startswith("OUTSIDE-PRIVATE")
+        # ...but the search must not expose the outside bytes.
+>       assert "OUTSIDE-PRIVATE-CONTENT" not in result
+E       AssertionError: assert 'OUTSIDE-PRIVATE-CONTENT' not in 'Found 1 mat...VATE-CONTENT'
+E         
+E         'OUTSIDE-PRIVATE-CONTENT' is contained here:
+E           ink.txt:1: OUTSIDE-PRIVATE-CONTENT
+
+tests/test_holistic_review_l4_permissions_2026_10_15.py:205: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_file_requires_review[cp -RL source clone]
+FAILED tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_file_requires_review[cp -R --dereference source clone]
+FAILED tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_file_requires_review[uv run cp -RL source clone]
+FAILED tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_file_requires_review[cp -RL source/sub clone]
+FAILED tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_credential_target_requires_review
+FAILED tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_directory_requires_review
+FAILED tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_sensitive_pair_through_link_requires_review
+FAILED tests/test_holistic_review_l4_permissions_2026_10_15.py::test_search_files_ignores_a_swapped_symlink
+8 failed, 4 passed in 0.63s

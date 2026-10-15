@@ -1,0 +1,528 @@
+{
+  "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+  "source_only": true,
+  "tests_run": false,
+  "files": [
+    {
+      "path": "machina/core/__init__.py",
+      "line_count": 58,
+      "sha256": "244edb537fa05c713e2395c9d5e8af1d95d18d03f08edbb7d14ec4828515a268",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/agent.py",
+      "line_count": 2267,
+      "sha256": "81dafeb8ded6c2bdd373d1b986ff3f74cce64a83d598cca3c5433ba533b88c89",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/agent_def.py",
+      "line_count": 411,
+      "sha256": "c5104895b476d4cef533ad27999641db904f7dc7f5772cb552f09e494dfda6c7",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/agent_factory.py",
+      "line_count": 401,
+      "sha256": "b4490662ed3600a20df739f5e23cf3e7c7ce8d488bdface673b4d993ee0ed827",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/approval_resume.py",
+      "line_count": 81,
+      "sha256": "f75213ed874f50188e4f30f7c7ef2f00ce4ef5a1d6ed1fa121d36e87a57cb5b5",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/assembler.py",
+      "line_count": 233,
+      "sha256": "d5a95a3f0f69c6956fce8350491a552660ac6e5361c3857393bb4f1cbe2d58ce",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/background_tasks.py",
+      "line_count": 165,
+      "sha256": "6a05c5861fb4fa8d77d543da17ebbada7008962791bbaa82c8540524f466ca28",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/checkpoint.py",
+      "line_count": 175,
+      "sha256": "2efc169f8d0d9176a6cc72395f055e0b513f0ee3f85a479d06c7f42b03b08061",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/child_process.py",
+      "line_count": 374,
+      "sha256": "10986d8bf0a925260c03f05c04940178837d6ad5f9865ecd86db1fe7151568b1",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/cleanup.py",
+      "line_count": 96,
+      "sha256": "8c80b89f1f0ebd73bceefdb37b0c411b54e92fc326c65ed68f1d86758babc526",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/compression.py",
+      "line_count": 852,
+      "sha256": "822ec04fb3dc61db094de2232e0d4103f91c66c3a39eaab5c73a6f96de5dc3f2",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/config.py",
+      "line_count": 708,
+      "sha256": "a99d5a737776c7f089b30c82f18e68198e6d888ec0a67049d9020f5c5d233bb3",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/context.py",
+      "line_count": 1483,
+      "sha256": "dacbac917ea55a772ed9136a4d7cddddbd116a63091da0afaea057ad8434deb8",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/context_windows.py",
+      "line_count": 145,
+      "sha256": "096e5852b432ed644db52a5d7f28a7bc95a66689be5b555acf400e60548c5a14",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/cron.py",
+      "line_count": 82,
+      "sha256": "f61c17590e8b45092634f02cd3bdeeaf22917e9ef684b5ee74a8765153b9607c",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/exceptions.py",
+      "line_count": 119,
+      "sha256": "3ae5277d37c87064d5c6fdd2305fe44c83bc2e2fcd23eaece9a1bcfba135cdbe",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/execution_context.py",
+      "line_count": 122,
+      "sha256": "6e90ae87ed216e47d19881bba7e69e463bc0622cd5711a8c06db6fe9ef526c3b",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/images.py",
+      "line_count": 139,
+      "sha256": "208347ac9ae926aaa96c329aa4fbdb01fd0a5427251d61d7219f07bb4e34683f",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/intent.py",
+      "line_count": 123,
+      "sha256": "8af2e024ac4b588ee33b47c21f37203bd6698ddf126e03dd009bdc4645dd1b41",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/job_scripts.py",
+      "line_count": 349,
+      "sha256": "f94a806c8c16d2963b720701051bcb4f70030355ff46035826f2f40c4dc9b36a",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/metrics.py",
+      "line_count": 302,
+      "sha256": "27b71f557adfb0f194060c6dfcd36741fe3fa435137b16b8c9509aadaf0b075c",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/models.py",
+      "line_count": 152,
+      "sha256": "c9500531c540e20285fdf6598f9bee0094b6bee8fcad28b1d5b0a03069e8d63f",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/orchestrator.py",
+      "line_count": 638,
+      "sha256": "3a75eb6122331d22407989dc16b02bd4e60f7f5676e436bcfe7254c3e538829c",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/progress.py",
+      "line_count": 108,
+      "sha256": "65bbabc77dfbc2ae05af972e4ab3beffae5b6ff9f2d6cd587ba647126e0f460f",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/prompt.py",
+      "line_count": 430,
+      "sha256": "3e161eb737d45a8b3c9efdde7eaaa4c927f2b644143df8ad4ff54f7b13f82d06",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/__init__.py",
+      "line_count": 53,
+      "sha256": "574b9d124394ae99602b31e213f0d5360f0b557303339549ea0c785f837785f5",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/_log.py",
+      "line_count": 10,
+      "sha256": "7cedf7cb4f22f3ea0566aed11df999af0642e72070c992eeeceb2194c10d711e",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/anthropic.py",
+      "line_count": 580,
+      "sha256": "17a1935b134f17dc08e9c7febdf88646ef94d059a40b8ea0eb3c5c39deac9c6d",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/audit.py",
+      "line_count": 247,
+      "sha256": "132fdabcbfff0bbce4a3e5d4e0872ba857140aa14e46f8feac9a2cb41cb4a81b",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/provider/base.py",
+      "line_count": 60,
+      "sha256": "4380857346bed9b582cd7a57810b7613ddcad676e1f3598c9bd83fcc30d5a95b",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/caches.py",
+      "line_count": 97,
+      "sha256": "4501aa9d840d48ef869fc554bc313992934296b7cabe2b70f5fa829e4de6c74c",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/catalog.py",
+      "line_count": 553,
+      "sha256": "f7ed254437624ee83f5c8b5e71b9dfeeb6762bfac1bbd9c8345efd9ada05c7a9",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/chatgpt.py",
+      "line_count": 684,
+      "sha256": "64c43413d5066fa1df0dd6a468afbf52348251a31daf98c6a32927125345c68c",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/provider/copilot.py",
+      "line_count": 431,
+      "sha256": "4be27453b39c9c25175f043ab30242d1abb3f42bb0ac50b17100f792802112d9",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/provider/direct.py",
+      "line_count": 348,
+      "sha256": "4753d9d3edd25171f1bac9db25a92f19d393761d0105ae8d7db3f69e9cbe0597",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/factory.py",
+      "line_count": 138,
+      "sha256": "cd747f6f3ec67b575dbc2ed291ec07e838e7f2b4a20601598a5d9fc839fdd589",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/ollama.py",
+      "line_count": 388,
+      "sha256": "21880b286f9cba54f166ac1f38109878975d483d292567ebdc2db48ea542432a",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/openrouter.py",
+      "line_count": 608,
+      "sha256": "6164a66763c1a05f8061e657aa0fe5e7c47e1c94fbf3508710c662876828000a",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/rate_limit.py",
+      "line_count": 120,
+      "sha256": "e77c5210025c47aac51ab29aa7504eecf9ebd31aaaa9c0c8e1f7b756de646878",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/reasoning.py",
+      "line_count": 61,
+      "sha256": "bb3a6c47944ae35e43adee56d347d49a10fc8053a66a083f2f171347743c9f43",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/specs.py",
+      "line_count": 188,
+      "sha256": "467b7aa8382748a3b6ec737518f57caadbe4f5879b1a8fc14bf1f798cfecad4a",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/provider/sse.py",
+      "line_count": 55,
+      "sha256": "7da40f2bd51c93015f420d327a28153d1c80f558c9760f1e72c794e0461c1194",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/provider/transport.py",
+      "line_count": 382,
+      "sha256": "98d2db23a18e6371dbdecaf8c6952f4783841b1b23bea58ab3db4cb05c765b08",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/runtime.py",
+      "line_count": 621,
+      "sha256": "12899327053a22836cd1c5583c5e2ad495308adca1b9977aae6eea5ee25c0af8",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/scheduler.py",
+      "line_count": 1126,
+      "sha256": "71fb4f46672b95b78a5959ef2e7a85ad9e732e4a0232ad15153ec57fb61b5fda",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/self_knowledge.py",
+      "line_count": 75,
+      "sha256": "7c19b9c90fa13419236305539af8e66a9f9480dbcd9a58759b8b0dae8513265c",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/serialization.py",
+      "line_count": 95,
+      "sha256": "8596763cff54cc54b86ffb4b0e7573d91a8fce417d1f3fd94bfa1405d2b8cbf3",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/session.py",
+      "line_count": 464,
+      "sha256": "3dca1e8611b74a40c1ed83b4d9b8f3c5ea6a563217d6c33f365eaea870880820",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/session_mode.py",
+      "line_count": 341,
+      "sha256": "b9ba07f0ba97add09dae80e125355ba87bda693b89c38afcec03cc290236e175",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/session_recall.py",
+      "line_count": 288,
+      "sha256": "46842c9a1376891a1be977c8d997a34cd3c43d67452f780c65ab376a3bc16859",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/text_search.py",
+      "line_count": 61,
+      "sha256": "32807507319fb614f37669d5c028d37c49665a3c37ad4ea147ed400151462952",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/turn_engine.py",
+      "line_count": 648,
+      "sha256": "a458d1a4b75563bcc46b18e2167e73e339129cc2d0b4d801fd54db03286382b5",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/turn_flow.py",
+      "line_count": 106,
+      "sha256": "73ef503e17feab1b879e2484da56845769fafffd9221edd2c8370751f2aa4130",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/turns.py",
+      "line_count": 624,
+      "sha256": "fe634485b5854d435577e3837a3ea5ffdeddf831903199c70b8210c2106773b3",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/core/usage.py",
+      "line_count": 406,
+      "sha256": "c2d8e484bdf431ee0463fb0818e8ae2115f3ccb6d0571f19bf32079ceeb058dd",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/core/windows_job.py",
+      "line_count": 95,
+      "sha256": "2a54fd874143da8416aa29d2219cf62f818662781962821c556646b87b786d34",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "complete prior read at 1e1edbf; git blob unchanged through 2308751"
+    },
+    {
+      "path": "machina/rag/__init__.py",
+      "line_count": 43,
+      "sha256": "1656c382d2374f2e357caaa7a50d9ebdbfe02f9716a8194236aa4470b6c82114",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/rag/chunker.py",
+      "line_count": 612,
+      "sha256": "57d7968c1fa0eae42d430d35980271d3e0a4d1a6475a2bc9f50390ee378d6a8f",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/rag/embedder.py",
+      "line_count": 933,
+      "sha256": "4e6ac1b03cae6c3f41547a307a7e2157bdae4a4efafd09719db828a5dd50aaeb",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/rag/evaluation.py",
+      "line_count": 210,
+      "sha256": "693953497c7ab9f265362aa771bcc5d003c19c299d703d5edcbb2051e7ccc970",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/rag/loaders.py",
+      "line_count": 270,
+      "sha256": "3bed63007fb7bb6e8859b71fbf594e853472169874faa39e0f23686e0eab91fc",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/rag/pipeline.py",
+      "line_count": 867,
+      "sha256": "69d8f442ce4f531424e490e55e111a80102da5c03cdd70ee92982105aea3ba24",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/rag/reranker.py",
+      "line_count": 683,
+      "sha256": "3e928ddc968329275560fcfd7410ffe0296bbffed8432ebadb7fceb09102bc3b",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/rag/search.py",
+      "line_count": 402,
+      "sha256": "4396d306964adb0dedafc004e66b1c789b648a80dffeee07f7d5e457be46cc9f",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    },
+    {
+      "path": "machina/interop.py",
+      "line_count": 1401,
+      "sha256": "41cadd4225c961acd58e28d462af5c1290056030f95f47ccfbda75f5b8411d29",
+      "status": "full",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "coverage_basis": "current complete reread"
+    }
+  ],
+  "validated_no_scope_changes_since": "2308751b4d561317292730762f8b12d8cfc6854f"
+}

@@ -1,0 +1,61 @@
+
+self = <tests.test_gateway.TestSessionsAndTurns object at 0x110150050>
+
+    async def test_second_prompt_while_running_is_rejected(self):
+        gate = asyncio.Event()
+        h = Harness(FakeAgent(scripted_turn(), gate=gate))
+        try:
+            await h.call("initialize")
+>           sid = (await h.call("session.create"))["result"]["session"]["id"]
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'result'
+
+tests/test_gateway.py:426: KeyError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 14:16:09,690 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+2026-10-15 14:16:10,775 [WARNING] ← initialize error 1001 (id=1)
+2026-10-15 14:16:10,776 [WARNING] ← session.create error 1001 (id=2)
+------------------------------ Captured log call -------------------------------
+WARNING  machina.gateway.server:server.py:232 MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+DEBUG    machina.gateway.server:server.py:341 → initialize (id=1)
+INFO     machina.gateway.server:server.py:488 Gateway initialize: model=openrouter/free provider=openrouter
+WARNING  machina.gateway.server:server.py:345 ← initialize error 1001 (id=1)
+DEBUG    machina.gateway.server:server.py:341 → session.create (id=2)
+WARNING  machina.gateway.server:server.py:345 ← session.create error 1001 (id=2)
+________________ TestSessionsAndTurns.test_cancel_running_turn _________________
+
+self = <tests.test_gateway.TestSessionsAndTurns object at 0x10ffc7410>
+
+    async def test_cancel_running_turn(self):
+        gate = asyncio.Event()  # never set: the turn blocks until cancelled
+        h = Harness(FakeAgent(scripted_turn(), gate=gate))
+        try:
+            await h.call("initialize")
+>           sid = (await h.call("session.create"))["result"]["session"]["id"]
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'result'
+
+tests/test_gateway.py:440: KeyError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 14:16:10,792 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+2026-10-15 14:16:11,883 [WARNING] ← initialize error 1001 (id=1)
+2026-10-15 14:16:11,884 [WARNING] ← session.create error 1001 (id=2)
+------------------------------ Captured log call -------------------------------
+WARNING  machina.gateway.server:server.py:232 MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+DEBUG    machina.gateway.server:server.py:341 → initialize (id=1)
+INFO     machina.gateway.server:server.py:488 Gateway initialize: model=openrouter/free provider=openrouter
+WARNING  machina.gateway.server:server.py:345 ← initialize error 1001 (id=1)
+DEBUG    machina.gateway.server:server.py:341 → session.create (id=2)
+WARNING  machina.gateway.server:server.py:345 ← session.create error 1001 (id=2)
+=========================== short test summary info ============================
+FAILED tests/test_a5_turn_flow.py::test_agent_py_shrank_below_its_pre_extraction_size
+FAILED tests/test_architecture_layers.py::test_deferred_import_count_ratchet
+FAILED tests/test_architecture_layers.py::test_god_file_ceilings_only_fall[core/agent.py-2267]
+FAILED tests/test_architecture_layers.py::test_god_file_ceilings_only_fall[core/provider/copilot.py-431]
+FAILED tests/test_architecture_layers.py::test_provider_package_total_only_falls
+FAILED tests/test_benchmark_tool.py::test_core_sections_run_and_write_json - ...
+FAILED tests/test_gateway.py::TestSessionsAndTurns::test_second_prompt_while_running_is_rejected
+FAILED tests/test_gateway.py::TestSessionsAndTurns::test_cancel_running_turn
+ERROR tests/test_multi_worker_fencing.py::test_expired_owner_cannot_release_successor
+8 failed, 5108 passed, 1 skipped, 1 error in 261.23s (0:04:21)
+EXIT_PIPELINE_DONE

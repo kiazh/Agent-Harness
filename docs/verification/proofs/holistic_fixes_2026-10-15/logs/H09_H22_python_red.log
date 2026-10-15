@@ -1,0 +1,232 @@
+.....FF..FFF....FFF..............                                        [100%]
+=================================== FAILURES ===================================
+______ test_run_task_builds_the_documented_headless_command_and_is_typed _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a157950>
+
+    def test_run_task_builds_the_documented_headless_command_and_is_typed(monkeypatch):
+        seen: dict = {}
+    
+        def fake_run(argv, *, env=None, timeout=0.0, stdin_text=None, cwd=None):
+            seen["argv"] = list(argv)
+            seen["timeout"] = timeout
+            seen["env"] = env
+            seen["stdin_text"] = stdin_text
+            return _proc(output="\x1b[32mdelegated ok\x1b[0m\n")
+    
+        monkeypatch.setattr(interop, "_which", lambda spec: f"/fake/bin/{spec.key}")
+        monkeypatch.setattr(interop, "_run", fake_run)
+    
+        result = interop.run_task("opencode", "fix the build", timeout=12.5)
+    
+        assert result.platform == "opencode"
+        # H09: the `--` option terminator keeps the prompt out of flag position
+        # (all of it becomes `run`'s variadic message).
+>       assert result.command == ["/fake/bin/opencode", "run", "--", "fix the build"]
+E       AssertionError: assert ['/fake/bin/o...ix the build'] == ['/fake/bin/o...ix the build']
+E         
+E         At index 2 diff: 'fix the build' != '--'
+E         Right contains one more item: 'fix the build'
+E         Use -v to get more diff
+
+tests/test_harnesses_core.py:141: AssertionError
+_______ test_run_task_codex_prompt_goes_on_stdin_and_never_touches_argv ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109fdf150>
+
+    def test_run_task_codex_prompt_goes_on_stdin_and_never_touches_argv(monkeypatch):
+        seen: dict = {}
+    
+        def fake_run(argv, *, env=None, timeout=0.0, stdin_text=None, cwd=None):
+            seen["argv"] = list(argv)
+            seen["stdin_text"] = stdin_text
+            return _proc(output="delegated ok\n")
+    
+        monkeypatch.setattr(interop, "_which", lambda spec: f"/fake/bin/{spec.key}")
+        monkeypatch.setattr(interop, "_run", fake_run)
+    
+        result = interop.run_task("codex", "--help")
+    
+        # H09: `codex exec -` is the documented stdin form; the prompt cannot be
+        # read as an option because it is never an argv token.
+>       assert result.command == ["/fake/bin/codex", "exec", "-"]
+E       AssertionError: assert ['/fake/bin/c...ec', '--help'] == ['/fake/bin/c..., 'exec', '-']
+E         
+E         At index 2 diff: '--help' != '-'
+E         Use -v to get more diff
+
+tests/test_harnesses_core.py:164: AssertionError
+____________ test_run_task_not_installed_is_typed_and_never_spawns _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109fff070>
+
+    def test_run_task_not_installed_is_typed_and_never_spawns(monkeypatch):
+        monkeypatch.setattr(interop, "_which", lambda spec: None)
+        monkeypatch.setattr(
+            interop,
+            "_run",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("no spawn when not installed")),
+        )
+    
+        result = interop.run_task("hermes", "x")
+    
+        assert result.ok is False and result.exit_code is None
+        assert "not installed" in result.stderr
+>       assert result.command == ["hermes", "--oneshot=x"], "hermes prompt is an option value"
+E       AssertionError: hermes prompt is an option value
+E       assert ['hermes', '-z', 'x'] == ['hermes', '--oneshot=x']
+E         
+E         At index 1 diff: '-z' != '--oneshot=x'
+E         Left contains one more item: 'x'
+E         Use -v to get more diff
+
+tests/test_harnesses_core.py:207: AssertionError
+_____________ test_run_task_delivers_option_like_prompts_literally _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a18f070>
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2402/test_run_task_delivers_option_0')
+
+    def test_run_task_delivers_option_like_prompts_literally(monkeypatch, tmp_path):
+        """A `--help` prompt reaches each harness as the task, not as a flag.
+    
+        RED before the fix: opencode/codex return usage text with ``ok=True``
+        without running a task; hermes fails with a argparse usage error (exit 2).
+        """
+        stub = _install_stub_harnesses(monkeypatch, tmp_path)
+    
+        opencode = interop.run_task("opencode", "--help", timeout=10.0)
+>       assert opencode.command == [stub["opencode"], "run", "--", "--help"]
+E       AssertionError: assert ['/private/va...un', '--help'] == ['/private/va...--', '--help']
+E         
+E         At index 2 diff: '--help' != '--'
+E         Right contains one more item: '--help'
+E         Use -v to get more diff
+
+tests/test_harnesses_core.py:305: AssertionError
+_____ test_run_task_refuses_a_platform_without_a_literal_prompt_mechanism ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a1a2ea0>
+
+    def test_run_task_refuses_a_platform_without_a_literal_prompt_mechanism(monkeypatch):
+        """A run-capable platform with no literal delivery is a typed refusal.
+    
+        Forward-proofs the H09 guard: a future platform added to RUN_PLATFORMS
+        without an option-proof prompt mechanism must never be spawned with an
+        option-interpretable prompt.
+        """
+        monkeypatch.setitem(
+            interop.PLATFORMS,
+            "future",
+            interop.PlatformSpec(
+                key="future",
+                label="Future",
+                binaries=("future",),
+                version_args=(),
+                list_args=(),
+                supports_scopes=(),
+                remove_args=None,
+            ),
+        )
+        monkeypatch.setitem(interop.RUN_PLATFORMS, "future", ["future"])
+        monkeypatch.setattr(
+            interop,
+            "_run",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("no spawn without a mechanism")),
+        )
+    
+        result = interop.run_task("future", "--help")
+    
+        assert result.ok is False and result.exit_code is None
+>       assert "literal prompt" in result.unsupported_reason
+E       AssertionError: assert 'literal prompt' in ''
+E        +  where '' = RunResult(platform='future', command=['future', '--help'], exit_code=None, stdout='', stderr='Future is not installed (future not on PATH)', ok=False, unsupported_reason='').unsupported_reason
+
+tests/test_harnesses_core.py:363: AssertionError
+_______________ test_interop_list_reports_state_and_runnability ________________
+
+stub_interop = {'detect': [True], 'runs': [], 'enable': [], 'disable': []}
+
+    async def test_interop_list_reports_state_and_runnability(stub_interop):
+        result = await feature.interop_list(None, {})
+    
+>       assert result == {
+            "harnesses": [
+                {
+                    "key": "opencode",
+                    "label": "OpenCode",
+                    "installed": True,
+                    "version": "opencode v2.0.26",
+                    "running": True,
+                    "registered": True,
+                    "scope": "project",
+                    "runSupported": False,
+                    "runHint": None,
+                },
+                {
+                    "key": "codex",
+                    "label": "Codex",
+                    "installed": True,
+                    "version": None,
+                    "running": False,
+                    "registered": False,
+                    "scope": "global",
+                    "runSupported": True,
+                    "runHint": "codex exec <prompt>",
+                },
+            ],
+            "stateFile": "/tmp/interop-state.json",
+            # H22: the UI aligns its client clock with this deadline.
+            "runTimeoutSeconds": feature.DEFAULT_RUN_TIMEOUT_SECONDS,
+        }
+E       AssertionError: assert {'harnesses':...p-state.json'} == {'harnesses':...conds': 300.0}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Right contains 1 more item:
+E         {'runTimeoutSeconds': 300.0}
+E         Use -v to get more diff
+
+tests/test_harnesses_feature.py:151: AssertionError
+__________ test_interop_list_surfaces_the_authoritative_run_deadline ___________
+
+stub_interop = {'detect': [True], 'runs': [], 'enable': [], 'disable': []}
+
+    async def test_interop_list_surfaces_the_authoritative_run_deadline(stub_interop):
+        """The deadline the UI must outlast comes from the backend, not the UI."""
+        result = await feature.interop_list(None, {})
+>       assert result["runTimeoutSeconds"] == feature.DEFAULT_RUN_TIMEOUT_SECONDS
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'runTimeoutSeconds'
+
+tests/test_harnesses_feature.py:187: KeyError
+_______________ test_interop_list_is_empty_when_nothing_detected _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a1b3310>
+
+    async def test_interop_list_is_empty_when_nothing_detected(monkeypatch):
+        monkeypatch.setattr(feature, "detect", lambda: {})
+        monkeypatch.setattr(feature, "supported_runs", lambda: {})
+        monkeypatch.setattr(feature, "state_path", lambda: "/tmp/interop-state.json")
+        result = await feature.interop_list(None, {})
+>       assert result == {
+            "harnesses": [],
+            "stateFile": "/tmp/interop-state.json",
+            "runTimeoutSeconds": feature.DEFAULT_RUN_TIMEOUT_SECONDS,
+        }
+E       AssertionError: assert {'harnesses':...p-state.json'} == {'harnesses':...conds': 300.0}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Right contains 1 more item:
+E         {'runTimeoutSeconds': 300.0}
+E         Use -v to get more diff
+
+tests/test_harnesses_feature.py:199: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_harnesses_core.py::test_run_task_builds_the_documented_headless_command_and_is_typed
+FAILED tests/test_harnesses_core.py::test_run_task_codex_prompt_goes_on_stdin_and_never_touches_argv
+FAILED tests/test_harnesses_core.py::test_run_task_not_installed_is_typed_and_never_spawns
+FAILED tests/test_harnesses_core.py::test_run_task_delivers_option_like_prompts_literally
+FAILED tests/test_harnesses_core.py::test_run_task_refuses_a_platform_without_a_literal_prompt_mechanism
+FAILED tests/test_harnesses_feature.py::test_interop_list_reports_state_and_runnability
+FAILED tests/test_harnesses_feature.py::test_interop_list_surfaces_the_authoritative_run_deadline
+FAILED tests/test_harnesses_feature.py::test_interop_list_is_empty_when_nothing_detected
+8 failed, 25 passed in 1.15s

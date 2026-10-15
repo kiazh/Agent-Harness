@@ -1,0 +1,341 @@
+FFFFFFFFF                                                                [100%]
+=================================== FAILURES ===================================
+____________ test_space_identity_is_stable_and_distinguishes_spaces ____________
+
+    def test_space_identity_is_stable_and_distinguishes_spaces():
+        """Same backend/model/width maps to one id; model or width changes it."""
+>       from machina.memory.embeddings import embedding_space_id
+E       ImportError: cannot import name 'embedding_space_id' from 'machina.memory.embeddings' (/Users/shadow/machina/machina/memory/embeddings.py)
+
+tests/test_memory_embedding_space.py:85: ImportError
+_________________ test_space_identity_is_none_without_embedder _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109cda650>
+
+    def test_space_identity_is_none_without_embedder(monkeypatch):
+        """Keyword-only operation has no space: callers keep pre-H08 behavior."""
+>       from machina.memory.embeddings import embedding_space_id
+E       ImportError: cannot import name 'embedding_space_id' from 'machina.memory.embeddings' (/Users/shadow/machina/machina/memory/embeddings.py)
+
+tests/test_memory_embedding_space.py:96: ImportError
+__________________ test_add_persists_explicit_embedding_space __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ad87bf0>
+
+    async def test_add_persists_explicit_embedding_space(monkeypatch):
+        """A write with an embedding stores the space identifier alongside it."""
+        from tests.support.database import attach_connection
+    
+        store = MemoryStore()
+        mock_db = AsyncMock()
+        attach_connection(mock_db)
+        mock_db.fetchrow = AsyncMock(return_value=_mock_row())
+        executed: list[str] = []
+    
+        async def fake_execute(query, *args):
+            executed.append(query)
+            return "OK"
+    
+        mock_db.execute = fake_execute
+        with patch("machina.memory.store.db", mock_db):
+>           entry = await store.add(
+                session_id=None,
+                agent_id="harness",
+                content="spaced memory",
+                category="fact",
+                embedding=list(UNIT_E0),
+                embedding_space="fake:model-a:1536",
+            )
+E           TypeError: MemoryStore.add() got an unexpected keyword argument 'embedding_space'
+
+tests/test_memory_embedding_space.py:123: TypeError
+______________ test_search_by_embedding_filters_compatible_spaces ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a444c00>
+
+    async def test_search_by_embedding_filters_compatible_spaces(monkeypatch):
+        """Dense search only compares rows from the same space (plus legacy NULL)."""
+        store = MemoryStore()
+        mock_db = AsyncMock()
+        mock_db.fetch = AsyncMock(return_value=[])
+        mock_db.execute = AsyncMock(return_value="OK")
+        with patch("machina.memory.store.db", mock_db):
+>           results = await store.search_by_embedding(
+                list(UNIT_E0), embedding_space="fake:model-a:1536"
+            )
+E           TypeError: MemoryStore.search_by_embedding() got an unexpected keyword argument 'embedding_space'
+
+tests/test_memory_embedding_space.py:145: TypeError
+_______________ test_model_switch_excludes_foreign_space_vectors _______________
+
+db_pool = <machina.db.connection.Database object at 0x10adf39d0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a489c50>
+
+    @pytest.mark.integration
+    @pytest.mark.db
+    async def test_model_switch_excludes_foreign_space_vectors(db_pool, monkeypatch):
+        """Same width, different model: switching must not mix vector spaces."""
+        import machina.memory.identity as identity_module
+        import machina.memory.store as store_module
+    
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(store_module, "db", database)
+            monkeypatch.setattr(identity_module, "db", database)
+            store = MemoryStore()
+    
+            _use_embedder(monkeypatch, "model-a")
+            entry_a = await store.add(
+                session_id=None,
+                agent_id="harness",
+                content="Written while model-a was configured",
+                category="fact",
+                embedding=list(UNIT_E0),
+            )
+            same_space = await store.search_by_embedding(list(UNIT_E0))
+            assert [memory.id for memory, _ in same_space] == [entry_a.id]
+    
+            # Same dimensions, different model: a different embedding space.
+            _use_embedder(monkeypatch, "model-b")
+            entry_b = await store.add(
+                session_id=None,
+                agent_id="harness",
+                content="Written while model-b was configured",
+                category="fact",
+                embedding=list(UNIT_E0),
+            )
+            switched = await store.search_by_embedding(list(UNIT_E0))
+>           assert [memory.id for memory, _ in switched] == [entry_b.id], (
+                "vectors from the previous embedding space must not be ranked "
+                "against queries from the new one"
+            )
+E           AssertionError: vectors from the previous embedding space must not be ranked against queries from the new one
+E           assert [UUID('c4aec2...bf37c6bc007')] == [UUID('c4aec2...965332a8449')]
+E             
+E             Left contains one more item: UUID('63b3fb25-e76f-4247-a0a2-8bf37c6bc007')
+E             Use -v to get more diff
+
+tests/test_memory_embedding_space.py:193: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 12:58:49,008 [AUDIT] {"timestamp": 1792083529.00802, "event": "memory_add", "memory_id": "63b3fb25-e76f-4247-a0a2-8bf37c6bc007", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+2026-10-15 12:58:49,011 [AUDIT] {"timestamp": 1792083529.011383, "event": "memory_add", "memory_id": "c4aec2d9-d73d-4f55-bff5-5965332a8449", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083529.00802, "event": "memory_add", "memory_id": "63b3fb25-e76f-4247-a0a2-8bf37c6bc007", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083529.011383, "event": "memory_add", "memory_id": "c4aec2d9-d73d-4f55-bff5-5965332a8449", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+__________________ test_legacy_untagged_rows_stay_retrievable __________________
+
+db_pool = <machina.db.connection.Database object at 0x10a3ec3e0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10adc2a50>
+
+    @pytest.mark.integration
+    @pytest.mark.db
+    async def test_legacy_untagged_rows_stay_retrievable(db_pool, monkeypatch):
+        """Rows written before H08 (NULL space) keep working via the fallback."""
+        import machina.memory.identity as identity_module
+        import machina.memory.store as store_module
+    
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(store_module, "db", database)
+            monkeypatch.setattr(identity_module, "db", database)
+            store = MemoryStore()
+    
+            legacy_id = uuid.uuid4()
+            await database.execute(
+                """
+                INSERT INTO memories (id, agent_id, content, category, embedding)
+                VALUES ($1, 'harness', 'pre-H08 row', 'fact', $2::vector)
+                """,
+                legacy_id,
+                "[1.0," + ",".join("0.0" for _ in range(1535)) + "]",
+            )
+    
+            _use_embedder(monkeypatch, "model-a")
+            entry_a = await store.add(
+                session_id=None,
+                agent_id="harness",
+                content="Tagged row",
+                category="fact",
+                embedding=list(UNIT_E0),
+            )
+    
+            results = await store.search_by_embedding(list(UNIT_E0))
+            assert {memory.id for memory, _ in results} == {legacy_id, entry_a.id}
+    
+            # Foreign-space rows are excluded, but legacy NULL rows keep the
+            # documented compatibility fallback under the new space as well.
+            _use_embedder(monkeypatch, "model-b")
+            switched = await store.search_by_embedding(list(UNIT_E0))
+>           assert {memory.id for memory, _ in switched} == {legacy_id}
+E           AssertionError: assert {UUID('4510ee...c3997aa2d4a')} == {UUID('f99333...c3997aa2d4a')}
+E             
+E             Extra items in the left set:
+E             UUID('4510ee4a-8c79-4640-a582-3d58a87a5fe1')
+E             Use -v to get more diff
+
+tests/test_memory_embedding_space.py:237: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 12:58:49,135 [AUDIT] {"timestamp": 1792083529.135075, "event": "memory_add", "memory_id": "4510ee4a-8c79-4640-a582-3d58a87a5fe1", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083529.135075, "event": "memory_add", "memory_id": "4510ee4a-8c79-4640-a582-3d58a87a5fe1", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+__________ test_existing_database_gains_embedding_space_on_first_use ___________
+
+db_pool = <machina.db.connection.Database object at 0x10a4458c0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a4b8d10>
+
+    @pytest.mark.integration
+    @pytest.mark.db
+    async def test_existing_database_gains_embedding_space_on_first_use(db_pool, monkeypatch):
+        """An initialized pre-H08 database is upgraded additively and idempotently."""
+        import machina.memory.identity as identity_module
+        import machina.memory.store as store_module
+    
+        async with isolated_schema(db_pool) as (schema, database):
+            # Simulate an existing installation that predates H08.
+            await database.execute("DROP INDEX IF EXISTS idx_memories_embedding_space")
+            await database.execute("ALTER TABLE memories DROP COLUMN IF EXISTS embedding_space")
+    
+            legacy_id = uuid.uuid4()
+            await database.execute(
+                """
+                INSERT INTO memories (id, agent_id, content, category, embedding)
+                VALUES ($1, 'harness', 'pre-H08 row', 'fact', $2::vector)
+                """,
+                legacy_id,
+                "[1.0," + ",".join("0.0" for _ in range(1535)) + "]",
+            )
+    
+            monkeypatch.setattr(store_module, "db", database)
+            monkeypatch.setattr(identity_module, "db", database)
+            _use_embedder(monkeypatch, "model-a")
+    
+            # First embedding-backed operation applies the additive migration.
+            store = MemoryStore()
+            entry = await store.add(
+                session_id=None,
+                agent_id="harness",
+                content="First write after upgrade",
+                category="fact",
+                embedding=list(UNIT_E0),
+            )
+    
+            column_type = await database.fetchval(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_schema=$1 AND table_name='memories' AND column_name='embedding_space'",
+                schema,
+            )
+>           assert column_type == "text"
+E           AssertionError: assert None == 'text'
+
+tests/test_memory_embedding_space.py:281: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 12:58:49,260 [AUDIT] {"timestamp": 1792083529.260826, "event": "memory_add", "memory_id": "c4d9abd8-8cb2-4f7f-b79e-1d93f3e3e220", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083529.260826, "event": "memory_add", "memory_id": "c4d9abd8-8cb2-4f7f-b79e-1d93f3e3e220", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_______________ test_caller_transaction_write_applies_migration ________________
+
+db_pool = <machina.db.connection.Database object at 0x10a2ff750>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a33f330>
+
+    @pytest.mark.integration
+    @pytest.mark.db
+    async def test_caller_transaction_write_applies_migration(db_pool, monkeypatch):
+        """The approval-style write (caller connection) migrates in its transaction."""
+        import machina.memory.identity as identity_module
+        import machina.memory.store as store_module
+    
+        async with isolated_schema(db_pool) as (_schema, database):
+            await database.execute("DROP INDEX IF EXISTS idx_memories_embedding_space")
+            await database.execute("ALTER TABLE memories DROP COLUMN IF EXISTS embedding_space")
+    
+            monkeypatch.setattr(store_module, "db", database)
+            monkeypatch.setattr(identity_module, "db", database)
+            _use_embedder(monkeypatch, "model-a")
+            store = MemoryStore()
+    
+            async with database.acquire() as conn:
+                async with conn.transaction():
+                    entry = await store.add(
+                        session_id=None,
+                        agent_id="harness",
+                        content="approval-style write",
+                        category="fact",
+                        embedding=list(UNIT_E0),
+                        connection=conn,
+                    )
+    
+>           tagged = await database.fetchval(
+                "SELECT embedding_space FROM memories WHERE id=$1", entry.id
+            )
+
+tests/test_memory_embedding_space.py:324: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/db/connection.py:199: in fetchval
+    result = await conn.fetchval(query, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:741: in fetchval
+    data = await self._execute(query, args, 1, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:1904: in _execute
+    result, _ = await self.__execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2003: in __execute
+    result, stmt = await self._do_execute(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:2046: in _do_execute
+    stmt = await self._get_statement(
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:466: in _get_statement
+    statement = await self._protocol.prepare(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions.UndefinedColumnError: column "embedding_space" does not exist
+
+asyncpg/protocol/protocol.pyx:161: UndefinedColumnError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 12:58:49,380 [AUDIT] {"timestamp": 1792083529.379999, "event": "memory_add", "memory_id": "d9dab98b-aa17-4f8a-8a57-e11416293d51", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083529.379999, "event": "memory_add", "memory_id": "d9dab98b-aa17-4f8a-8a57-e11416293d51", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+______________ test_migration_failure_degrades_to_pre_h08_shapes _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a32dd90>
+
+    async def test_migration_failure_degrades_to_pre_h08_shapes(monkeypatch):
+        """A database where the additive DDL cannot run keeps today's behavior."""
+        from tests.support.database import attach_connection
+    
+        store = MemoryStore()
+        mock_db = AsyncMock()
+        attach_connection(mock_db)
+        mock_db.fetchrow = AsyncMock(return_value=_mock_row())
+    
+        async def boom(query, *args):
+            if "ALTER TABLE memories" in query:
+                raise RuntimeError("permission denied for DDL")
+            return "OK"
+    
+        mock_db.execute = boom
+        with patch("machina.memory.store.db", mock_db):
+>           entry = await store.add(
+                session_id=None,
+                agent_id="harness",
+                content="degraded write",
+                category="fact",
+                embedding=list(UNIT_E0),
+                embedding_space="fake:model-a:1536",
+            )
+E           TypeError: MemoryStore.add() got an unexpected keyword argument 'embedding_space'
+
+tests/test_memory_embedding_space.py:350: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_memory_embedding_space.py::test_space_identity_is_stable_and_distinguishes_spaces
+FAILED tests/test_memory_embedding_space.py::test_space_identity_is_none_without_embedder
+FAILED tests/test_memory_embedding_space.py::test_add_persists_explicit_embedding_space
+FAILED tests/test_memory_embedding_space.py::test_search_by_embedding_filters_compatible_spaces
+FAILED tests/test_memory_embedding_space.py::test_model_switch_excludes_foreign_space_vectors
+FAILED tests/test_memory_embedding_space.py::test_legacy_untagged_rows_stay_retrievable
+FAILED tests/test_memory_embedding_space.py::test_existing_database_gains_embedding_space_on_first_use
+FAILED tests/test_memory_embedding_space.py::test_caller_transaction_write_applies_migration
+FAILED tests/test_memory_embedding_space.py::test_migration_failure_degrades_to_pre_h08_shapes
+9 failed in 1.01s

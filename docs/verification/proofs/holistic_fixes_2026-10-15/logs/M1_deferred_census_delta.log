@@ -1,0 +1,3 @@
+tree census total: 718 (cap 717)
+M1-owned files: machina/memory/store.py, machina/memory/embeddings.py -> delta 0
+delta: ('machina/services.py', 28, 29)

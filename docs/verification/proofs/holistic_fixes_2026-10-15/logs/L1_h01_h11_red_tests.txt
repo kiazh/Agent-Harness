@@ -1,0 +1,130 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+_____ test_stream_and_engine_close_release_claim_with_resistant_finalizer ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10af36d70>
+
+    async def test_stream_and_engine_close_release_claim_with_resistant_finalizer(monkeypatch):
+        """A finalizer that cannot settle must not block ``close()``/the release."""
+        released: list[str] = []
+        release = asyncio.Event()
+        finalizer_entered = asyncio.Event()
+        finalizer_done = asyncio.Event()
+    
+        async def fake_end_turn(session_id, token):
+            released.append(token)
+            return True
+    
+        monkeypatch.setattr(turns, "end_turn", fake_end_turn)
+    
+        class Agent:
+            async def run_stream(self, session_id, user_message, verbose=False, **kwargs):
+                try:
+                    yield StreamEvent(type="text", content=_PROBE_TEXT)
+                finally:
+                    try:
+                        await _resist_cancellation_until(release, finalizer_entered)
+                    finally:
+                        finalizer_done.set()
+    
+>       engine = TurnEngine(_spec(), boundary="test.h01", source_close_timeout_s=0.05)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TurnEngine.__init__() got an unexpected keyword argument 'source_close_timeout_s'
+
+tests/test_holistic_h01_turn_source_close.py:75: TypeError
+___ test_engine_close_releases_claim_when_active_driver_ignores_cancellation ___
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10afd7530>
+
+    async def test_engine_close_releases_claim_when_active_driver_ignores_cancellation(monkeypatch):
+        """A driver that absorbs cancellation while awaiting the source must not block close."""
+        released: list[str] = []
+        release = asyncio.Event()
+        entered = asyncio.Event()
+    
+        async def fake_end_turn(session_id, token):
+            released.append(token)
+            return True
+    
+        monkeypatch.setattr(turns, "end_turn", fake_end_turn)
+    
+        class Agent:
+            async def run_stream(self, session_id, user_message, verbose=False, **kwargs):
+                await _resist_cancellation_until(release, entered)
+                yield StreamEvent(type="text", content="late")
+    
+>       engine = TurnEngine(_spec(), boundary="test.h01-driver", source_close_timeout_s=0.05)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: TurnEngine.__init__() got an unexpected keyword argument 'source_close_timeout_s'
+
+tests/test_holistic_h01_turn_source_close.py:127: TypeError
+_____________ test_completion_path_forwards_configured_temperature _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10afca8b0>
+
+    async def test_completion_path_forwards_configured_temperature(monkeypatch):
+        seen: dict = {}
+    
+        class Provider:
+            model = "stub-model"
+    
+            async def complete(self, **kwargs):
+                seen.update(kwargs)
+                return LLMResponse(content="ok", model="stub-model")
+    
+        monkeypatch.setattr(config, "temperature", 0.25)
+        monkeypatch.setattr(config, "max_tokens", 2048)
+        agent = ReActAgent(provider=Provider(), allowed_tools=[])
+    
+        response = await agent._call_llm_with_retry(
+            [{"role": "user", "content": "hi"}], [], session_id=None
+        )
+    
+        assert response.content == "ok"
+>       assert seen.get("temperature") == 0.25
+E       AssertionError: assert None == 0.25
+E        +  where None = <built-in method get of dict object at 0x10b0d6040>('temperature')
+E        +    where <built-in method get of dict object at 0x10b0d6040> = {'messages': [{'role': 'user', 'content': 'hi'}], 'tools': [], 'max_tokens': 2048}.get
+
+tests/test_holistic_h11_temperature.py:35: AssertionError
+_____________ test_streaming_path_forwards_configured_temperature ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b06bd50>
+
+    async def test_streaming_path_forwards_configured_temperature(monkeypatch):
+        seen: dict = {}
+    
+        class Provider:
+            model = "stub-model"
+    
+            async def stream_complete(self, **kwargs):
+                seen.update(kwargs)
+                yield StreamEvent(
+                    type="done",
+                    response=LLMResponse(content="ok", model="stub-model"),
+                )
+    
+        monkeypatch.setattr(config, "temperature", 1.5)
+        monkeypatch.setattr(config, "max_tokens", 2048)
+        agent = ReActAgent(provider=Provider(), allowed_tools=[])
+    
+        events = [
+            event
+            async for event in agent._stream_llm_with_retry(
+                [{"role": "user", "content": "hi"}], [], session_id=None
+            )
+        ]
+    
+        assert [event.type for event in events] == ["done"]
+>       assert seen.get("temperature") == 1.5
+E       AssertionError: assert None == 1.5
+E        +  where None = <built-in method get of dict object at 0x10b10aa40>('temperature')
+E        +    where <built-in method get of dict object at 0x10b10aa40> = {'messages': [{'role': 'user', 'content': 'hi'}], 'tools': [], 'max_tokens': 2048}.get
+
+tests/test_holistic_h11_temperature.py:64: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_holistic_h01_turn_source_close.py::test_stream_and_engine_close_release_claim_with_resistant_finalizer
+FAILED tests/test_holistic_h01_turn_source_close.py::test_engine_close_releases_claim_when_active_driver_ignores_cancellation
+FAILED tests/test_holistic_h11_temperature.py::test_completion_path_forwards_configured_temperature
+FAILED tests/test_holistic_h11_temperature.py::test_streaming_path_forwards_configured_temperature
+4 failed in 0.43s

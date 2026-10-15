@@ -1,0 +1,10 @@
+Diagnostic 1: streaming redaction, fake known_secret_values=(), synthetic token only.
+Input chunks: "sk-" + "a"*210; then "b"*80 + " done."
+Batch output: [REDACTED_OPENAI_KEY] done.
+Stream output: [REDACTED_OPENAI_KEY] + "b"*80 + " done."
+Unredacted synthetic tail: 80 characters.
+
+Diagnostic 2: actual MemoryRetriever.retrieve AST with a synthetic failing keyword store.
+_keyword_search raises ConnectionError("synthetic store unavailable").
+No embedding supplied. Result returned: [].
+No network, database, real secrets, or test suite used.

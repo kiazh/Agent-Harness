@@ -1,0 +1,37 @@
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+E   asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+E   TimeoutError
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/timeouts.py:114: TimeoutError
+E   asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+E   TimeoutError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 13:11:59,062 [AUDIT] {"timestamp": 1792084319.062285, "event": "permission_pending", "request_id": "ba96e72f86ea4ec28d87ee7f140a6250", "session_id": "session", "turn_id": "", "agent_id": "harness", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "65834be19a264f25", "targets": [], "argv": [], "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+2026-10-15 13:11:59,064 [AUDIT] {"timestamp": 1792084319.064044, "event": "permission_allowed", "request_id": "ba96e72f86ea4ec28d87ee7f140a6250", "session_id": "session", "turn_id": "", "agent_id": "harness", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "65834be19a264f25", "targets": [], "argv": [], "reason": "approval granted"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084319.062285, "event": "permission_pending", "request_id": "ba96e72f86ea4ec28d87ee7f140a6250", "session_id": "session", "turn_id": "", "agent_id": "harness", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "65834be19a264f25", "targets": [], "argv": [], "reason": "sensitive capability requires explicit approval: mcp_external_review"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084319.064044, "event": "permission_allowed", "request_id": "ba96e72f86ea4ec28d87ee7f140a6250", "session_id": "session", "turn_id": "", "agent_id": "harness", "operation": "tool.mcp_connect", "tool": "mcp_connect", "mode": "ask", "digest_prefix": "65834be19a264f25", "targets": [], "argv": [], "reason": "approval granted"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/timeouts.py:114: TimeoutError
+E   asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+E   TimeoutError
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/timeouts.py:114: TimeoutError
+E   AssertionError: a cancelled authorization published its credential after cancel() reported (H16)
+    assert OAuthCredentialRecord(connector_id='web', issuer='https://issuer.example', grant_id='3db75328693b1bd2', generation=1, refresh_state='idle') is None
+/Users/shadow/machina/tests/test_connectors_holistic_fixes.py:360: AssertionError: a cancelled authorization published its credential after cancel() reported (H16)
+E   OSError: [Errno 5] injected index directory fsync failure
+/Users/shadow/machina/tests/test_connectors_holistic_fixes.py:391: OSError: [Errno 5] injected index directory fsync failure
+=========================== short test summary info ============================
+FAILED tests/test_connectors_holistic_fixes.py::test_oauth_preflight_never_reenters_service_refresh_under_config_lock
+FAILED tests/test_connectors_holistic_fixes.py::test_authorized_oauth_connect_completes_preflight_under_config_lock
+FAILED tests/test_connectors_holistic_fixes.py::test_quiet_stderr_drains_never_occupy_the_shared_executor
+FAILED tests/test_connectors_holistic_fixes.py::test_cancel_fences_in_flight_credential_publication
+FAILED tests/test_connectors_holistic_fixes.py::test_index_dir_fsync_failure_keeps_referenced_envelope
+5 failed in 10.25s

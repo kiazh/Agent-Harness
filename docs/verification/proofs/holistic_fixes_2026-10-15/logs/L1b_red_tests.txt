@@ -1,0 +1,42 @@
+F..                                                                      [100%]
+=================================== FAILURES ===================================
+___________________ test_wedged_step_retire_join_is_bounded ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ac0f820>
+
+    async def test_wedged_step_retire_join_is_bounded(monkeypatch):
+        """A step that never settles must not wedge retire_execution before close_turn."""
+        from machina.core import background_tasks
+    
+        session = Session(id=uuid.uuid4())
+        agent = _WedgeAgent()
+        env = await _drive_route(monkeypatch, session, agent, retire_timeout=0.2)
+    
+        frames, cleanup_pending = await _consume(env.response)
+        try:
+            assert cleanup_pending, frames
+            assert agent.entered.is_set(), "the stream step never started"
+    
+            retired_in_time = True
+            try:
+                await asyncio.wait_for(env.retired.wait(), 1.5)
+            except TimeoutError:
+                retired_in_time = False
+            quarantined = agent.step_task in background_tasks._quarantined_joins
+            claim = await env.turns.try_begin_turn(session.id)
+            if claim is not None:
+                await env.real_end(session.id, claim)
+    
+>           assert retired_in_time, (
+                "retire_execution did not reach close_turn within the bound: a wedged "
+                "step must be quarantined, never awaited unbounded"
+            )
+E           AssertionError: retire_execution did not reach close_turn within the bound: a wedged step must be quarantined, never awaited unbounded
+E           assert False
+
+tests/test_holistic_l1b_sse_retire.py:200: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  machina.api.routes.streaming:streaming.py:373 Prompt stream timed out for session 720928cd-89ba-45ba-9119-098109480661
+=========================== short test summary info ============================
+FAILED tests/test_holistic_l1b_sse_retire.py::test_wedged_step_retire_join_is_bounded
+1 failed, 2 passed in 2.24s

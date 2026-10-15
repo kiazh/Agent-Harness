@@ -1,0 +1,828 @@
+{
+  "baseline": "2308751b4d561317292730762f8b12d8cfc6854f",
+  "scope": "root reviewer application Python and SQL; includes current uncommitted memory/__init__.py",
+  "files": [
+    {
+      "path": "machina/__init__.py",
+      "line_count": 7,
+      "sha256": "df52f29e2ea93107f5a7551aa35a3137fd8b3307b1a53eb4a2ff850b47d78242",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          7
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/__main__.py",
+      "line_count": 6,
+      "sha256": "0bb42bcb78eedc8551284f4ded3a2d139321fcebf8479af04c8a1747946451d3",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          6
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/controller/__init__.py",
+      "line_count": 23,
+      "sha256": "0d998f5c5641c3062e9b60ab7bbfc05906ba885d5b01f670bc3a34b96fa2245f",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          23
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/controller/complexity.py",
+      "line_count": 133,
+      "sha256": "01a3ce8e2db5f8ac9aef251a1d2da24c984059bf46284b1564ac58aa0cca0fd3",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          133
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/controller/preselect.py",
+      "line_count": 53,
+      "sha256": "57e4761c84f6fda330f8e19f8ca2fb80fc7e16429f7f1fb84cbceb20e662829c",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          53
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/controller/triage.py",
+      "line_count": 32,
+      "sha256": "ca55e940ef1967ee54d203996b3111aa66b02cf69d2ddc88a206566dcd9335b9",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          32
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/controller/wiring.py",
+      "line_count": 348,
+      "sha256": "18c9b2f9c26927c69e35f7e60c1a3173c8f7244fb3264cd0d4df6f9220163757",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          348
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/db/__init__.py",
+      "line_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": "full",
+      "ranges": [],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/db/connection.py",
+      "line_count": 291,
+      "sha256": "dee434c1ccba3a8673e3524bc0ecce26d0d471812888291bda9514937ea6ea75",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          291
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/db/delegation_schema.sql",
+      "line_count": 50,
+      "sha256": "34c295452021ed782aa48b00d46e4782fce595789cb261c2b22485902e1018d4",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          50
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/db/growth_schema.sql",
+      "line_count": 56,
+      "sha256": "9e05cb92bd039155d66bc5d78ef64d3a2f283fcb861d1d0889cd2ccf8a4c5737",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          56
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/db/image_context_schema.sql",
+      "line_count": 19,
+      "sha256": "2372c1f1eae2658b6745eec76be0ee8d3f83872ced249501b07311b4a225a5af",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          19
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/db/lazy.py",
+      "line_count": 74,
+      "sha256": "218e7c0498028dc84fdca1c0bb676314ac48c2eb4fdfe1c5247290861d0c3ec0",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          74
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/db/schema.sql",
+      "line_count": 575,
+      "sha256": "5a80873c00409714733b43f7c29677d738ad6f03c26654a10274c16e36d2198b",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          575
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/db/soulspec_schema.sql",
+      "line_count": 7,
+      "sha256": "7876dbe978d553e4a8c519a9834f04a6fb0ca34b7556cf8ce31117c54040f2fc",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          7
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/__init__.py",
+      "line_count": 131,
+      "sha256": "86eb3198f585d4cc9d49834bb432469aa70ba3f89002f0acad09e2ffc941adb8",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          131
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/approval.py",
+      "line_count": 532,
+      "sha256": "d39cf9eaaf3f75a893da161dce9b839ffb2949f7c8e192a13818fc588e70a34b",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          532
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/authority.py",
+      "line_count": 57,
+      "sha256": "07808ef275277c84c11376e901e241689f33e7cb09699cd9d7f59eabb88245dc",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          57
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/consolidator.py",
+      "line_count": 743,
+      "sha256": "8fdb150d8c04bd4c766bb2eec4658d820ddfc9cd88ed7396ff7eb299f43c5ff4",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          743
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/embeddings.py",
+      "line_count": 107,
+      "sha256": "d939ba89ff9742a32c65ea71e9fa17de14aa4d324e209bc712a6c81860765530",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/forgetting.py",
+      "line_count": 83,
+      "sha256": "7abed13fa51810a9ce272cd62db7c7a25af44eaa86419e32f57c727958920fd1",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          83
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/growth.py",
+      "line_count": 415,
+      "sha256": "fbe24fc3d6210dceb6090b831f00ae2de08098f373d31e19674d277cbf40cf13",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          415
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/identity.py",
+      "line_count": 573,
+      "sha256": "0b4b2c7a219455dc29434eea568d7bd5db6971c97660f0cbb6c8c082be17c046",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          573
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/models.py",
+      "line_count": 79,
+      "sha256": "51ce96f9c3437c0600f9021e4ae915f0c52f25396adf65a04990e18798b9e466",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          79
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/persona.py",
+      "line_count": 394,
+      "sha256": "41f5408b944d9c7a72054c5c84ddf1ec6d4d61052ce5492e1050b5eef90c5be0",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          394
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/policy.py",
+      "line_count": 281,
+      "sha256": "08bd49c91074487bd4548ca4cb1e7b610aa252b5ed0df5a18906bd4d527fcc57",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          281
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/redaction.py",
+      "line_count": 912,
+      "sha256": "bebcb3b2cead9f4e1e883cc8277136b1d26a7da2bbc4b605d1cc45cbeb0e36b7",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          912
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/retriever.py",
+      "line_count": 689,
+      "sha256": "4c24c97bfec2b52d5682bacda0fd0d091251e48ad2f0a7da9ed8a3a4ebe7f6fd",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          689
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/rl.py",
+      "line_count": 155,
+      "sha256": "0e931d94d7ea52e384e09c93cb9839d015fef4ad6486fb3468ba66086c2cd7ca",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          155
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/rsi.py",
+      "line_count": 451,
+      "sha256": "405f526b1ba5b034c84701d51a724081b0ec2bfffae77d6ef805d6441c7ebcf4",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          451
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/scorer.py",
+      "line_count": 90,
+      "sha256": "a059b196c3ee08b57b89dc7ea972208326cf42866f4792789ac7d8f7d71123a1",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          90
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/shared_bus.py",
+      "line_count": 188,
+      "sha256": "654ba7311c996a9af0c2031a85f53033afffb5154166472c5265f66fb43c219b",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          188
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/store.py",
+      "line_count": 579,
+      "sha256": "85523282eaa352d13a67de96f9a77dd91737278b90796973838a932dc5ad78f1",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          579
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/memory/user_profile.py",
+      "line_count": 464,
+      "sha256": "bb03e4428b058daa6b909f3a74cc86a851033dccff83156ba3a0a6375f6bf95e",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          464
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/observability/__init__.py",
+      "line_count": 1,
+      "sha256": "ac0b4a4125dd7a4fc52ae3e27455f90cdee2ee64343f500f8443cfd5b9c08e14",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/observability/audit.py",
+      "line_count": 146,
+      "sha256": "1512355fccb0cf58dafa2a2af7058ed4588a4780b759eef0d9413ebb74765c3c",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          146
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/observability/diagnostics.py",
+      "line_count": 25,
+      "sha256": "950234092bf3ebb080d46728f3fd8e860d66c7af169e97c8520fdd2dad57657b",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/observability/metrics.py",
+      "line_count": 42,
+      "sha256": "3434b4532bd82b70d03ee339582578c3eda684bab238192b2ba8b786ba659212",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          42
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/observability/safe_logging.py",
+      "line_count": 84,
+      "sha256": "846cf19e63c13285ec3b8061ebe6f62b5e7a31c06a7276127949349721e589d7",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          84
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/observability/traces.py",
+      "line_count": 874,
+      "sha256": "ebd25e13d627e381b244f47bcd1d20aba7d8ff2e35fa29d0c2872f3d6ba95451",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          874
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/observability/tracing.py",
+      "line_count": 21,
+      "sha256": "c665daeaad2872b9fe778739ef517ecb820f3f103e6052dd19939288705d66ad",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          21
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/plugins/__init__.py",
+      "line_count": 6,
+      "sha256": "31bffb191ebf86bbb5dffee9f6e3b68cb125a0f05d8ca06e6f14771221963721",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          6
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/plugins/base.py",
+      "line_count": 26,
+      "sha256": "11b1876836ad4a8d54cd95ee6b42e2eb3d8fd76dd27c7b6591bf184088b566ba",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          26
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/plugins/loader.py",
+      "line_count": 40,
+      "sha256": "60ad2748b9c8f7be27795021ac1a7e645bcb7c33ca07e1350eed0664f8369511",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          40
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/plugins/registry.py",
+      "line_count": 65,
+      "sha256": "8c0d56d6e7c43065cd22a5817f50430a98d814fda35faca9353f5bf059468ad5",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          65
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/repomap/__init__.py",
+      "line_count": 14,
+      "sha256": "4e9963883e2d16476882d4a92298506cf5cc95440cc6ebcfb866f6ea03abf0ec",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          14
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/repomap/cache.py",
+      "line_count": 75,
+      "sha256": "1dafa6341845d4dc9ea4d8cef5b6db94602bac5481058090fd89bb4d04e8840d",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          75
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/repomap/evidence.py",
+      "line_count": 70,
+      "sha256": "3b5c7a27dd2cdbfef9887d6200f2037f66158800b56aed6ee60a2ef69760a032",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          70
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/repomap/scan.py",
+      "line_count": 129,
+      "sha256": "f119695c8b9420073d67efce593353d130c6161af126222f3c84242189f95da7",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          129
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/services.py",
+      "line_count": 736,
+      "sha256": "b1f42f08e3289dac8dbe4ea30643f75efe1e9039f6b3713b7f3a99d10f6cac08",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          736
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/skills/__init__.py",
+      "line_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": "full",
+      "ranges": [],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/skills/bundle.py",
+      "line_count": 78,
+      "sha256": "82bc0eba1c72696b93cd5105537eff49df4cad86b9379bfccdb206427642c854",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          78
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/skills/learning.py",
+      "line_count": 723,
+      "sha256": "8fa94e5012a13702bc58ee8c27291c8b9decb1f43f4d55e13af15c8509278cc9",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          723
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/skills/ports.py",
+      "line_count": 73,
+      "sha256": "1a2a3c1952a87eb600ae5ace8e894734110e60c9ca264ee16329779ac16929a8",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          73
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/skills/registry.py",
+      "line_count": 1277,
+      "sha256": "c60a56f170d0f2cfe8e56ee8a8b0a16490fb2f0bb307c784fdb10de1f5ad632f",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          1277
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/skills/repo_install.py",
+      "line_count": 1079,
+      "sha256": "9714e7c86038ffe815ca3e23fd3c7e728fb08a6ebb0995130579ca809be1764c",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          1079
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/skills/runtime.py",
+      "line_count": 234,
+      "sha256": "d0863a0430b0679fe0915cabb93e8285002ae25c9433c5d7efc05811daa0ec25",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          234
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/skills/workflow.py",
+      "line_count": 261,
+      "sha256": "12f7c10c82bc0f4ae41f029e3b4b73e0a866cfd399ca3152647c589254e151b5",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          261
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/soulspec/__init__.py",
+      "line_count": 15,
+      "sha256": "65620da2c10507505e30c5597cc873aacf9f0012d16db577851230a99f2eca81",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          15
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/soulspec/adapters.py",
+      "line_count": 215,
+      "sha256": "70af4d3a3a641a3f29f26ec68409c685662fee1b9965471ed00ba3efdd293121",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          215
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/soulspec/lifecycle.py",
+      "line_count": 92,
+      "sha256": "b70a155288a10d5216252c0ab14dbd360f0e1df2d500e2c1cdc271c4319b2373",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          92
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/soulspec/merge.py",
+      "line_count": 224,
+      "sha256": "9964d8959158d9410b4a13707fe6eacb8764b69ae4643bebd1de0fbeea21641b",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          224
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/soulspec/runtime.py",
+      "line_count": 130,
+      "sha256": "5e955ff85133efc88afeca2b58880e6b7e5de4875417bd0dc6925eca070b0257",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          130
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    },
+    {
+      "path": "machina/soulspec/schema.py",
+      "line_count": 721,
+      "sha256": "6f3c3b79f1a9e8f2ad90ed2590173db11c44b7ac386abd189e7cb00775af5efd",
+      "status": "full",
+      "ranges": [
+        [
+          1,
+          721
+        ]
+      ],
+      "method": "bounded source reads in this conversation; unchanged prior complete reads retained and changed sections reread"
+    }
+  ]
+}

@@ -1,0 +1,338 @@
+.........FFFFFF.F                                                        [100%]
+=================================== FAILURES ===================================
+_____________________ test_submit_persists_embedding_space _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b15b5d0>
+
+    async def test_submit_persists_embedding_space(monkeypatch):
+        """A submitted vector persists the space of the producing embedder."""
+        from machina.core.serialization import embedding_to_str
+        from machina.memory.approval import MemoryApprovalGate
+        from tests.support.database import attach_connection
+    
+        gate = MemoryApprovalGate(enabled=True)
+        mock_db = AsyncMock()
+        attach_connection(mock_db)
+        _use_embedder(monkeypatch, "model-a")
+        executed: list[tuple[str, tuple]] = []
+    
+        async def fake_execute(query, *args):
+            executed.append((query, args))
+            return "INSERT 0 1"
+    
+        mock_db.execute = fake_execute
+        with patch("machina.memory.approval.db", mock_db):
+            pending = await gate.submit(
+                content="Submitted while model-a was configured",
+                category="fact",
+                embedding=list(UNIT_E0),
+            )
+        assert pending is not None
+        insert_query, *params = [query for query, _ in executed if "INSERT INTO pending_memories" in query][0]
+>       assert "embedding_space" in insert_query
+E       AssertionError: assert 'embedding_space' in '\n'
+
+tests/test_memory_embedding_space.py:423: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 13:07:53,940 [AUDIT] {"timestamp": 1792084073.9399931, "event": "memory_pending_create", "pending_id": "040560d3-8d75-4b6b-b88a-bf534f013c80", "agent_id": "harness", "category": "fact", "redactions": []}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084073.9399931, "event": "memory_pending_create", "pending_id": "040560d3-8d75-4b6b-b88a-bf534f013c80", "agent_id": "harness", "category": "fact", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_________________ test_approve_passes_submission_space_through _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b1231c0>
+
+    async def test_approve_passes_submission_space_through(monkeypatch):
+        """Completion forwards the pending row's space into the durable write."""
+        from machina.core.serialization import embedding_to_str
+        from machina.memory.approval import MemoryApprovalGate
+        from tests.support.database import attach_connection
+    
+        gate = MemoryApprovalGate(enabled=True)
+        mock_db = AsyncMock()
+        attach_connection(mock_db)
+        row = _pending_row(
+            embedding=embedding_to_str(list(UNIT_E0)),
+            embedding_space="fake:model-a:1536",
+        )
+        mock_db.fetchrow = AsyncMock(return_value=row)
+        mock_store = AsyncMock()
+        mock_store.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
+        with (
+            patch("machina.memory.approval.db", mock_db),
+            patch("machina.memory.approval.memory_store", mock_store),
+        ):
+            await gate.approve(row["id"])
+        select_query = mock_db.fetchrow.await_args.args[0]
+>       assert "embedding_space" in select_query
+E       AssertionError: assert 'embedding_space' in '\n                    SELECT id, content, category, importance, agent_id, session_id,\n                           red...    base_strength, embedding\n                    FROM pending_memories WHERE id = $1 FOR UPDATE\n                    '
+
+tests/test_memory_embedding_space.py:452: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 13:07:53,989 [AUDIT] {"timestamp": 1792084073.989144, "event": "memory_approved", "pending_id": "704274f1-f018-43ac-9aea-976289e1298f", "memory_id": "dbb8fac5-213c-49a0-86ad-8170dc3f3bbe", "auto_approved": false}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084073.989144, "event": "memory_approved", "pending_id": "704274f1-f018-43ac-9aea-976289e1298f", "memory_id": "dbb8fac5-213c-49a0-86ad-8170dc3f3bbe", "auto_approved": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_______ test_pending_submission_keeps_original_space_across_model_switch _______
+
+db_pool = <machina.db.connection.Database object at 0x10b531040>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b123230>
+
+    @pytest.mark.integration
+    @pytest.mark.db
+    async def test_pending_submission_keeps_original_space_across_model_switch(db_pool, monkeypatch):
+        """A vector submitted under space A is completed with A, not the current B."""
+        import machina.memory.approval as approval_module
+        import machina.memory.identity as identity_module
+        import machina.memory.store as store_module
+        from machina.memory.approval import MemoryApprovalGate
+    
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(store_module, "db", database)
+            monkeypatch.setattr(identity_module, "db", database)
+            monkeypatch.setattr(approval_module, "db", database)
+            gate = MemoryApprovalGate(enabled=True)
+    
+            _use_embedder(monkeypatch, "model-a")
+            pending = await gate.submit(
+                content="Submitted while model-a was configured",
+                category="fact",
+                embedding=list(UNIT_E0),
+            )
+    
+            # Same width, different model: the configured space changes while the
+            # write is still pending.
+            _use_embedder(monkeypatch, "model-b")
+            memory = await gate.approve(pending.id)
+            assert memory is not None
+            stored_space = await database.fetchval(
+                "SELECT embedding_space FROM memories WHERE id=$1", memory.id
+            )
+>           assert stored_space is not None and "model-a" in stored_space, (
+                "approval must complete the vector under its ORIGINAL submission "
+                "space, not the embedder configured at approval time"
+            )
+E           AssertionError: approval must complete the vector under its ORIGINAL submission space, not the embedder configured at approval time
+E           assert ('_fake:model-b:1536' is not None and 'model-a' in '_fake:model-b:1536')
+
+tests/test_memory_embedding_space.py:486: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 13:07:54,097 [AUDIT] {"timestamp": 1792084074.097549, "event": "memory_pending_create", "pending_id": "dc4e2ce4-0b36-4df4-8b62-0e42d3fa21a7", "agent_id": "harness", "category": "fact", "redactions": []}
+2026-10-15 13:07:54,101 [AUDIT] {"timestamp": 1792084074.1010299, "event": "memory_add", "memory_id": "5b14b6be-0f13-4507-a919-35beacf3f15f", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+2026-10-15 13:07:54,102 [AUDIT] {"timestamp": 1792084074.102188, "event": "memory_approved", "pending_id": "dc4e2ce4-0b36-4df4-8b62-0e42d3fa21a7", "memory_id": "5b14b6be-0f13-4507-a919-35beacf3f15f", "auto_approved": false}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.097549, "event": "memory_pending_create", "pending_id": "dc4e2ce4-0b36-4df4-8b62-0e42d3fa21a7", "agent_id": "harness", "category": "fact", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.1010299, "event": "memory_add", "memory_id": "5b14b6be-0f13-4507-a919-35beacf3f15f", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.102188, "event": "memory_approved", "pending_id": "dc4e2ce4-0b36-4df4-8b62-0e42d3fa21a7", "memory_id": "5b14b6be-0f13-4507-a919-35beacf3f15f", "auto_approved": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+__________ test_approve_all_keeps_original_space_across_model_switch ___________
+
+db_pool = <machina.db.connection.Database object at 0x10b11add0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b58b4d0>
+
+    @pytest.mark.integration
+    @pytest.mark.db
+    async def test_approve_all_keeps_original_space_across_model_switch(db_pool, monkeypatch):
+        """Batch approval completes every row under its original space."""
+        import machina.memory.approval as approval_module
+        import machina.memory.identity as identity_module
+        import machina.memory.store as store_module
+        from machina.memory.approval import MemoryApprovalGate
+    
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(store_module, "db", database)
+            monkeypatch.setattr(identity_module, "db", database)
+            monkeypatch.setattr(approval_module, "db", database)
+            gate = MemoryApprovalGate(enabled=True)
+            agent_id = f"m1b-approve-all-{uuid.uuid4()}"
+    
+            _use_embedder(monkeypatch, "model-a")
+            for index in range(2):
+                await gate.submit(
+                    content=f"Pending memory {index}",
+                    category="fact",
+                    agent_id=agent_id,
+                    embedding=list(UNIT_E0),
+                )
+    
+            _use_embedder(monkeypatch, "model-b")
+            assert await gate.approve_all(agent_id=agent_id) == 2
+    
+            spaces = await database.fetch(
+                "SELECT embedding_space FROM memories WHERE agent_id=$1", agent_id
+            )
+            assert len(spaces) == 2
+>           assert all(row["embedding_space"] and "model-a" in row["embedding_space"] for row in spaces)
+E           assert False
+E            +  where False = all(<generator object test_approve_all_keeps_original_space_across_model_switch.<locals>.<genexpr> at 0x10b525ee0>)
+
+tests/test_memory_embedding_space.py:528: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 13:07:54,222 [AUDIT] {"timestamp": 1792084074.2220328, "event": "memory_pending_create", "pending_id": "48f2fb6a-230c-4acb-b9e7-87f54554fd65", "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83", "category": "fact", "redactions": []}
+2026-10-15 13:07:54,223 [AUDIT] {"timestamp": 1792084074.2232609, "event": "memory_pending_create", "pending_id": "3c0d39ea-b1ff-4a8b-a47a-dd24d7f06ceb", "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83", "category": "fact", "redactions": []}
+2026-10-15 13:07:54,226 [AUDIT] {"timestamp": 1792084074.226343, "event": "memory_add", "memory_id": "549ffd3d-0356-4140-8f53-657cc1771c5d", "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83", "category": "fact", "importance": 0.5, "quarantined": false}
+2026-10-15 13:07:54,227 [AUDIT] {"timestamp": 1792084074.227662, "event": "memory_add", "memory_id": "593e9074-735e-45fa-a53e-d78f6bb5855f", "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83", "category": "fact", "importance": 0.5, "quarantined": false}
+2026-10-15 13:07:54,230 [AUDIT] {"timestamp": 1792084074.2301838, "event": "memory_approve_all", "count": 2, "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.2220328, "event": "memory_pending_create", "pending_id": "48f2fb6a-230c-4acb-b9e7-87f54554fd65", "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83", "category": "fact", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.2232609, "event": "memory_pending_create", "pending_id": "3c0d39ea-b1ff-4a8b-a47a-dd24d7f06ceb", "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83", "category": "fact", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.226343, "event": "memory_add", "memory_id": "549ffd3d-0356-4140-8f53-657cc1771c5d", "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83", "category": "fact", "importance": 0.5, "quarantined": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.227662, "event": "memory_add", "memory_id": "593e9074-735e-45fa-a53e-d78f6bb5855f", "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83", "category": "fact", "importance": 0.5, "quarantined": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.2301838, "event": "memory_approve_all", "count": 2, "agent_id": "m1b-approve-all-6272f29a-383e-418e-9fee-1f0d0bb23b83"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+______ test_existing_database_gains_pending_embedding_space_on_first_use _______
+
+db_pool = <machina.db.connection.Database object at 0x10b0a8870>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b588bb0>
+
+    @pytest.mark.integration
+    @pytest.mark.db
+    async def test_existing_database_gains_pending_embedding_space_on_first_use(db_pool, monkeypatch):
+        """A pre-migration pending_memories table is upgraded additively and idempotently."""
+        import machina.memory.approval as approval_module
+        import machina.memory.identity as identity_module
+        import machina.memory.store as store_module
+        from machina.memory.approval import MemoryApprovalGate
+    
+        async with isolated_schema(db_pool) as (schema, database):
+            # Simulate an existing installation that predates this follow-up.
+            await database.execute("ALTER TABLE pending_memories DROP COLUMN IF EXISTS embedding_space")
+    
+            monkeypatch.setattr(store_module, "db", database)
+            monkeypatch.setattr(identity_module, "db", database)
+            monkeypatch.setattr(approval_module, "db", database)
+            _use_embedder(monkeypatch, "model-a")
+    
+            # The first embedding-backed gate use applies the additive migration.
+            gate = MemoryApprovalGate(enabled=True)
+            pending = await gate.submit(
+                content="First pending write after upgrade",
+                category="fact",
+                embedding=list(UNIT_E0),
+            )
+    
+            column_type = await database.fetchval(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_schema=$1 AND table_name='pending_memories' "
+                "AND column_name='embedding_space'",
+                schema,
+            )
+>           assert column_type == "text"
+E           AssertionError: assert None == 'text'
+
+tests/test_memory_embedding_space.py:563: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 13:07:54,363 [AUDIT] {"timestamp": 1792084074.3630579, "event": "memory_pending_create", "pending_id": "119109ec-f908-45a1-991d-227e200cfcf4", "agent_id": "harness", "category": "fact", "redactions": []}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.3630579, "event": "memory_pending_create", "pending_id": "119109ec-f908-45a1-991d-227e200cfcf4", "agent_id": "harness", "category": "fact", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_______ test_pending_migration_failure_degrades_to_pre_migration_shapes ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b122190>
+
+    async def test_pending_migration_failure_degrades_to_pre_migration_shapes(monkeypatch):
+        """Where the additive DDL cannot run, the gate keeps its pre-migration path."""
+        from machina.memory.approval import MemoryApprovalGate
+        from tests.support.database import attach_connection
+    
+        def _failing_db():
+            mock_db = AsyncMock()
+            attach_connection(mock_db)
+            executed: list[tuple[str, tuple]] = []
+    
+            async def fake_execute(query, *args):
+                executed.append((query, args))
+                if "ALTER TABLE pending_memories" in query:
+                    raise RuntimeError("permission denied for DDL")
+                return "OK"
+    
+            mock_db.execute = fake_execute
+            return mock_db, executed
+    
+        gate = MemoryApprovalGate(enabled=True)
+        mock_db, executed = _failing_db()
+        _use_embedder(monkeypatch, "model-a")
+        with patch("machina.memory.approval.db", mock_db):
+            pending = await gate.submit(
+                content="degraded pending write",
+                category="fact",
+                embedding=list(UNIT_E0),
+            )
+        assert pending is not None
+        insert_query, *params = [
+            query for query, _ in executed if "INSERT INTO pending_memories" in query
+        ][0]
+        assert "embedding_space" not in insert_query
+        assert params[-1] is not None  # the embedding itself is still stored
+    
+        second = MemoryApprovalGate(enabled=True)
+        mock_db, _ = _failing_db()
+        mock_db.fetchrow = AsyncMock(return_value=_pending_row(id=pending.id))
+        mock_store = AsyncMock()
+        mock_store.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
+        with (
+            patch("machina.memory.approval.db", mock_db),
+            patch("machina.memory.approval.memory_store", mock_store),
+        ):
+            memory = await second.approve(pending.id)
+        assert memory is not None
+        select_query = mock_db.fetchrow.await_args.args[0]
+        assert "embedding" in select_query
+        assert "embedding_space" not in select_query
+>       assert mock_store.add.await_args.kwargs["embedding_space"] is None
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'embedding_space'
+
+tests/test_memory_embedding_space.py:630: KeyError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 13:07:54,402 [AUDIT] {"timestamp": 1792084074.402667, "event": "memory_pending_create", "pending_id": "cfa74d5d-6223-4458-b2bc-4b92d423ac3a", "agent_id": "harness", "category": "fact", "redactions": []}
+2026-10-15 13:07:54,404 [AUDIT] {"timestamp": 1792084074.404151, "event": "memory_approved", "pending_id": "cfa74d5d-6223-4458-b2bc-4b92d423ac3a", "memory_id": "989ffa97-be15-4124-afc0-580b685cf189", "auto_approved": false}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.402667, "event": "memory_pending_create", "pending_id": "cfa74d5d-6223-4458-b2bc-4b92d423ac3a", "agent_id": "harness", "category": "fact", "redactions": []}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792084074.404151, "event": "memory_approved", "pending_id": "cfa74d5d-6223-4458-b2bc-4b92d423ac3a", "memory_id": "989ffa97-be15-4124-afc0-580b685cf189", "auto_approved": false}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+_______________ test_runtime_upgrade_adds_memory_embedding_space _______________
+
+db_pool = <machina.db.connection.Database object at 0x10b57dd30>
+
+    @pytest.mark.db
+    async def test_runtime_upgrade_adds_memory_embedding_space(db_pool):
+        """Existing installations gain memories.embedding_space at boot (H08).
+    
+        ``schema.sql`` never re-runs on an initialized database, so
+        ``initialize_runtime_schema`` must apply the same idempotent DDL the
+        store would otherwise apply lazily.
+        """
+        async with isolated_schema(db_pool) as (schema, database):
+            await database.execute("DROP INDEX IF EXISTS idx_memories_embedding_space")
+            await database.execute("ALTER TABLE memories DROP COLUMN IF EXISTS embedding_space")
+    
+            await database.initialize_runtime_schema()
+            await database.initialize_runtime_schema()
+    
+            column_type = await database.fetchval(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_schema=$1 AND table_name='memories' "
+                "AND column_name='embedding_space'",
+                schema,
+            )
+>           assert column_type == "text"
+E           AssertionError: assert None == 'text'
+
+tests/test_runtime_migrations.py:66: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_memory_embedding_space.py::test_submit_persists_embedding_space
+FAILED tests/test_memory_embedding_space.py::test_approve_passes_submission_space_through
+FAILED tests/test_memory_embedding_space.py::test_pending_submission_keeps_original_space_across_model_switch
+FAILED tests/test_memory_embedding_space.py::test_approve_all_keeps_original_space_across_model_switch
+FAILED tests/test_memory_embedding_space.py::test_existing_database_gains_pending_embedding_space_on_first_use
+FAILED tests/test_memory_embedding_space.py::test_pending_migration_failure_degrades_to_pre_migration_shapes
+FAILED tests/test_runtime_migrations.py::test_runtime_upgrade_adds_memory_embedding_space
+7 failed, 10 passed in 1.60s

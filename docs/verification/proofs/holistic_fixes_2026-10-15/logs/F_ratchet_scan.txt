@@ -1,0 +1,7 @@
+file                                                  deferred          lines
+machina/core/firecrawl_lifecycle.py                 0 (new)     418 (new)
+machina/cli/launcher.py                             0 (+0)     115 (+11)
+machina/core/config.py                              3 (+0)     730 (+22)
+tests/test_firecrawl_lifecycle.py                   1 (new)     403 (new)
+
+tree deferred census: 720 (cap 717; overflow owned by other lanes)

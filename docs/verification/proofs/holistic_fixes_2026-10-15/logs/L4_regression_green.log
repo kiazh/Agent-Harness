@@ -1,0 +1,23 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_file_requires_review[cp -RL source clone] PASSED [  8%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_file_requires_review[cp -R --dereference source clone] PASSED [ 16%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_file_requires_review[uv run cp -RL source clone] PASSED [ 25%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_file_requires_review[cp -RL source/sub clone] PASSED [ 33%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_credential_target_requires_review PASSED [ 41%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_outside_directory_requires_review PASSED [ 50%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_of_sensitive_pair_through_link_requires_review PASSED [ 58%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_dereferencing_copy_would_materialize_outside_bytes PASSED [ 66%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_copy_without_dereference_stays_routine PASSED [ 75%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_recursive_dereferencing_copy_with_inside_links_stays_routine PASSED [ 83%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_search_files_ignores_a_swapped_symlink PASSED [ 91%]
+tests/test_holistic_review_l4_permissions_2026_10_15.py::test_search_files_still_follows_in_workspace_symlinks PASSED [100%]
+
+============================== 12 passed in 0.44s ==============================

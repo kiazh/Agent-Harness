@@ -1,0 +1,76 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+______________ test_set_effort_takes_effect_despite_an_env_shadow ______________
+
+sandbox = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2359/test_set_effort_takes_effect_d0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d2e1810>
+
+    async def test_set_effort_takes_effect_despite_an_env_shadow(sandbox, monkeypatch):
+        """H23: ``/effort`` must not echo success while MACHINA_REASONING_EFFORT wins."""
+        from machina.core.config import config
+    
+        monkeypatch.setenv("MACHINA_REASONING_EFFORT", "high")
+        out = await feature.models_set_effort(
+            _gw(provider="openai", model="gpt-4o"), {"effort": "low"}
+        )
+        assert out["effort"] == "low"
+>       assert config.get("reasoning_effort") == "low"
+E       AssertionError: assert 'high' == 'low'
+E         
+E         - low
+E         + high
+
+tests/test_r4_082_gateway_providers.py:211: AssertionError
+____________ test_set_effort_off_takes_effect_despite_an_env_shadow ____________
+
+sandbox = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2359/test_set_effort_off_takes_effe0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10db4b0b0>
+
+    async def test_set_effort_off_takes_effect_despite_an_env_shadow(sandbox, monkeypatch):
+        """Clearing to provider default must also beat an explicit env value."""
+        from machina.core.config import config
+    
+        monkeypatch.setenv("MACHINA_REASONING_EFFORT", "high")
+        out = await feature.models_set_effort(
+            _gw(provider="openai", model="gpt-4o"), {"effort": "off"}
+        )
+        assert out["effort"] is None
+>       assert config.get("reasoning_effort") == ""
+E       AssertionError: assert 'high' == ''
+E         
+E         + high
+
+tests/test_r4_082_gateway_providers.py:223: AssertionError
+__________________ test_set_effort_persist_syncs_the_env_file __________________
+
+sandbox = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2359/test_set_effort_persist_syncs_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d2e5370>
+
+    async def test_set_effort_persist_syncs_the_env_file(sandbox, monkeypatch):
+        """A persisted effort survives a restart: .env carries the same value."""
+        import importlib
+    
+        from machina.security.env_file import read_env_values
+    
+        config_module = importlib.import_module("machina.core.config")
+        monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", sandbox / "config.yaml")
+        monkeypatch.setenv("MACHINA_REASONING_EFFORT", "high")
+    
+        out = await feature.models_set_effort(
+            _gw(provider="openai", model="gpt-4o"), {"effort": "medium", "persist": True}
+        )
+        assert out["effort"] == "medium"
+>       assert config_module.config.get("reasoning_effort") == "medium"
+E       AssertionError: assert 'high' == 'medium'
+E         
+E         - medium
+E         + high
+
+tests/test_r4_082_gateway_providers.py:240: AssertionError
+------------------------------ Captured log call -------------------------------
+DEBUG    machina.core.config:config.py:583 Config saved to /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2359/test_set_effort_persist_syncs_0/config.yaml
+=========================== short test summary info ============================
+FAILED tests/test_r4_082_gateway_providers.py::test_set_effort_takes_effect_despite_an_env_shadow
+FAILED tests/test_r4_082_gateway_providers.py::test_set_effort_off_takes_effect_despite_an_env_shadow
+FAILED tests/test_r4_082_gateway_providers.py::test_set_effort_persist_syncs_the_env_file
+3 failed, 24 deselected in 0.42s

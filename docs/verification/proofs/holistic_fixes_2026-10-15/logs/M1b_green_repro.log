@@ -1,0 +1,10 @@
+2026-10-15 13:10:35,082 [AUDIT] {"timestamp": 1792084235.082165, "event": "memory_pending_create", "pending_id": "260b3b43-db05-4ed1-9519-bb3d02b07094", "agent_id": "harness", "category": "fact", "redactions": []}
+Audit event dropped before the writer started; event was not persisted
+2026-10-15 13:10:35,086 [AUDIT] {"timestamp": 1792084235.0861928, "event": "memory_add", "memory_id": "5d8f6392-c0ee-41a3-8a9a-ca2a15cce98b", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+Audit event dropped before the writer started; event was not persisted
+2026-10-15 13:10:35,087 [AUDIT] {"timestamp": 1792084235.087369, "event": "memory_approved", "pending_id": "260b3b43-db05-4ed1-9519-bb3d02b07094", "memory_id": "5d8f6392-c0ee-41a3-8a9a-ca2a15cce98b", "auto_approved": false}
+Audit event dropped before the writer started; event was not persisted
+submitted under        : fake:model-a:1536
+pending row space      : _fake:model-a:1536
+completed memory space : _fake:model-a:1536
+RESULT: OK — completed row keeps the submission space

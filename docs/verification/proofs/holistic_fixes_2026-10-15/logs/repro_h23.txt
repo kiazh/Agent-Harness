@@ -1,0 +1,6 @@
+== H23: /effort echo vs environment precedence ==
+request /effort low -> response effort='low'
+config.get('reasoning_effort') -> 'high' (env MACHINA_REASONING_EFFORT=high)
+case1 shadowed-success: REPRODUCED
+config.set('reasoning_effort','high') with env='' -> get()=''
+RESULT: REPRODUCED — the echo claims the change while calls keep the env value

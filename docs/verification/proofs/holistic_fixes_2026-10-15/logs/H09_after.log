@@ -1,0 +1,24 @@
+probed module: /Users/shadow/machina/machina/interop.py
+stub resolution: {'opencode': '/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-jpbhv5b8/opencode', 'codex': '/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-jpbhv5b8/codex', 'hermes': '/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-jpbhv5b8/hermes'}
+
+platform=opencode prompt='--help'
+  command    = ['/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-jpbhv5b8/opencode', 'run', '--', '--help']
+  exit_code  = 0
+  ok         = True
+  stdout     = 'TASK: --help'
+  stderr     = ''
+
+platform=codex prompt='--help'
+  command    = ['/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-jpbhv5b8/codex', 'exec', '-']
+  exit_code  = 0
+  ok         = True
+  stdout     = 'TASK: --help'
+  stderr     = ''
+
+platform=hermes prompt='--help'
+  command    = ['/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-jpbhv5b8/hermes', '--oneshot=--help']
+  exit_code  = 0
+  ok         = True
+  stdout     = 'TASK: --help'
+  stderr     = ''
+

@@ -1,0 +1,40 @@
+temp HOME: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-f-lifecycle-id4quxer/home
+
+[1] default config (autostart off)
+  ok   start_if_enabled() is False
+  ok   stop_if_enabled() is False
+  ok   no ~/.machina created
+
+[2] autostart on, up.sh missing -> warn once, never raise
+  ok   first start False
+  ok   second start False
+  ok   no marker
+  ok   warned exactly once
+
+[3] autostart on + stub stack -> start, cross-process refcount, last-session stop
+  ok   start_if_enabled() is True
+  ok   limactl then up.sh, in order — ['limactl start docker', 'up.sh up docker_host=unix:///var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-f-lifecycle-id4quxer/home/.lima/docker/sock/docker.sock']
+  ok   marker for this PID
+  ok   peer session started (its marker appears)
+  ok   first session's stop keeps the live peer's stack
+  ok   peer marker retained
+  ok   our marker consumed
+  ok   stale marker pruned
+  ok   no teardown traced while the peer lives
+  ok   peer stopped cleanly — environment file could not be resolved
+peer-stop:True
+  ok   last session's teardown: up.sh down then limactl stop docker — ['up.sh down docker_host=unix:///var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-f-lifecycle-id4quxer/home/.lima/docker/sock/docker.sock', 'limactl stop docker']
+  ok   peer marker consumed by its own stop
+  ok   repeat stop (atexit net) no-ops
+
+lifecycle log tail:
+    2026-10-15 13:36:47 start: launching /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-f-lifecycle-id4quxer/bin/limactl start docker && /bin/sh /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-f-lifecycle-id4quxer/home/firecrawl/up.sh up
+    2026-10-15 13:36:47 start: scheduled (pid 32079); output appends below
+    2026-10-15 13:36:47 pruned 1 stale session marker(s)
+    2026-10-15 13:36:47 stop: another live session still holds the stack; keeping it
+    2026-10-15 13:36:52 stop: running up.sh down
+    2026-10-15 13:36:52 stop: up.sh down ok
+    2026-10-15 13:36:52 stop: running limactl stop docker
+    2026-10-15 13:36:52 stop: limactl stop docker ok
+
+RESULT: PASS

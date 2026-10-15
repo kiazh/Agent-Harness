@@ -1,0 +1,18 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 104 items
+
+tests/test_provider_args_contract.py ......                              [  5%]
+tests/test_configuration_precedence.py ............                      [ 17%]
+tests/test_config_import_cycle.py .......                                [ 24%]
+tests/test_config_reentrancy.py ..                                       [ 25%]
+tests/test_production_readiness_p1.py ...............................    [ 55%]
+tests/test_code_review_fixes.py ......................................   [ 92%]
+tests/test_r4_080_boot_config.py ......                                  [ 98%]
+tests/test_gateway_config_atomicity.py ..                                [100%]
+
+============================= 104 passed in 2.35s ==============================

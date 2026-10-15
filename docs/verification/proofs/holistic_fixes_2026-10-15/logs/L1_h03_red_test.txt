@@ -1,0 +1,57 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_e2e_overridden_job_runs_and_reconciles_session_owner ___________
+
+scheduler_db = <machina.db.connection.Database object at 0x10a376c40>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109972060>
+
+    @pytest.mark.asyncio
+    async def test_e2e_overridden_job_runs_and_reconciles_session_owner(scheduler_db, monkeypatch):
+        from machina.core.scheduler import JobRunner, job_store
+        from machina.core.session import SessionManager
+    
+        _quiet_agent_config(monkeypatch)
+        provider = _FinalProvider()
+        monkeypatch.setattr("machina.core.provider.get_provider", lambda **kwargs: provider)
+    
+        session = await SessionManager().create(title="h03 override", agent_id="harness")
+        job = await job_store.create(
+            name="h03 researcher job",
+            kind="interval",
+            session_id=session.id,
+            prompt="survey the repo",
+            interval_seconds=10,
+            agent_name="researcher",
+        )
+        await scheduler_db.execute(
+            "UPDATE jobs SET next_run_at = now() - interval '1 second' WHERE id = $1", job.id
+        )
+    
+        assert await JobRunner().run_due_once() is True
+    
+        finished = await job_store.get(job.id)
+        assert finished is not None
+        assert finished.run_count == 1
+>       assert finished.status == "idle" and finished.last_error is None, finished.last_error
+E       AssertionError: PermissionError: Session does not belong to the running agent
+E       assert ('error' == 'idle'
+E         
+E         - idle
+E         + error)
+
+tests/test_holistic_h03_scheduler_ownership.py:112: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 13:02:01,488 [AUDIT] {"timestamp": 1792083721.488854, "event": "agent_run_start", "session_id": "b7187f2e-0671-4c78-b0cf-38aa979306ff", "agent_id": "researcher"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083721.488854, "event": "agent_run_start", "session_id": "b7187f2e-0671-4c78-b0cf-38aa979306ff", "agent_id": "researcher"}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+ERROR    machina.core.scheduler:scheduler.py:689 Job h03 researcher job (e99dfd5a-102b-4d12-b5fd-0787fdb209be) failed
+PermissionError
+/Users/shadow/machina/machina/core/scheduler.py:666 (run_due_once)
+/Users/shadow/machina/machina/core/scheduler.py:995 (_execute)
+/Users/shadow/machina/machina/core/agent.py:107 (wrapper)
+/Users/shadow/machina/machina/core/agent.py:1792 (run)
+/Users/shadow/machina/machina/core/agent.py:567 (_prepare_context)
+=========================== short test summary info ============================
+FAILED tests/test_holistic_h03_scheduler_ownership.py::test_e2e_overridden_job_runs_and_reconciles_session_owner
+1 failed in 0.66s

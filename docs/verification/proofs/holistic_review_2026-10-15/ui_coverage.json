@@ -1,0 +1,1754 @@
+[
+  {
+    "path": ".dockerignore",
+    "line_count": 69,
+    "sha256": "9c735c23a10899cc647ed0fb2e0f6187c688b0ee6362cf5a57368bd9da27de8c",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        69
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": ".env.example",
+    "line_count": 100,
+    "sha256": "c5ce3654833363f66dd0f360307709937ba63bd6823152c4b970f07fdff405cb",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        100
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": ".github/dependabot.yml",
+    "line_count": 32,
+    "sha256": "62b37a1cecdd05c67708c3ea6550528c67419e56311d122eb537bf6f511d9cb6",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        32
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "line_count": 211,
+    "sha256": "5cb08f834fdc55ef0515af6f5487e984a78d33245af7ac1064d2698ddc2145fc",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        211
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": ".github/workflows/workflow-trial.yml",
+    "line_count": 67,
+    "sha256": "5ceb4bf0b843c1b1aaecaa341471af0da54a20a727d3980478c01d6494503a49",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        67
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "Dockerfile",
+    "line_count": 53,
+    "sha256": "f64ef7cd3152672e7979fe4a47363515b44effdf9ea386aa1f109bd311dd0bb4",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        53
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "Dockerfile.sandbox",
+    "line_count": 28,
+    "sha256": "42e11ef3caa929bde482c2e84910539f0ff30837cf9251231753c905c13aa332",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        28
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "docker-compose.yml",
+    "line_count": 87,
+    "sha256": "ac0275fe9286ea959d98bbf92bd20b78a340d9d774ccd0f03bc00988c79a32fc",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        87
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "install.sh",
+    "line_count": 622,
+    "sha256": "5f5d7875a5bafb0a5e554a6e35ec9c8a2125dfe43bc97576eb0cde28c25edcd8",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        622
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "machina/api/__init__.py",
+    "line_count": 15,
+    "sha256": "5521936a16da184f42218bddad2610480d443495e572a057e028a527f5b93be7",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        15
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/__main__.py",
+    "line_count": 31,
+    "sha256": "427fc61aa55f591b1acbe6bef04627dd8206d1d33925c66aa6dc6f0e3bd3afd9",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        31
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/app.py",
+    "line_count": 233,
+    "sha256": "aca1c5a43e2bf39ba88b44b0d9b000b7be722740cbec6f5c930a3784b1a6e4d6",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        233
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/auth.py",
+    "line_count": 63,
+    "sha256": "da2419d125cf2051807567f7dcf1bfad3da1349ce63d281b97cb3977758ebca9",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        63
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/rate_limit.py",
+    "line_count": 62,
+    "sha256": "ae08a5eb31f8bbef1de573325edbd5772623955903193d57773bc51f68ec77c7",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        62
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/__init__.py",
+    "line_count": 25,
+    "sha256": "d6766914d579a834282ae6d02b1053c1fc6284c8f074ea2d7abf9bf5a8485c80",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        25
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/agents.py",
+    "line_count": 21,
+    "sha256": "5ffbea48a04be307f2ee6bee68c8c3e21043db2e38abc75df14e3187525f508a",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        21
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/approvals.py",
+    "line_count": 116,
+    "sha256": "2c15b6a03c2d48e12f1125de3cb1fe185fb4cd8ab03eb1956329cbf159781687",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        116
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/documents.py",
+    "line_count": 86,
+    "sha256": "68cdbea90ac2fb595f8dacada6dbf641e052f7bf13c91d3b2c7f3bb5c3e7f78e",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        86
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/health.py",
+    "line_count": 65,
+    "sha256": "966d92d8ddfb9cfb5f32219eecff5f404e46c87072905193bf54c29ededda70d",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        65
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/jobs.py",
+    "line_count": 88,
+    "sha256": "361bf33d0216a981e8115fb1bf6945113db0b0feb2cdeef0c54019969fea8d5d",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        88
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/memory.py",
+    "line_count": 116,
+    "sha256": "f4aa28505fce429b4de7a54f83183c48bea792d47a77c4b9c8ce680dd60f3d58",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        116
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/models.py",
+    "line_count": 84,
+    "sha256": "2fe88003fcd894e8f16641c997cd1eefb9b7b05f9e07cb543e663e91f0b6cb01",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        84
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/rpc.py",
+    "line_count": 52,
+    "sha256": "0223d1d53edc0be621c3a055c152d6ac17f5dda9a57b2ca1615b82e7fd86e912",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        52
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/sessions.py",
+    "line_count": 175,
+    "sha256": "4874af7620cbee4691f9cd7e207aefae2fc9daa4def57483399306c0b9eb4c29",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        175
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/shared.py",
+    "line_count": 126,
+    "sha256": "d3915ac3f46e37b31538609cf0423d9d2b2df1033ec6f1a9ebf76c5276609405",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        126
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/api/routes/streaming.py",
+    "line_count": 471,
+    "sha256": "f016dc2f88040e109ed8b9f39490f18d80984fed756b1f999650030237a7daa4",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        471
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/cli/__init__.py",
+    "line_count": 2451,
+    "sha256": "2243a678dec71ea1c9b95ebc534077c5b8e39e57e3c852b898562b13249d7ea1",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        2451
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/cli/auth.py",
+    "line_count": 500,
+    "sha256": "4a26200f4671c8eabd5ca302b61733fb4ddfd00591445fd29eb2881acf23e4d1",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        500
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/cli/growth.py",
+    "line_count": 184,
+    "sha256": "15244b1fbe5f1f2ca78641de2bb7e84992dc16af8dd3d886169a66f3ecc48a56",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        184
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/cli/interop.py",
+    "line_count": 284,
+    "sha256": "85c20f24e589c2506f130da1813e218031f94839566ff5d9e2043da88c46b4b7",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        284
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/cli/launcher.py",
+    "line_count": 104,
+    "sha256": "6411761d1ce139ea752635ed4f74809d8bebfd9a073e01b586699ce0603aaeae",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        104
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/cli/output.py",
+    "line_count": 147,
+    "sha256": "29da56e11bee33b846dad27fb7f379890c112a91b274f30d98027e6e3b17f855",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        147
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/cli/providers.py",
+    "line_count": 424,
+    "sha256": "4fabd37c5e217a6909ee5f4c1042d6cc35bdefd278eb38b33bf1194ea81b19d5",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        424
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/__init__.py",
+    "line_count": 8,
+    "sha256": "8f7b6de238dae3854aaa8113df4708eb7b917bc35a0cf5475206e572cab0ff25",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        8
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/__main__.py",
+    "line_count": 101,
+    "sha256": "dc803de8889f265e12df01f2aa80c054c368625c1ec950876fe1fdc79e088a87",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        101
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/errors.py",
+    "line_count": 27,
+    "sha256": "f8ceb5b561498ce75f1aa0bd6c7f95219b74b507574b4733667a73233e574f28",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        27
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/__init__.py",
+    "line_count": 239,
+    "sha256": "528298a7026a6b9f86ec9f88a253c3afde34402b4db461186528ca30a127bdfc",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        239
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/_common.py",
+    "line_count": 143,
+    "sha256": "ee5b87425a0c0e00c6c7267a62f3fa0a98883f2ccc74baed88fd12df46f02222",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        143
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/agents.py",
+    "line_count": 141,
+    "sha256": "df590d00f214a528b34b4145326cb63e9a139ecd06ec5e9b7eb925d7e738c0a3",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        141
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/auth_chatgpt.py",
+    "line_count": 406,
+    "sha256": "1c3479e280cc077d9e4f416b6a11d855e2df1192ea9335c1882ff69ae565c27d",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        406
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/config.py",
+    "line_count": 60,
+    "sha256": "ed83e438240da0dd1df483fd1f197e9475c0db35527a836c1ffadb87338ae863",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        60
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/connector_oauth.py",
+    "line_count": 199,
+    "sha256": "0922d3699a6a98a43503318b27bd2479921103a454a57ae7572584aea2ae077f",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        199
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/connectors.py",
+    "line_count": 95,
+    "sha256": "624a0aacbad45b4354cfc9e4aed3457a78e422dacdc00f333b848b0239c35c1c",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        95
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/growth.py",
+    "line_count": 81,
+    "sha256": "1162c936d86c2b593599ee20d40a7fec05413d34b6d3d456762322a826fea245",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        81
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/interop.py",
+    "line_count": 238,
+    "sha256": "77e1384ff32249f262154848d3fc45379d3da2a3877b4d83e2330d8d32093648",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        238
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/jobs.py",
+    "line_count": 153,
+    "sha256": "605e27ef4152d64dd7e63680aa5e845663ab41616d40b7adf393319cb21f1688",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        153
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/memory.py",
+    "line_count": 185,
+    "sha256": "3620228f19be8d453316eccf2ac202c30b2243db72fb7dfd8b9c128fae29dc84",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        185
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/mode.py",
+    "line_count": 323,
+    "sha256": "a04cb0413a904adee04f4b2d226b2577671541a3fe1af6819855201fd400f3ab",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        323
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/providers_feature.py",
+    "line_count": 345,
+    "sha256": "a1f4b40f62f2f7edf8c0c05f3d0dd9084256ba58b8a6dda7f934476fe0926e33",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        345
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/secrets.py",
+    "line_count": 154,
+    "sha256": "d81ec9995f28a037d269565fd64ec74d0811ae44f70a2dcbefe5c9dfea3ca8b8",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        154
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/sessions.py",
+    "line_count": 213,
+    "sha256": "ea05096f0d413869b5226be5d77785209b9f5b45286e9da66dfb3dd43bda042e",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        213
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/features/skills.py",
+    "line_count": 139,
+    "sha256": "9c11248288ae647d81fa54ada42aef254c8a8aa0f4320ba7c862765fd6e2185b",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        139
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/serializers.py",
+    "line_count": 71,
+    "sha256": "8da302cfbac1326858125592b4d7fb04fb5dc1becf8dc4773d9f11a9b20dcc1e",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        71
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/gateway/server.py",
+    "line_count": 1245,
+    "sha256": "384e9928496324aa70f385a54e01767d5f0caa695efaf5c1a43283bfb68f6044",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        1245
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/research/__init__.py",
+    "line_count": 1,
+    "sha256": "2c77c2670f0d04953d62df8f252aaf356a78b827059cd6f6a99da35c37da52ec",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        1
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/research/benchmark.py",
+    "line_count": 572,
+    "sha256": "445689749d9b74413740720cf334317391d1c2d151deea4fd2647417b57ee754",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        572
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/research/head_to_head.py",
+    "line_count": 853,
+    "sha256": "f26051e53bc446e9d28efb4355a679b277822ac88a8e21e3d0190c712d3eabae",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        853
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/research/identity_eval.py",
+    "line_count": 162,
+    "sha256": "87d9018b0387a4b89db35009395ea5ccc9befd56383e40c67589bb1520fa74f6",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        162
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/research/locomo.py",
+    "line_count": 884,
+    "sha256": "62f87435f559f10e440617852068e03b2b79040664587893e7a60af14d253308",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        884
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/research/train_memory_policy.py",
+    "line_count": 161,
+    "sha256": "3c091a1b9f7cf57897a16879317355370acc17b75791dfd2812876ae1c45fee1",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        161
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/research/workflow_benchmark.py",
+    "line_count": 147,
+    "sha256": "3360151da92fd4796ab9f9fb2dda1713e6be90f29e3a29b96cc4baa2b79f3f74",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        147
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "machina/research/workflow_trial.py",
+    "line_count": 283,
+    "sha256": "31157c3c0ef55c2894423a89aff5f63abe3d5ac2183b2969e9157953a696d0f5",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        283
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "pyproject.toml",
+    "line_count": 106,
+    "sha256": "89b5897893aebf5956b980ea416264d96452db53cf7b8a8d6d2e43de4e214779",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        106
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "tools/install-helpers.sh",
+    "line_count": 431,
+    "sha256": "74cc566496adc6369db3f081d966d0fb3fa7a62119714a4dd5c70450b2b02deb",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        431
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "ui/.eslintrc.json",
+    "line_count": 25,
+    "sha256": "86d519a728e32c7247992c90558c8d2cb2e4ec04982d99d2620a2f04d1f73920",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        25
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "ui/package.json",
+    "line_count": 28,
+    "sha256": "7b6848778af80dc6c579587b85ce37b9ca8dc53dd6a30eb8940e431154e46847",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        28
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "ui/src/app.ts",
+    "line_count": 1683,
+    "sha256": "f966e22074bb2f7cca7f817c6eea0e98e904d0975601c9ed04d50bd5c0500997",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        1683
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/autocomplete.ts",
+    "line_count": 39,
+    "sha256": "e340cd6033e9abacfbecbae014b6a241d37951f35d5577ee0ddb8785809f4b2a",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        39
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/clipboard.ts",
+    "line_count": 52,
+    "sha256": "ff59a97e1fa7acdf589e010fdcce425a2d34b00702b57b9f25952ccadf65bdd0",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        52
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/commandDispatch.ts",
+    "line_count": 45,
+    "sha256": "83c753328c0cf977edb8504514ead5c38a6c38b164b7b027e59b99a9ccc83f62",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        45
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/commands.ts",
+    "line_count": 77,
+    "sha256": "824afbf50b0ac43331c128417260f97522ff187d3a8997c82ef577ce6f1f294f",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        77
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components.ts",
+    "line_count": 396,
+    "sha256": "33322b53c02fa95233a9480acf12a641b1a59859f63b6ff4e8f098c42f8d43ca",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        396
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/AppShell.ts",
+    "line_count": 147,
+    "sha256": "47092a5834c2e28b9454894e9f34f12ad9518edd482254666a8f791b2f943717",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        147
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/ApprovalCard.ts",
+    "line_count": 276,
+    "sha256": "f88245e718bdabb87df3af37d0b779c1794f5c006e60b997924b198c675138eb",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        276
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/AssistantTurn.ts",
+    "line_count": 66,
+    "sha256": "65fed4de35f106df54e7c03b666a62c53f6e63e8f20891a30e87e5cfffbadabf",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        66
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/DiffBlock.ts",
+    "line_count": 47,
+    "sha256": "c861a5d5f8603d1398d723121fb4cd5f009bdc3126e40ba1cd72ee5284739d7d",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        47
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/Footer.ts",
+    "line_count": 148,
+    "sha256": "70106d1ab936d18f48d3baf89d4fd995379b2ae97f35c80346fbc54f630da844",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        148
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/Form.ts",
+    "line_count": 285,
+    "sha256": "53560813a18dc91a7f961f4de3f506dc46d074edc070783b3193370c69553caf",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        285
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/Menu.ts",
+    "line_count": 341,
+    "sha256": "4b642c02b3d60119e250f4e7986295bb0866c129167b49c165d6cf24404ad69e",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        341
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/Notice.ts",
+    "line_count": 51,
+    "sha256": "a923c38a9f82c336a9311f08e4d64b05ff17edae3740c5516b6a10459857030c",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        51
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/OAuthProgress.ts",
+    "line_count": 114,
+    "sha256": "79bf1243a8513927c3a45a9a92fd712f82db30e17428e15d5bc1eaaef6663021",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        114
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/OutputViewer.ts",
+    "line_count": 184,
+    "sha256": "c4a6466fd72df29efe3fc87148764165093376fa1d68b4b63fcb57e7471ab127",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        184
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/ToolPanel.ts",
+    "line_count": 49,
+    "sha256": "a7b2fc3696dc0029f457901c31775714191b8f84e8b086ac6897cb82def67ad7",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        49
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/ToolTurn.ts",
+    "line_count": 152,
+    "sha256": "b5647d8a0e76aa7d45f239e8ca92e9dcb05eb32a8d6e2942ae9d3efa2a65b450",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        152
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/components/UserTurn.ts",
+    "line_count": 37,
+    "sha256": "c35b43f278e55f860f9a1aced921ccc3d687740aa359f71bd2fc9728a13d4b08",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        37
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/design/icons.ts",
+    "line_count": 70,
+    "sha256": "a6b30b842ee30e958b2741f3aef00436933f9221025bfddca329fa99d38eb951",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        70
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/design/motion.ts",
+    "line_count": 164,
+    "sha256": "4342efb3e63daee2a2eb5184e4c03309027964be2947ab69f7195461350f39d3",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        164
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/design/spacing.ts",
+    "line_count": 3,
+    "sha256": "63c1fa099cf463d18d99a54dfc46a6fb4fca6643c59932af293f324e4bb909ff",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        3
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/design/terminal.ts",
+    "line_count": 63,
+    "sha256": "bb7c2b6a31019a59f24730e95d66a9722afdbac40ec06b2632a2dc45e32614ee",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        63
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/design/text.ts",
+    "line_count": 171,
+    "sha256": "b95c0d281a88e6bf57a6ebe6831cf885eb5ed66631686eacc6c8eb9894b29308",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        171
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/design/theme.ts",
+    "line_count": 1041,
+    "sha256": "aa153f8535158a27a0c0e7caa172cec61962e123d2ea02ccaa0155876260240b",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        1041
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/design/tokens.ts",
+    "line_count": 124,
+    "sha256": "2ac7234441ab4fae4725f67280a5fbb3e86903622f527e4ab0e9d125dc4c0870",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        124
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/events.ts",
+    "line_count": 40,
+    "sha256": "28e56f0c6627e8d43e7199e6ebbde507f4f0bab49c10f2b3a70f6fda6ba06da7",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        40
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/family.ts",
+    "line_count": 256,
+    "sha256": "ec06a54face4a71e3b81401893f0abe357e54b007851b842f1c76a2307cda9e5",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        256
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/agents.ts",
+    "line_count": 190,
+    "sha256": "fa3422d6d7fbab3e03cf2cf97fc78d64f3b631270b57e0b041cc7cacf984cec7",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        190
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/auth.ts",
+    "line_count": 221,
+    "sha256": "b39cc3e1fa08d3849a2027c6a0c14a86bc71e44199de8d004e7edee74b1c335f",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        221
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/codex.ts",
+    "line_count": 55,
+    "sha256": "2d425fc94b464124faef3174d9343ff46c112e7ad03af132c610c231ce38da4a",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        55
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/context.ts",
+    "line_count": 37,
+    "sha256": "af1b28876de55a5ce295c0b11199de870e6ed8acde818e5cb69f5e79fbe74fbf",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        37
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/growth.ts",
+    "line_count": 118,
+    "sha256": "91dca14dba0e85f92fbf3916e7dbf9c2281d4efc8a4d664af655c6902d346fed",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        118
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/harnesses.ts",
+    "line_count": 197,
+    "sha256": "ea463a1d7697bb05539b1e34e4c5658aea8ea4fbc6f83049647f986c66fe60b0",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        197
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/index.ts",
+    "line_count": 102,
+    "sha256": "9a3af81dac2bade1786da8438b7fcba6cbeab9b99eb8fa2a8e1e3485631ac2cc",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        102
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/interop.ts",
+    "line_count": 170,
+    "sha256": "e084788c6978d8c0e5624a59f88f843832b25215b62ccfea110500591a0f8160",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        170
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/jobs.ts",
+    "line_count": 172,
+    "sha256": "981bb96713f4d8c70b7845dd1448b7be435e14edb825cb35b54d489a4ea6ca1d",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        172
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/keys.ts",
+    "line_count": 237,
+    "sha256": "c2b65c60281e87185dd9cc70bddff8addd7cf7c800b26e95eededa3d7fa395eb",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        237
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/mcp-oauth.ts",
+    "line_count": 287,
+    "sha256": "3ba0275f7f30276b0d20e913ac29f0b2a223b17dd837d8cb7875be6aa8061b7d",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        287
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/mcp.ts",
+    "line_count": 202,
+    "sha256": "2e58e410f6a9412fdbdd53a202e404137053e9bb7e99c1182a0108b430bf8b47",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        202
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/memory.ts",
+    "line_count": 205,
+    "sha256": "9678600c625c1e6bea0dd4ad288a4b4a3847a19c8b50ee9695301649455b2192",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        205
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/mode.ts",
+    "line_count": 131,
+    "sha256": "746c985888273562f3d13e5d681e53998790a05d9e50454d18e2f00ce503fce6",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        131
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/models.ts",
+    "line_count": 405,
+    "sha256": "40f13ea14eee475f72819eccccc1787772b7553d7572e24d0ce249d7c26a971a",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        405
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/output.ts",
+    "line_count": 12,
+    "sha256": "911c7fd13e8c50e64bd6502300f71363dde5adc17bae2f940960d2e2abb79f81",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        12
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/sessions.ts",
+    "line_count": 267,
+    "sha256": "592cecc21328ff080d14bc0f6eced4378ab4975cf746a373d506e875d28ea3da",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        267
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/settings.ts",
+    "line_count": 583,
+    "sha256": "0ea3fed113593543ff7f018bad9b2421d4725041062e0da54042c4f1d276569a",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        583
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/skills.ts",
+    "line_count": 138,
+    "sha256": "d810bbc27dfab384ff93039b57c7d085dd9f2b09556bf477514fddd239c8f00b",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        138
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/theme.ts",
+    "line_count": 39,
+    "sha256": "a88d1d41ddc0902f5a191bd90a68cd4654fc2c9bb433098ce387adec8ddac30f",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        39
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/features/types.ts",
+    "line_count": 163,
+    "sha256": "7447fd5d56ae17f71429c51e60baed3b1ecf84097a1d7b7e746cee0f27b24ade",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        163
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/format.ts",
+    "line_count": 61,
+    "sha256": "3d860b7cb33a0739e13a532a7e63db8e58ade01b2304cccad5d1e03963597286",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        61
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/gateway.ts",
+    "line_count": 186,
+    "sha256": "5d8e14273d0a45d240dd350a2f70a6ea68572c1be31f4081ac81d05944a8a6a9",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        186
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/images.ts",
+    "line_count": 189,
+    "sha256": "2da32256b6c210634cd6ad283de6b5d4929ebf92bf05260d4b9d2ba378d13a07",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        189
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/main.ts",
+    "line_count": 83,
+    "sha256": "ef1fe06aa4cbe34b93fb9d188ceb87f779daedf2b00c53668e98c9e2b0b1c873",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        83
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/protocol.ts",
+    "line_count": 591,
+    "sha256": "df90d7b0aa068c4e95401694fc059d2a1fa306de6c545aba2f636c09c8336fba",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        591
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/tail.ts",
+    "line_count": 221,
+    "sha256": "aeb4e5e50df326b16cefd680ac5e26e8868ae84eca649b5328a3903ef157bbc8",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        221
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/theme.ts",
+    "line_count": 26,
+    "sha256": "c718bb60a3ebb68384f1af9f8bb037aadf5afc8a60a654a5665b14e24aecff53",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        26
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/src/transcript.ts",
+    "line_count": 332,
+    "sha256": "85186bd3801d6cd197c721f3c607732e4e9e33a567ea3b7bbe6ecd17d3bb6165",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        332
+      ]
+    ],
+    "read_basis": "Complete source read retained from prior review; all changes since 1e1edbf reread at current HEAD."
+  },
+  {
+    "path": "ui/tsconfig.json",
+    "line_count": 19,
+    "sha256": "26a55924c69969d359182038ae0a3fb4c6608e923a3d668213a1dfe0857c87ec",
+    "status": "full",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "read_ranges": [
+      [
+        1,
+        19
+      ]
+    ],
+    "read_basis": "Complete configuration/installer read."
+  },
+  {
+    "path": "ui/package-lock.json",
+    "line_count": 1759,
+    "sha256": "dfde5ef030e1024c9ab7e9eac704f0f687ce6c95d1b54335bd8d5392bbf2faeb",
+    "status": "excluded_generated",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "reason": "Generated dependency resolution; not application source; not claimed as line-by-line reviewed."
+  },
+  {
+    "path": "uv.lock",
+    "line_count": 3878,
+    "sha256": "e96247db430f25ed635267fa6d1b6df0bf94c756d00136666b95275a8f73d88e",
+    "status": "excluded_generated",
+    "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+    "reason": "Generated dependency resolution; not application source; not claimed as line-by-line reviewed."
+  }
+]

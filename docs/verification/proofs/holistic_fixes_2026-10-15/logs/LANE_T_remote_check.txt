@@ -1,0 +1,16 @@
+# LANE T — remote reachability check (2026-10-15T16:51:25Z); READ-ONLY, no push attempted.
+
+## DevTools: GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/kiazh/Machina-DevTools.git
+exit=0
+
+## Control: HTTPS fetch of Machina-Harness (existing credentials)
+3ef6d5b70744a9b12a740c46cfe4acbe6f418c27	refs/heads/main
+exit=0
+
+## gh repo view kiazh/Machina-DevTools
+{"createdAt":"2026-10-15T16:42:26Z","defaultBranchRef":{"name":""},"isEmpty":true,"isFork":false,"name":"Machina-DevTools","visibility":"PUBLIC"}
+
+## gh auth status (identity + scopes)
+  ✓ Logged in to github.com account kiazh (keyring)
+  - Git operations protocol: ssh
+  - Token scopes: 'admin:public_key', 'gist', 'read:org', 'repo', 'workflow'

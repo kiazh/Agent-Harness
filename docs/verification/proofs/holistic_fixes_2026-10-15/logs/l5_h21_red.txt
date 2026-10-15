@@ -1,0 +1,140 @@
+..F.F                                                                    [100%]
+=================================== FAILURES ===================================
+______________ test_control_requests_dispatch_during_slow_request ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d2a4380>
+
+    async def test_control_requests_dispatch_during_slow_request(monkeypatch):
+        """RED pre-fix: the serial loop dispatches prompt.cancel only after the
+        slow interop.run finishes. Post-fix every control request runs while the
+        slow request is still in flight."""
+        serve, gateway = await _start_serve(
+            monkeypatch,
+            [
+                {"jsonrpc": "2.0", "id": 1, "method": "interop.run", "params": {}},
+                {"jsonrpc": "2.0", "id": 2, "method": "prompt.cancel", "params": {}},
+                {"jsonrpc": "2.0", "id": 3, "method": "mode.revoke", "params": {}},
+                {"jsonrpc": "2.0", "id": 4, "method": "approvals.resolve", "params": {}},
+                {"jsonrpc": "2.0", "id": 5, "method": "shutdown", "params": {}},
+            ],
+        )
+        try:
+            await asyncio.wait_for(gateway.slow_started.wait(), timeout=5)
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not set(_CONTROL_METHODS) <= set(
+                gateway.dispatched
+            ):
+                await asyncio.sleep(0.01)
+>           assert set(_CONTROL_METHODS) <= set(gateway.dispatched)
+E           AssertionError: assert {'approvals.r...', 'shutdown'} <= {'interop.run'}
+E             
+E             Extra items in the left set:
+E             'shutdown'
+E             'prompt.cancel'
+E             'approvals.resolve'
+E             'mode.revoke'
+
+tests/test_holistic_l5_gateway_2026_10_15.py:291: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"jsonrpc": "2.0", "id": 1, "result": {}}
+{"jsonrpc": "2.0", "id": 2, "result": {}}
+{"jsonrpc": "2.0", "id": 3, "result": {}}
+{"jsonrpc": "2.0", "id": 4, "result": {}}
+{"jsonrpc": "2.0", "id": 5, "result": {}}
+_______________ test_eof_cancels_requests_that_outlast_the_drain _______________
+
+self = <tests.test_holistic_l5_gateway_2026_10_15._ScriptedGateway object at 0x10e256210>
+line = '{"jsonrpc": "2.0", "id": 1, "method": "interop.run", "params": {}}'
+
+    async def handle_line(self, line: str) -> None:
+        frame = json.loads(line)
+        method = frame["method"]
+        self.dispatched.append(method)
+        try:
+            if method == "interop.run":
+                self.slow_started.set()
+>               await self.release_slow.wait()
+
+tests/test_holistic_l5_gateway_2026_10_15.py:225: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <asyncio.locks.Event object at 0x10e312c10 [unset]>
+
+    async def wait(self):
+        """Block until the internal flag is true.
+    
+        If the internal flag is true on entry, return True
+        immediately.  Otherwise, block until another task calls
+        set() to set the flag to true, then return True.
+        """
+        if self._value:
+            return True
+    
+        fut = self._get_loop().create_future()
+        self._waiters.append(fut)
+        try:
+>           await fut
+E           asyncio.exceptions.CancelledError
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/locks.py:213: CancelledError
+
+The above exception was the direct cause of the following exception:
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e2f73e0>
+
+    async def test_eof_cancels_requests_that_outlast_the_drain(monkeypatch):
+        """A request that ignores EOF past the drain bound is cancelled and joined
+        instead of holding the process open."""
+        from machina.gateway import __main__ as gateway_main
+    
+        # raising=False: the bound is new surface; pre-fix this test is RED for
+        # the serial-loop behavior, not for a missing attribute.
+        monkeypatch.setattr(gateway_main, "REQUEST_DRAIN_TIMEOUT_SECONDS", 0.05, raising=False)
+        serve, gateway = await _start_serve(
+            monkeypatch,
+            [
+                {"jsonrpc": "2.0", "id": 1, "method": "interop.run", "params": {}},
+                None,  # EOF
+            ],
+        )
+        await asyncio.wait_for(gateway.slow_started.wait(), timeout=5)
+>       await asyncio.wait_for(serve, timeout=2)
+
+tests/test_holistic_l5_gateway_2026_10_15.py:346: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/tasks.py:487: in wait_for
+    async with timeouts.timeout(timeout):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Timeout [expired]>
+exc_type = <class 'asyncio.exceptions.CancelledError'>
+exc_val = CancelledError(), exc_tb = <traceback object at 0x10e2c6d80>
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool | None:
+        assert self._state in (_State.ENTERED, _State.EXPIRING)
+    
+        if self._timeout_handler is not None:
+            self._timeout_handler.cancel()
+            self._timeout_handler = None
+    
+        if self._state is _State.EXPIRING:
+            self._state = _State.EXPIRED
+    
+            if self._task.uncancel() <= self._cancelling and exc_type is not None:
+                # Since there are no new cancel requests, we're
+                # handling this.
+                if issubclass(exc_type, exceptions.CancelledError):
+>                   raise TimeoutError from exc_val
+E                   TimeoutError
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/timeouts.py:114: TimeoutError
+=========================== short test summary info ============================
+FAILED tests/test_holistic_l5_gateway_2026_10_15.py::test_control_requests_dispatch_during_slow_request
+FAILED tests/test_holistic_l5_gateway_2026_10_15.py::test_eof_cancels_requests_that_outlast_the_drain
+2 failed, 3 passed in 4.56s

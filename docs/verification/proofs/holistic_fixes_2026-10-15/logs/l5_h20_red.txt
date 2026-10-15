@@ -1,0 +1,116 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_____________ test_explicit_compression_uses_pinned_session_route ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b7e2650>
+
+    @pytest.mark.usefixtures("live_db")
+    async def test_explicit_compression_uses_pinned_session_route(monkeypatch):
+        """gateway/features/sessions.py + services.py: a session pinned to Ollama
+        must be summarized through Ollama, never through the gateway default."""
+        from machina.core import provider as provider_module
+        from machina.core.config import config
+        from machina.core.context import context_manager
+        from machina.core.session import session_manager
+        from machina.gateway.features import sessions as sessions_feature
+    
+        routes, closed = _capture_provider(monkeypatch, provider_module)
+        monkeypatch.setattr(config, "compression_llm_summarize", True)
+        monkeypatch.setattr(config, "compression_preserve_recent", 1)
+    
+        session = await session_manager.create(
+            title="l5-h20-gateway", model="llama3.1", provider="ollama"
+        )
+    
+        class _GatewayStub:
+            # Gateway/global defaults deliberately differ from the session pin.
+            model = "openrouter/free"
+            provider = "openrouter"
+    
+            def require_db(self):
+                return None
+    
+            async def get_session(self, params):
+                return await session_manager.get(params["sessionId"])
+    
+        try:
+            for i in range(4):
+                await context_manager.add_chunk(
+                    session.id,
+                    "harness",
+                    "user_message",
+                    {"content": f"private local transcript {i}"},
+                    token_count=20,
+                )
+            out = await sessions_feature.context_compress(
+                _GatewayStub(), {"sessionId": str(session.id)}  # type: ignore[arg-type]
+            )
+            assert out["compressed"] is True
+>           assert routes == [("ollama", "llama3.1")]
+E           AssertionError: assert [('openrouter...router/free')] == [('ollama', 'llama3.1')]
+E             
+E             At index 0 diff: ('openrouter', 'openrouter/free') != ('ollama', 'llama3.1')
+E             Use -v to get more diff
+
+tests/test_holistic_l5_gateway_2026_10_15.py:120: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     machina.gateway.server:server.py:123 Gateway logging initialized: /Users/shadow/.machina/logs/gateway.log
+________ test_compress_services_route_matches_agent_factory_precedence _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c0d4050>
+
+    def test_compress_services_route_matches_agent_factory_precedence(monkeypatch):
+        """services.py: no overrides -> session pin, then agent definition, then
+        global config — the same precedence ``build_agent_for_session`` applies."""
+        import machina.core.provider as provider_module
+        from machina.core import context as context_module
+        from machina.core.agent_def import AgentDef, agent_registry
+        from machina.core.config import config
+        from machina.core.models import ContextChunk
+        from machina import services as services_module
+    
+        routes, _closed = _capture_provider(monkeypatch, provider_module)
+        monkeypatch.setattr(config, "compression_llm_summarize", True)
+        monkeypatch.setattr(config, "compression_preserve_recent", 1)
+        monkeypatch.setattr(config, "provider", "openrouter")
+        monkeypatch.setattr(config, "model", "openrouter/free")
+    
+        chunks = [
+            ContextChunk(
+                id=uuid.uuid4(),
+                session_id=uuid.uuid4(),
+                agent_id="harness",
+                chunk_type="user_message",
+                payload={"content": f"msg {i}"},
+                token_count=20,
+            )
+            for i in range(4)
+        ]
+    
+        async def _all_chunks(session_id):
+            return list(chunks)
+    
+        async def _replace(sid, ids, new_chunks, archive_reason="compressed", **kwargs):
+            return len(new_chunks)
+    
+        monkeypatch.setattr(context_module.context_manager, "get_all_chunks", _all_chunks)
+        monkeypatch.setattr(context_module.context_manager, "replace_chunks_by_ids", _replace)
+    
+        import asyncio
+    
+        # 1. Session pin wins over the global default.
+        pinned = SimpleNamespace(
+            id=chunks[0].session_id, agent_id="harness", provider="ollama", model="llama3.1"
+        )
+        asyncio.run(services_module.compress_session(pinned))
+>       assert routes == [("ollama", "llama3.1")]
+E       AssertionError: assert [('openrouter...router/free')] == [('ollama', 'llama3.1')]
+E         
+E         At index 0 diff: ('openrouter', 'openrouter/free') != ('ollama', 'llama3.1')
+E         Use -v to get more diff
+
+tests/test_holistic_l5_gateway_2026_10_15.py:172: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_holistic_l5_gateway_2026_10_15.py::test_explicit_compression_uses_pinned_session_route
+FAILED tests/test_holistic_l5_gateway_2026_10_15.py::test_compress_services_route_matches_agent_factory_precedence
+2 failed in 0.71s

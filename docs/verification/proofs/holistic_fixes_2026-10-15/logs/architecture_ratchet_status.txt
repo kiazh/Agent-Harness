@@ -1,0 +1,160 @@
+...F...................FF.                                               [100%]
+=================================== FAILURES ===================================
+______________________ test_deferred_import_count_ratchet ______________________
+
+    def test_deferred_import_count_ratchet():
+        # Ratchet history (guard-method census over machina/ only):
+        #   658 = measured baseline at guard creation (the old 672 was a ceiling,
+        #         not the count; wave-1 landings).
+        #   677 = after wave-2 hook/isolation work: +19 total, itemized below.
+        #         An earlier revision of this table attributed -3 to session_mode,
+        #         but its deferred-import count did not change: the hoist that
+        #         entry referred to is agent.py's turn_scope import, kept at
+        #         module level (no cycle possible). The itemized deltas already
+        #         sum to +19 (6+4+4+2+2+1+1-1+0):
+        #         agent.py +6 (S3 wiring hooks, guarded), controller/wiring.py +4
+        #         (new, guarded by purity tests), gateway/server.py +4 / usage.py
+        #         +2 / orchestrator.py +2 / tools/agents.py +1 (S1+S2 observe-only
+        #         hooks), container.py +1 (locator decoupling), repomap/scan.py -1
+        #         (cargo-cult deferred import removed), api/app.py -45 balanced by
+        #         api/routes/* +45 (split moved, not added).
+        #   Wave-3 hotfix added +1 (permissions/broker.py guarded redaction
+        #   import); wave-4 removed -1 net (agent.py -3: datetime/uuid/images
+        #   hoisted to module level, +1 tool-trace hook; controller/wiring.py +2
+        #   trace/evidence helpers). Net since wave-2: -1, so cap stays 677.
+        #   Final wave (A5, 6a1131a): -1 (agent.py 31 -> 29 deferred imports after
+        #   the turn_flow extraction; new core/turn_flow.py +1 guarded helper
+        #   import). Census = 675. N1 (final pass): entry added to make the
+        #   procedure table complete; the cap was already honest at 675 <= 677.
+        #   Benchmark tool (research/benchmark.py, unified offline benchmark): +5
+        #   (the four test-harness modules — replay/retrieval/prefix/architecture —
+        #   are imported lazily per section because tests/ is not importable until
+        #   sys.path setup and is absent from wheels; plus pytest for
+        #   MonkeyPatch. The machina-side imports — version, locomo, db — are at
+        #   module level, matching research/workflow_benchmark.py.) Census
+        #   675 -> 680, so cap 677 -> 680.
+        #   Auto-applied learning wave (measured on this worktree): median census
+        #   at 7b0f83f was 677. Deltas since:
+        #     +5  machina/mcp_server/ (landed commit a92c1e8, MCP shim lane):
+        #         server, config, DB, and tool schemas are imported lazily per
+        #         request so the stdio shim cannot pull the agent runtime at
+        #         startup. That lane landed without its own ratchet update; the
+        #         guard is tree-wide, so the +5 is counted here explicitly.
+        #     +1  skills/learning.py (this change): ``_audit`` binds audit_log
+        #         through a function-level core import so the skills module-level
+        #         machina.core ceiling stays at 4, and the binding resolves per
+        #         call so monkeypatching the provider audit module intercepts.
+        #     -1  slop-cleanup wave (landed ca6fc05): pipeline._finish_search and
+        #         env_file lost their function-level imports. Net verified by
+        #         re-measuring the merged tree on 2026-10-14: census == 682.
+        #   Census 677 -> 682, so cap 680 -> 682. Unreviewed growth beyond this
+        #   still fails by design; itemize any further movement here.
+        #   Interop self-setup wave (2026-10-14): +1 machina/interop.py — the
+        #   module's only deferred import is ``_child_process`` inside the
+        #   helper, binding the stdlib-only leaf lazily so importing
+        #   ``machina.interop`` never pulls the agent runtime (same idiom as the
+        #   mcp_server shim). Census 682 -> 683, so cap 682 -> 683.
+        #   Provider wave (2026-10-14): +1 machina/core/runtime.py — the chatgpt
+        #   readiness branch binds chatgpt_auth.status lazily so a status probe
+        #   never imports the auth/provider modules unless chatgpt is selected.
+        #   Census 683 -> 684, so cap 683 -> 684.
+        #   Round-5 interop review (2026-10-14): +1 machina/interop.py — the
+        #   enable/disable output tail embedded in ActionResult steps is now
+        #   secret-redacted (N2'); the helper binds machina.memory.redaction
+        #   lazily so importing machina.interop stays stdlib-only (same idiom as
+        #   the mcp_server shim). The F2 extraction of run_bounded into
+        #   machina/core/child_process.py added no deferred imports (stdlib
+        #   imports, module level) and kept both callers' per-call
+        #   ``_child_process`` bindings, so the census moves by exactly +1.
+        #   Census 684 -> 685, so cap 684 -> 685.
+        #   Model-catalog lane (2026-10-14, this change): +4 deferred imports,
+        #   each a deliberate cycle/dependency-delaying binding:
+        #     +1 machina/core/provider/catalog.py — chatgpt_auth is imported
+        #        inside fetch_catalog_for_account so the catalog module (which
+        #        context_windows imports) stays loadable without the auth stack.
+        #     +1 machina/core/provider/factory.py — security.providers binds
+        #        inside _named_provider so provider resolution works without the
+        #        user store module unless a named provider is actually requested.
+        #     +1 machina/core/provider/specs.py — security.providers binds inside
+        #        _named_provider_names so dynamic PROVIDERS membership keeps a
+        #        core->security edge only at call time.
+        #     +1 machina/core/context_windows.py — catalog.window_for binds inside
+        #        the chatgpt branch so the window lookup stays a light leaf for
+        #        its many lazy importers. (All other new imports in this lane were
+        #        hoisted to module level; the census moved by exactly +4.)
+        #   Census 685 -> 689, so cap 685 -> 689.
+        #   Round-3 review fixes (2026-10-14, this change): +0 deferred imports.
+        #   The chatgpt multimodal converter, the direct-provider cache
+        #   namespace, the endpoint-aware embedder id normalization and the
+        #   child-process overflow kill all use module-level (stdlib) imports.
+        #   Subscription-auth provider wave (2026-10-14, this change): +3 deferred
+        #   imports, each a deliberate readiness-probe binding:
+        #     +3 machina/core/runtime.py — claude/copilot/gemini readiness
+        #        branches bind their security.*_auth status probes lazily so the
+        #        provider probe never imports the auth stack unless selected.
+        #   Census 689 -> 692, so cap 689 -> 692.
+        #   Vendor-compliance removal (2026-10-14): -2 deferred imports — the
+        #   claude/gemini readiness branches are gone with their subscription
+        #   flows (owner-directed; vendor terms). Census measured at 689 on this
+        #   tree after the removal, so cap 692 -> 689.
+        #   R4-091 skills/soulspec cluster (2026-10-14, this change): +1 deferred
+        #   import — skills/registry.py binds repo_install.remove_installed_skill
+        #   inside delete_skill so the registry's top-level imports stay the
+        #   ports+observability seam (test_architecture_pairs pins that set).
+        #   Census 687 -> 688 over the committed base (measured); the cap is
+        #   unchanged at 689 because it already binds the grown census.
+        #   no-mistakes gate review rounds (2026-10-15, R1-R24): 689 -> 712
+        #   (+23). agent.py +5 (joined teardown + premature-exit finalization),
+        #   connectors/service.py +4, agent_factory.py +4 (provider ownership
+        #   scope), api/routes/streaming.py +2 (relay closure), connectors/
+        #   management.py +2, connectors/store.py +2 (layering: the core import
+        #   moved from module scope into the two async wrappers), core/usage.py
+        #   +2, core/turn_engine.py +1, tools/file.py +1.
+        #   gate-reconciliation follow-up (2026-10-15): +1 agent_factory.py
+        #   (cancel_and_join deferred import in close_agent_provider).
+        #   harnesses feature (2026-10-15): +4 gateway/features/interop.py
+        #   (lazy bindings to machina.interop for detect/enable/disable/
+        #   run_task so the gateway module never imports the runner eagerly).
+        #   Census 717, cap 717.
+        # Procedure: this number may only move with a delta table like the above
+        # in this comment; silent growth fails the suite by design.
+        total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
+>       assert total <= DEFERRED_IMPORT_CAP, (
+            f"deferred (function-level) imports grew: {total} > {DEFERRED_IMPORT_CAP}"
+        )
+E       AssertionError: deferred (function-level) imports grew: 719 > 717
+E       assert 719 <= 717
+
+tests/test_architecture_layers.py:291: AssertionError
+________ test_god_file_ceilings_only_fall[core/provider/copilot.py-431] ________
+
+relative_path = 'core/provider/copilot.py', ceiling = 431
+
+    @pytest.mark.parametrize("relative_path,ceiling", GOD_FILE_CEILINGS)
+    def test_god_file_ceilings_only_fall(relative_path, ceiling):
+>       assert _line_count(ROOT / relative_path) <= ceiling, (
+            f"{relative_path} grew past its ceiling of {ceiling} lines"
+        )
+E       AssertionError: core/provider/copilot.py grew past its ceiling of 431 lines
+E       assert 443 <= 431
+E        +  where 443 = _line_count((PosixPath('/Users/shadow/machina/machina') / 'core/provider/copilot.py'))
+
+tests/test_architecture_layers.py:474: AssertionError
+____________________ test_provider_package_total_only_falls ____________________
+
+    def test_provider_package_total_only_falls():
+        package = ROOT / "core" / "provider"
+        total = sum(_line_count(p) for p in sorted(package.rglob("*.py")))
+>       assert total <= _PROVIDER_PACKAGE_TOTAL_CEILING, (
+            f"core/provider package grew past its ceiling of "
+            f"{_PROVIDER_PACKAGE_TOTAL_CEILING} lines: {total}"
+        )
+E       AssertionError: core/provider package grew past its ceiling of 5003 lines: 5015
+E       assert 5015 <= 5003
+
+tests/test_architecture_layers.py:499: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_architecture_layers.py::test_deferred_import_count_ratchet
+FAILED tests/test_architecture_layers.py::test_god_file_ceilings_only_fall[core/provider/copilot.py-431]
+FAILED tests/test_architecture_layers.py::test_provider_package_total_only_falls
+3 failed, 23 passed in 1.07s

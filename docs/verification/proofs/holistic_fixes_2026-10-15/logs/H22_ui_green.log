@@ -1,0 +1,36 @@
+✔ start() enables shrink-clearing so closed menus leave no ghost rows (5.321792ms)
+✔ cancel() does not set running=false while the turn is still in-flight (12.900208ms)
+✔ cancelled turn stays tracked until completion before another prompt is submitted (0.867458ms)
+✔ message.complete for a non-current session is still processed (in-flight turn tracking) (10.006291ms)
+✔ events for sessions with no in-flight turn are ignored (0.250375ms)
+✔ late events from a previous session do not enter the current transcript (0.268042ms)
+✔ onGatewayExit clears in-flight tracking so session is not permanently locked (24.698334ms)
+✔ cancel() targets the in-flight session, not the current session (12.570083ms)
+✔ submit() does not clear editor when a turn is in-flight (lost input fix) (11.853583ms)
+✔ error event keeps in-flight until completion (AH-032) (35.273292ms)
+✔ growth.status quietly pulses the footer after retirement without transcript notices (4.311084ms)
+✔ exit() calls the input listener disposer (0.214ms)
+✔ local watchdog warns once and retains the guard (never ownership) (3.275667ms)
+✔ writeFile creates new files but never overwrites existing ones (4.106959ms)
+✔ interop.run client clock outlasts the backend run deadline (H22) (1.436791ms)
+✔ interop.run without a reply still stops waiting on the client clock (H22) (0.224042ms)
+✔ /harnesses opens the picker with a state summary per harness (1.733666ms)
+✔ /harnesses Status shows version, registration, scope and the state file (0.206333ms)
+✔ /harnesses Register confirms, then calls interop.enable (0.200917ms)
+✔ /harnesses Register cancel sends no RPC (0.099875ms)
+✔ /harnesses Unregister confirms, then calls interop.disable and surfaces failures honestly (0.150959ms)
+✔ /harnesses Run a task prompts, warns, calls interop.run and renders bounded output (0.374125ms)
+✔ /harnesses Run a task refuses when the gateway does not report its deadline (0.137833ms)
+✔ /harnesses Run a task cancel (or empty prompt) never calls interop.run (0.132792ms)
+✔ /harnesses hides the run action and shows the hint when unsupported (0.109708ms)
+✔ /harnesses <harness> jumps straight to the actions menu (0.126083ms)
+✔ /harnesses rejects an unknown harness without opening a menu (0.089375ms)
+✔ /harnesses is registered as a slash command (0.051208ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 28
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 391.048791

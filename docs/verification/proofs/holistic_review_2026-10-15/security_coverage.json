@@ -1,0 +1,735 @@
+{
+  "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+  "source_only": true,
+  "tests_reviewed_or_run": false,
+  "files": [
+    {
+      "path": "machina/connectors/__init__.py",
+      "line_count": 11,
+      "sha256": "71a1dd98f189cfd98129c9a4f03877625a85d1c9bb1cc11f351b5e3119d72103",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          11
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/execution.py",
+      "line_count": 319,
+      "sha256": "2663c7c98fc7b15137bc0f42fdbf8269612deb46579b14b2170c6a836f4f3c7a",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          319
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/http_transport.py",
+      "line_count": 144,
+      "sha256": "2464bd54fde739460adb4ab5bcf4d836fcbaf49617034883c6f4544773da8adc",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          144
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/management.py",
+      "line_count": 346,
+      "sha256": "4b8ea862ecdcce558fc8889e841b2f31fa837726d5a97224c6aae08acc6a22d0",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          346
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/manager.py",
+      "line_count": 203,
+      "sha256": "105a2fe64e6337bd645ca4a312b15cb0aa9e0275f521930cb031121372c8d3c7",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          203
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/mcp_client.py",
+      "line_count": 706,
+      "sha256": "72c246fc9533d1e0c21dc1536e3f30bf92f22c88eed7bdee3757baf3fa428d0e",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          706
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/models.py",
+      "line_count": 300,
+      "sha256": "eee96cb8aa36b17dbcc7c6861e0f69de9ed0322d48f54ad0ff79e46fd8e8b96e",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          300
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/oauth.py",
+      "line_count": 1434,
+      "sha256": "d72079e5d41c78a3d5067e06a9ab9c43d2266a36874b086eede29a6a8049e923",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          1434
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/oauth_auth.py",
+      "line_count": 60,
+      "sha256": "a49cbc3f0a153b266675cc08bcb48d8dfd91ca9ce237f6e029547a86996de4ca",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          60
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/oauth_callback.py",
+      "line_count": 277,
+      "sha256": "482ae3ee4d1036a05c7e337a5e90863025912fe8902bec8ea0bee1c72001af23",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          277
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/oauth_models.py",
+      "line_count": 310,
+      "sha256": "321ef8179974e21faff81b529036a3a6bfba74ad0a45f4a670e925be4b42e347",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          310
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/oauth_network.py",
+      "line_count": 973,
+      "sha256": "b13be633521d844dfff4d1246935cd3e46c0b1efb042e1dae4f741fbe1ad7a26",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          973
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/oauth_store.py",
+      "line_count": 551,
+      "sha256": "ad9796a8d7f453a868d1b5dfb0c3a88418ba544f948f3ad906846c88ba4f9637",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          551
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/policy.py",
+      "line_count": 578,
+      "sha256": "a4cd3e1dfca9508617170f5a914994330bdde3e749787484fcaaa387b3f1fb4c",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          578
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/registry.py",
+      "line_count": 128,
+      "sha256": "5cf661d9f6f7c2f7160c8bc8128849e5a26691b271cab27f5a9dbba3654a3415",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          128
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/service.py",
+      "line_count": 349,
+      "sha256": "fffac5f35a6a71d7778666c8e0eb793ad1740633c13d63ad57abd219808cc1e1",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          349
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/connectors/store.py",
+      "line_count": 244,
+      "sha256": "125f8df55b5a072631191c5d3bde666e6c600517097222d103564d559c83c68a",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          244
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/security/__init__.py",
+      "line_count": 1,
+      "sha256": "ce180d8ff8b0afea6d397a6f2c3495414c52c8e57ac330ab8118024ce4483008",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/security/chatgpt_auth.py",
+      "line_count": 827,
+      "sha256": "bc8cfbaeeb461dec45c515dedf33b9c0a7bcc8bd82911da1f7483262fb0865bf",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          827
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/security/copilot_auth.py",
+      "line_count": 563,
+      "sha256": "4c504a470b451345e77a2ee3ff3483c8593283c68e40dd70102e7a903212f47b",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          563
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/security/env_file.py",
+      "line_count": 399,
+      "sha256": "5f53ff452c43c786e640107ff50910101e2d56bc590c0048c3a41bed5e66dd09",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          399
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/security/fetch.py",
+      "line_count": 290,
+      "sha256": "8ca6a41aecf4ced38427179778b166505010ede53e2a6fa943455233d6dfd215",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          290
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/security/oauth_keys.py",
+      "line_count": 218,
+      "sha256": "c311bd268e2ecfc10a44435775957fa8c5d2e31f55722c146e59e6de6ddd8c50",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          218
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/security/providers.py",
+      "line_count": 520,
+      "sha256": "f79e98144ba40c74c4c5c7b6649fb49cdd814c1d56793849d8213ec34b99bc42",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          520
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/security/secrets.py",
+      "line_count": 184,
+      "sha256": "9391ab7a3285b71449570fe915a127a8958702f0e3ea0cad943016b0f874502f",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          184
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/security/store_fence.py",
+      "line_count": 244,
+      "sha256": "1fa6b7c9e69199cf2cb6672376afb3913752b5514689698c14b9aff2f4b19af7",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          244
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/permissions/__init__.py",
+      "line_count": 34,
+      "sha256": "9d3ad19b651fb2a3c8e4ae80a9e6c26866313f8939afd55e89e52ba858f2e660",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          34
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/permissions/broker.py",
+      "line_count": 572,
+      "sha256": "9e24aeb7d04e6ee92961c06174bf59d4faa3cfe3fbce56dded18447dc472f94e",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          572
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/permissions/commands.py",
+      "line_count": 186,
+      "sha256": "0b8b6db6f01d6b85b939ad3b317eff933c860b3b6abd7ce3d1efbd83c6f57068",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          186
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/permissions/policy.py",
+      "line_count": 1159,
+      "sha256": "55609ca5da819a482e7d23d88194a2056de20b72fb8950310a16c6410f96ebc2",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          1159
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/permissions/shell.py",
+      "line_count": 105,
+      "sha256": "8314a4a7db9c06c81a25a100c112d4bb85144428f0c9cfa749163f287f3e0dd7",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          105
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/permissions/store.py",
+      "line_count": 916,
+      "sha256": "ff91d44d1d106d87acaeb615b9c12c98f677fcb01282a49cfedaeb935989a7a7",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          916
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/permissions/tools.py",
+      "line_count": 106,
+      "sha256": "9caf1df8e1f9b8c30be6564620b7d4f7fd08e30f6a61192aaa26429f89367540",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          106
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/__init__.py",
+      "line_count": 41,
+      "sha256": "3ed5bc299708457bedaf96b0cd3ed4290b57fad81240ef7d44693c75d7c7e408",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          41
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/agents.py",
+      "line_count": 273,
+      "sha256": "9d7dcf339b216aca32d6a169a53b177881e7d91df1ae9b617334d348ac99f45d",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          273
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/base.py",
+      "line_count": 299,
+      "sha256": "1afcd42290cff7c6eca576e4428c27e9269a6b489051d66d93d2b37a16b03469",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          299
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/builtins.py",
+      "line_count": 599,
+      "sha256": "e7151ddc58db160b7faf89924b742bcd42568cb146e40c9bbea1e018d0c21d91",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          599
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/file.py",
+      "line_count": 968,
+      "sha256": "bb812c9e560f31e0c5ca35e7b84a69eac8b69fa4b8a1506ed5294ddc631539db",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          968
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/harness.py",
+      "line_count": 216,
+      "sha256": "7cc926c926c5978a3364151eb8368fe68e4d711c623eafcf3724cce96b51e956",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          216
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/mcp.py",
+      "line_count": 273,
+      "sha256": "3ac90be65f7bde4cfc0a2789a3983ed6db5a257e9653158a11c0cfe2a5663c8c",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          273
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/memory.py",
+      "line_count": 232,
+      "sha256": "9c2bc1ad5891f77ffd43025f0c76787d6e51da3ae3b8c51c5660f71467107660",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          232
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/rag.py",
+      "line_count": 410,
+      "sha256": "63313ab1dbdaf823db24da36b05b5bcf8ae3e95243d649fd146b4a21694715f5",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          410
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/repo.py",
+      "line_count": 177,
+      "sha256": "34628317e127f024257ca0b555b4629136bf252fd68ad1851d032f123b13699c",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          177
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/repomap.py",
+      "line_count": 203,
+      "sha256": "29d9ada3cd4847c91d662b93dd9afcb2631b6c8dfc1ad1ce3ea65656ebd72fd8",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          203
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/session_recall.py",
+      "line_count": 81,
+      "sha256": "5374f82001c9bb0372e805c71f8b30f6557004e0870336e755836aa5e39f1b18",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          81
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/skills.py",
+      "line_count": 173,
+      "sha256": "388cd79890dd0d6be5d8a03e178aa59774b9f5d37a237112d769f9f8fe083a4a",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          173
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/terminal.py",
+      "line_count": 447,
+      "sha256": "b89f872dd792109909f845a96d1790bd12ab179a48f7c0beb74b0d4d1945d5aa",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          447
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/web_crawl.py",
+      "line_count": 195,
+      "sha256": "0792745ae1857f17efce7a7522b4d1edbb1315a7aab3cc9b518ff0162f439bf6",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          195
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/tools/web_research.py",
+      "line_count": 143,
+      "sha256": "a75b5e078ed519d21d2e083caf29d2adb376b2da8931fb14207830794542e0d8",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          143
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/mcp_server/__init__.py",
+      "line_count": 714,
+      "sha256": "e76e764f1182fa023c6a443b0db2952c84ef9b88039e0caf4350cbe47f634b90",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          714
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/mcp_server/__main__.py",
+      "line_count": 6,
+      "sha256": "a9264fd38f14be9dca75d447f0e5c1faf1bb2f5fdc57217922908c4d37b5acdf",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          6
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    },
+    {
+      "path": "machina/protocol/__init__.py",
+      "line_count": 205,
+      "sha256": "bd83c7e2c9325effff4d91a3846b15acbb751546f367a1e7435fb8be40fb07ea",
+      "status": "full",
+      "reviewed_ranges": [
+        [
+          1,
+          205
+        ]
+      ],
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "method": "Cumulative bounded source reads across review turns; unchanged ranges retained, changes from 1e1edbf re-read at current baseline."
+    }
+  ]
+}

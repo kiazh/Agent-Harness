@@ -1,0 +1,86 @@
+✖ /delegate renders a paused child as a distinct approval state (1.091084ms)
+✖ /delegate paused state offers approval and continuation actions (0.148292ms)
+✖ /delegate approving a paused child resolves against the child session (0.35075ms)
+✖ /delegate denying a paused child resolves a denial against the child session (0.09975ms)
+✖ /delegate switching to the paused child resumes it as the current session (0.121709ms)
+✖ /delegate leaving the pause keeps the child-session continuation target (0.225959ms)
+✔ /delegate complete and error states keep their existing rendering (0.125667ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 1
+ℹ fail 6
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 241.875042
+
+✖ failing tests:
+
+test at test/holistic-h24-delegate-pause.test.ts:132:1
+✖ /delegate renders a paused child as a distinct approval state (1.091084ms)
+  AssertionError [ERR_ASSERTION]: a paused child is not a finished answer
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/holistic-h24-delegate-pause.test.ts:139:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/holistic-h24-delegate-pause.test.ts:159:1
+✖ /delegate paused state offers approval and continuation actions (0.148292ms)
+  TypeError [Error]: Cannot read properties of undefined (reading 'map')
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/holistic-h24-delegate-pause.test.ts:164:39)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at test/holistic-h24-delegate-pause.test.ts:170:1
+✖ /delegate approving a paused child resolves against the child session (0.35075ms)
+  AssertionError [ERR_ASSERTION]: approval must be resolved through the gateway
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/holistic-h24-delegate-pause.test.ts:177:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/holistic-h24-delegate-pause.test.ts:187:1
+✖ /delegate denying a paused child resolves a denial against the child session (0.09975ms)
+  TypeError [Error]: Cannot read properties of undefined (reading 'params')
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/holistic-h24-delegate-pause.test.ts:194:28)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at test/holistic-h24-delegate-pause.test.ts:202:1
+✖ /delegate switching to the paused child resumes it as the current session (0.121709ms)
+  TypeError [Error]: Cannot read properties of undefined (reading 'params')
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/holistic-h24-delegate-pause.test.ts:212:27)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at test/holistic-h24-delegate-pause.test.ts:217:1
+✖ /delegate leaving the pause keeps the child-session continuation target (0.225959ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /[Pp]aused/. Input:
+  
+  'Delegating to researcher…'
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/holistic-h24-delegate-pause.test.ts:223:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'Delegating to researcher…',
+    expected: /[Pp]aused/,
+    operator: 'match',
+    diff: 'simple'
+  }

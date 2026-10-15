@@ -1,0 +1,5 @@
+controlled swap fired: True
+link.txt now targets: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h18-0xuq99cx/outside/private.txt
+search result: 'Found 1 matches:\n/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h18-0xuq99cx/workspace/link.txt:1: OUTSIDE-PRIVATE-CONTENT-9f2c'
+RESULT: ESCAPE — the matcher followed the swapped pathname
+exit=1

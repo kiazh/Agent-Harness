@@ -1,0 +1,107 @@
+✔ start() enables shrink-clearing so closed menus leave no ghost rows (10.314375ms)
+✔ cancel() does not set running=false while the turn is still in-flight (13.935917ms)
+✔ cancelled turn stays tracked until completion before another prompt is submitted (31.201875ms)
+✔ message.complete for a non-current session is still processed (in-flight turn tracking) (13.008583ms)
+✔ events for sessions with no in-flight turn are ignored (0.764584ms)
+✔ late events from a previous session do not enter the current transcript (0.6775ms)
+✔ onGatewayExit clears in-flight tracking so session is not permanently locked (25.379ms)
+✔ cancel() targets the in-flight session, not the current session (26.696291ms)
+✔ submit() does not clear editor when a turn is in-flight (lost input fix) (17.612584ms)
+✔ error event keeps in-flight until completion (AH-032) (51.836125ms)
+✔ growth.status quietly pulses the footer after retirement without transcript notices (3.92675ms)
+✔ exit() calls the input listener disposer (0.210459ms)
+✔ local watchdog warns once and retains the guard (never ownership) (2.266917ms)
+✔ writeFile creates new files but never overwrites existing ones (13.625875ms)
+✖ interop.run client clock outlasts the backend run deadline (H22) (1.181417ms)
+✔ interop.run without a reply still stops waiting on the client clock (H22) (0.188666ms)
+✔ /harnesses opens the picker with a state summary per harness (3.162083ms)
+✔ /harnesses Status shows version, registration, scope and the state file (6.385375ms)
+✔ /harnesses Register confirms, then calls interop.enable (0.791459ms)
+✔ /harnesses Register cancel sends no RPC (0.15325ms)
+✔ /harnesses Unregister confirms, then calls interop.disable and surfaces failures honestly (0.181834ms)
+✖ /harnesses Run a task prompts, warns, calls interop.run and renders bounded output (1.716042ms)
+✖ /harnesses Run a task refuses when the gateway does not report its deadline (15.986917ms)
+✔ /harnesses Run a task cancel (or empty prompt) never calls interop.run (1.042667ms)
+✔ /harnesses hides the run action and shows the hint when unsupported (0.260917ms)
+✔ /harnesses <harness> jumps straight to the actions menu (0.487ms)
+✔ /harnesses rejects an unknown harness without opening a menu (0.106167ms)
+✔ /harnesses is registered as a slash command (0.064459ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 25
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 748.197292
+
+✖ failing tests:
+
+test at test/app.test.ts:554:1
+✖ interop.run client clock outlasts the backend run deadline (H22) (1.181417ms)
+  AssertionError [ERR_ASSERTION]: must outlast the backend deadline
+  + actual - expected
+  
+  + Error: gateway did not answer interop.run within 120000 ms
+  +     at file:///Users/shadow/machina/ui/src/gateway.ts:33:12
+  +     at MockTimers.tick (node:internal/test_runner/mock/mock_timers:705:7)
+  +     at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/app.test.ts:576:16)
+  +     at Test.runInAsyncScope (node:async_hooks:226:14)
+  +     at Test.run (node:internal/test_runner/test:1402:25)
+  +     at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+  +     at Test.postRun (node:internal/test_runner/test:1542:19)
+  +     at Test.run (node:internal/test_runner/test:1467:12)
+  +     at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  - undefined
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/app.test.ts:583:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: Error: gateway did not answer interop.run within 120000 ms
+        at file:///Users/shadow/machina/ui/src/gateway.ts:33:12
+        at MockTimers.tick (node:internal/test_runner/mock/mock_timers:705:7)
+        at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/app.test.ts:576:16)
+        at Test.runInAsyncScope (node:async_hooks:226:14)
+        at Test.run (node:internal/test_runner/test:1402:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+        at Test.postRun (node:internal/test_runner/test:1542:19)
+        at Test.run (node:internal/test_runner/test:1467:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:974:7),
+    expected: undefined,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/harnesses.test.ts:214:1
+✖ /harnesses Run a task prompts, warns, calls interop.run and renders bounded output (1.716042ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+      method: 'interop.run',
+      params: {
+        platform: 'codex',
+        prompt: 'summarize the repo',
+  -     timeout: 300
+      }
+    }
+  
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/harnesses.test.ts:223:9)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { method: 'interop.run', params: { platform: 'codex', prompt: 'summarize the repo' } },
+    expected: { method: 'interop.run', params: { platform: 'codex', prompt: 'summarize the repo', timeout: 300 } },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test/harnesses.test.ts:235:1
+✖ /harnesses Run a task refuses when the gateway does not report its deadline (15.986917ms)
+  TypeError [Error]: Cannot read properties of undefined (reading 'text')
+      at TestContext.<anonymous> (file:///Users/shadow/machina/ui/test/harnesses.test.ts:247:26)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)

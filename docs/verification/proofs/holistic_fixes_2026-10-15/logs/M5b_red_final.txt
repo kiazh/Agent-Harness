@@ -1,0 +1,182 @@
+F..FFFF                                                                  [100%]
+=================================== FAILURES ===================================
+_______ test_summary_aged_out_of_the_window_still_reaches_the_assembler ________
+
+db_pool = <machina.db.connection.Database object at 0x10982f110>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109223950>
+
+    async def test_summary_aged_out_of_the_window_still_reaches_the_assembler(db_pool, monkeypatch):
+        """RED: after 10 newer chunks the newest-10 window no longer contains the
+        summary, so the live source (and therefore the assembler) loses the only
+        live record of pre-compaction state."""
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+            await _seed_aged_out_summary(database, sid)
+    
+            recent = await cm.get_recent_context(sid, limit=10)
+    
+            # Control: the ordinary newest-10 window is unchanged (newest first).
+            plain = [r for r in recent if r["type"] != "compression_summary"]
+            assert [r["payload"]["content"] for r in plain] == [
+                f"turn {i}" for i in reversed(range(10))
+            ]
+    
+            # The single latest usable live summary must still be carried.
+            summaries = [r for r in recent if r["type"] == "compression_summary"]
+>           assert len(summaries) == 1, "latest live compaction summary fell out of the window"
+E           AssertionError: latest live compaction summary fell out of the window
+E           assert 0 == 1
+E            +  where 0 = len([])
+
+tests/test_holistic_m5b_summary_window.py:113: AssertionError
+_____________ test_only_the_latest_usable_live_summary_is_carried ______________
+
+db_pool = <machina.db.connection.Database object at 0x109901850>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10931b930>
+
+    async def test_only_the_latest_usable_live_summary_is_carried(db_pool, monkeypatch):
+        """Two live summaries outside the window: only the newest is carried."""
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+            await _seed(
+                database,
+                sid,
+                "OLDER-SUMMARY",
+                chunk_type="compression_summary",
+                created_at=BASE,
+                payload={"content": "OLDER-SUMMARY"},
+            )
+            await _seed(
+                database,
+                sid,
+                "NEWER-SUMMARY",
+                chunk_type="compression_summary",
+                created_at=BASE + timedelta(minutes=1),
+                payload={"content": "NEWER-SUMMARY"},
+            )
+            for i in range(10):
+                await _seed(database, sid, f"turn {i}", created_at=BASE + timedelta(minutes=i + 2))
+    
+            recent = await cm.get_recent_context(sid, limit=10)
+            summaries = [r for r in recent if r["type"] == "compression_summary"]
+>           assert len(summaries) == 1
+E           assert 0 == 1
+E            +  where 0 = len([])
+
+tests/test_holistic_m5b_summary_window.py:223: AssertionError
+_________ test_unusable_newest_summary_does_not_mask_older_usable_one __________
+
+db_pool = <machina.db.connection.Database object at 0x1098fae40>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1098ccd10>
+
+    async def test_unusable_newest_summary_does_not_mask_older_usable_one(db_pool, monkeypatch):
+        """A degenerate newest row (no content, no checkpoint) cannot hide the
+        last usable summary; the assembler would otherwise render nothing."""
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+            await _seed(
+                database,
+                sid,
+                "USABLE-SUMMARY",
+                chunk_type="compression_summary",
+                created_at=BASE,
+                payload={"content": "USABLE-SUMMARY"},
+            )
+            await _seed(
+                database,
+                sid,
+                "",
+                chunk_type="compression_summary",
+                created_at=BASE + timedelta(minutes=1),
+                payload={"content": "   ", "original_count": 0},
+            )
+            for i in range(10):
+                await _seed(database, sid, f"turn {i}", created_at=BASE + timedelta(minutes=i + 2))
+    
+            recent = await cm.get_recent_context(sid, limit=10)
+            summaries = [r for r in recent if r["type"] == "compression_summary"]
+>           assert len(summaries) == 1
+E           assert 0 == 1
+E            +  where 0 = len([])
+
+tests/test_holistic_m5b_summary_window.py:255: AssertionError
+_____________ test_corrupt_newest_summary_does_not_break_recovery ______________
+
+db_pool = <machina.db.connection.Database object at 0x10a238130>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a224d60>
+
+    async def test_corrupt_newest_summary_does_not_break_recovery(db_pool, monkeypatch):
+        """Recovery reads rows the window never touched: a corrupt summary row is
+        skipped instead of failing the turn or masking the last usable summary."""
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+            await _seed(
+                database,
+                sid,
+                "USABLE-SUMMARY",
+                chunk_type="compression_summary",
+                created_at=BASE,
+                payload={"content": "USABLE-SUMMARY"},
+            )
+            # 0xc1 is msgpack's reserved byte: unpacking always fails.
+            await _seed(
+                database,
+                sid,
+                "",
+                chunk_type="compression_summary",
+                created_at=BASE + timedelta(minutes=1),
+                raw_payload=b"\xc1",
+            )
+            for i in range(10):
+                await _seed(database, sid, f"turn {i}", created_at=BASE + timedelta(minutes=i + 2))
+    
+            recent = await cm.get_recent_context(sid, limit=10)
+            summaries = [r for r in recent if r["type"] == "compression_summary"]
+>           assert len(summaries) == 1
+E           assert 0 == 1
+E            +  where 0 = len([])
+
+tests/test_holistic_m5b_summary_window.py:288: AssertionError
+___________ test_carried_summary_respects_the_assembler_token_budget ___________
+
+db_pool = <machina.db.connection.Database object at 0x10a3de000>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a2a5760>
+
+    async def test_carried_summary_respects_the_assembler_token_budget(db_pool, monkeypatch):
+        """Budget control: the carried entry goes through the same ``add()``
+        accounting as every other section — a tiny budget still caps the prompt."""
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+            await _seed_aged_out_summary(database, sid)
+            recent = await cm.get_recent_context(sid, limit=10)
+    
+            budget = 220
+            prompt = PromptAssembler(session_budget=budget).assemble(
+                system_prompt="You are a test agent.",
+                goal=None,
+                recent_chunks=recent,
+                retrieved_chunks=[],
+                query="continue the task",
+            )
+            assert get_token_count(prompt) <= budget + 5
+>           assert "## Compacted Context" in prompt
+E           AssertionError: assert '## Compacted Context' in 'You are a test agent.\n\n\n## Recent Activity\n[user_message] turn 7\n[user_message] turn 8\n[user_message] turn 9\n\n\n## Current Query\ncontinue the task'
+
+tests/test_holistic_m5b_summary_window.py:311: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_holistic_m5b_summary_window.py::test_summary_aged_out_of_the_window_still_reaches_the_assembler
+FAILED tests/test_holistic_m5b_summary_window.py::test_only_the_latest_usable_live_summary_is_carried
+FAILED tests/test_holistic_m5b_summary_window.py::test_unusable_newest_summary_does_not_mask_older_usable_one
+FAILED tests/test_holistic_m5b_summary_window.py::test_corrupt_newest_summary_does_not_break_recovery
+FAILED tests/test_holistic_m5b_summary_window.py::test_carried_summary_respects_the_assembler_token_budget
+5 failed, 2 passed in 1.29s

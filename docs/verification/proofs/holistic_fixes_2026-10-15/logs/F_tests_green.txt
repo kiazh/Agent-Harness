@@ -1,0 +1,31 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0 -- /Users/shadow/machina/.venv/bin/python
+hypothesis profile 'default'
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 20 items
+
+tests/test_firecrawl_lifecycle.py::test_config_keys_defaults_env_and_coercion PASSED [  5%]
+tests/test_firecrawl_lifecycle.py::test_disabled_is_a_full_noop PASSED   [ 10%]
+tests/test_firecrawl_lifecycle.py::test_stop_without_start_never_touches_a_user_stack PASSED [ 15%]
+tests/test_firecrawl_lifecycle.py::test_start_spawns_limactl_then_up_with_env_marker_and_log PASSED [ 20%]
+tests/test_firecrawl_lifecycle.py::test_start_respects_an_explicit_docker_host PASSED [ 25%]
+tests/test_firecrawl_lifecycle.py::test_non_executable_launcher_runs_via_its_interpreter PASSED [ 30%]
+tests/test_firecrawl_lifecycle.py::test_start_without_limactl_runs_up_only_and_warns_once PASSED [ 35%]
+tests/test_firecrawl_lifecycle.py::test_start_is_idempotent_for_the_same_session PASSED [ 40%]
+tests/test_firecrawl_lifecycle.py::test_start_prunes_dead_markers PASSED [ 45%]
+tests/test_firecrawl_lifecycle.py::test_missing_up_script_warns_once_and_does_not_start PASSED [ 50%]
+tests/test_firecrawl_lifecycle.py::test_spawn_failure_is_logged_not_raised_and_marker_cleaned PASSED [ 55%]
+tests/test_firecrawl_lifecycle.py::test_invalid_config_value_is_logged_not_raised PASSED [ 60%]
+tests/test_firecrawl_lifecycle.py::test_stop_keeps_stack_while_another_live_session_marker_exists PASSED [ 65%]
+tests/test_firecrawl_lifecycle.py::test_last_session_tears_down_and_prunes_stale_marker PASSED [ 70%]
+tests/test_firecrawl_lifecycle.py::test_stop_on_exit_false_skips_teardown_and_keeps_marker PASSED [ 75%]
+tests/test_firecrawl_lifecycle.py::test_stop_skips_teardown_when_the_lifecycle_lock_is_unavailable PASSED [ 80%]
+tests/test_firecrawl_lifecycle.py::test_stop_timeout_is_bounded_and_logged PASSED [ 85%]
+tests/test_firecrawl_lifecycle.py::test_stop_tolerates_failing_down_and_missing_limactl PASSED [ 90%]
+tests/test_firecrawl_lifecycle.py::test_launch_ui_starts_then_stops_and_registers_atexit PASSED [ 95%]
+tests/test_firecrawl_lifecycle.py::test_launch_ui_stops_on_keyboard_interrupt PASSED [100%]
+
+============================== 20 passed in 6.53s ==============================

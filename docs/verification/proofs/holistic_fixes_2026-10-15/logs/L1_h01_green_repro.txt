@@ -1,0 +1,4 @@
+join deadline exceeded label=l1.h01.repro.source_close; work quarantined
+close_outcome='bounded' probe_seconds=8.0 elapsed=5.01s
+claim_released_before_gate=['owner-token']
+FIXED: source shutdown bounded; claim released before the finalizer settled

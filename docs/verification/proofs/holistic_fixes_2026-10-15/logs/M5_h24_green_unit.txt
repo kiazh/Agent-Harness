@@ -1,0 +1,15 @@
+✔ /delegate renders a paused child as a distinct approval state (1.216375ms)
+✔ /delegate paused state offers approval and continuation actions (0.137416ms)
+✔ /delegate approving a paused child resolves against the child session (0.516167ms)
+✔ /delegate denying a paused child resolves a denial against the child session (0.126125ms)
+✔ /delegate switching to the paused child resumes it as the current session (0.156292ms)
+✔ /delegate leaving the pause keeps the child-session continuation target (0.118583ms)
+✔ /delegate complete and error states keep their existing rendering (0.119875ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 228.822541

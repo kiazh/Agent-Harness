@@ -1,0 +1,38 @@
+Lane L2R RED evidence (captured BEFORE each fix, verbatim excerpts)
+
+=== H02 — streaming long-token tail leak (pytest, pre-fix) ===
+tests/test_holistic_l2r_memory_fixes.py::test_h02_long_token_stream_matches_batch[sk-beyond-200-cap]
+    E   AssertionError: chunks of 1 diverged:
+    '[REDACTED_OPENAI_KEY]aaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb done.'
+    E   assert '[REDACTED_OP...bbbbbbb done.' == '[REDACTED_OPENAI_KEY] done.'
+
+Standalone reviewer diagnostic (logs/h02_repro.py, pre-fix):
+    batch output:  '[REDACTED_OPENAI_KEY] done.'
+    stream output: '[REDACTED_OPENAI_KEY]' + 'b'*80 + ' done.'
+    unredacted synthetic tail length: 80
+    LEAK REPRODUCED: True
+
+=== H05 — explicit searches never requested dense retrieval (pytest, pre-fix) ===
+FAILED test_h05_recall_tool_prepares_query_embedding
+    E   AssertionError: assert None == [0.25, 0.5]
+FAILED test_h05_api_search_requests_dense_and_reports_mode
+FAILED test_h05_api_search_reports_keyword_only_without_embedder
+FAILED test_h05_gateway_search_requests_dense_and_reports_mode
+    E   AssertionError: assert None == [0.5]
+    E    where None = {...}.get('query_embedding')
+4 failed, 10 passed
+
+=== H06 — total retrieval failure returned as a valid empty result (pre-fix) ===
+Standalone reviewer diagnostic #2 (logs/h06_repro.py, pre-fix):
+    Sparse search failed: ConnectionError
+    Result returned: []
+    Reported as valid empty result: True
+
+pytest pre-fix:
+FAILED test_h06_all_branches_failing_raises_typed_error
+FAILED test_h06_dense_and_sparse_both_failing_raises
+FAILED test_h06_recall_tool_surfaces_total_failure_as_error
+FAILED test_h06_api_search_surfaces_total_failure_as_503
+FAILED test_h06_gateway_search_surfaces_total_failure_as_rpc_error
+    E   Failed: DID NOT RAISE
+5 failed, 17 passed

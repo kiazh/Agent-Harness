@@ -1,0 +1,158 @@
+F..EFF                                                                   [100%]
+==================================== ERRORS ====================================
+____ ERROR at setup of test_only_the_latest_usable_live_summary_is_carried _____
+
+self = <Coroutine test_only_the_latest_usable_live_summary_is_carried>
+
+    def setup(self) -> None:
+        runner_fixture_id = f"_{self._loop_scope}_scoped_runner"
+        if runner_fixture_id not in self.fixturenames:
+            self.fixturenames.append(runner_fixture_id)
+        # When loop factories are configured, resolve the loop factory
+        # fixture early so that a factory variant change cascades cache
+        # invalidation before any async fixture checks its cache.
+        hook_caller = self.config.hook.pytest_asyncio_loop_factories
+        if hook_caller.get_hookimpls():
+            _ = self._request.getfixturevalue(_asyncio_loop_factory.__name__)
+>       return super().setup()
+               ^^^^^^^^^^^^^^^
+
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:558: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:944: in pytest_fixture_setup
+    hook_result = yield
+                  ^^^^^
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:407: in _asyncgen_fixture_wrapper
+    result = runner.run(setup(), context=context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py:127: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:719: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+.venv/lib/python3.14/site-packages/pytest_asyncio/plugin.py:403: in setup
+    res = await gen_obj.__anext__()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/conftest.py:194: in db_pool
+    await test_db.initialize_schema()
+machina/db/connection.py:230: in initialize_schema
+    await conn.execute(schema_sql)
+.venv/lib/python3.14/site-packages/asyncpg/connection.py:377: in execute
+    result = await self._protocol.query(query, timeout)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+E   DETAIL:  Process 26125 waits for AccessExclusiveLock on relation 541518 of database 541086; blocked by process 26053.
+E   Process 26053 waits for RowShareLock on relation 541496 of database 541086; blocked by process 26125.
+E   HINT:  See server log for query details.
+
+asyncpg/protocol/protocol.pyx:341: DeadlockDetectedError
+=================================== FAILURES ===================================
+_______ test_summary_aged_out_of_the_window_still_reaches_the_assembler ________
+
+db_pool = <machina.db.connection.Database object at 0x10e00f4d0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10da0be10>
+
+    async def test_summary_aged_out_of_the_window_still_reaches_the_assembler(
+        db_pool, monkeypatch
+    ):
+        """RED: after 10 newer chunks the newest-10 window no longer contains the
+        summary, so the live source (and therefore the assembler) loses the only
+        live record of pre-compaction state."""
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+            await _seed_aged_out_summary(database, sid)
+    
+            recent = await cm.get_recent_context(sid, limit=10)
+    
+            # Control: the ordinary newest-10 window is unchanged (newest first).
+            plain = [r for r in recent if r["type"] != "compression_summary"]
+            assert [r["payload"]["content"] for r in plain] == [
+                f"turn {i}" for i in reversed(range(10))
+            ]
+    
+            # The single latest usable live summary must still be carried.
+            summaries = [r for r in recent if r["type"] == "compression_summary"]
+>           assert len(summaries) == 1, "latest live compaction summary fell out of the window"
+E           AssertionError: latest live compaction summary fell out of the window
+E           assert 0 == 1
+E            +  where 0 = len([])
+
+tests/test_holistic_m5b_summary_window.py:109: AssertionError
+_________ test_unusable_newest_summary_does_not_mask_older_usable_one __________
+
+db_pool = <machina.db.connection.Database object at 0x10e0eaf50>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10eefcef0>
+
+    async def test_unusable_newest_summary_does_not_mask_older_usable_one(db_pool, monkeypatch):
+        """A degenerate newest row (no content, no checkpoint) cannot hide the
+        last usable summary; the assembler would otherwise render nothing."""
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+            await _seed(
+                database,
+                sid,
+                "USABLE-SUMMARY",
+                chunk_type="compression_summary",
+                created_at=BASE,
+                payload={"content": "USABLE-SUMMARY"},
+            )
+            await _seed(
+                database,
+                sid,
+                "",
+                chunk_type="compression_summary",
+                created_at=BASE + timedelta(minutes=1),
+                payload={"content": "   ", "original_count": 0},
+            )
+            for i in range(10):
+                await _seed(database, sid, f"turn {i}", created_at=BASE + timedelta(minutes=i + 2))
+    
+            recent = await cm.get_recent_context(sid, limit=10)
+            summaries = [r for r in recent if r["type"] == "compression_summary"]
+>           assert len(summaries) == 1
+E           assert 0 == 1
+E            +  where 0 = len([])
+
+tests/test_holistic_m5b_summary_window.py:239: AssertionError
+___________ test_carried_summary_respects_the_assembler_token_budget ___________
+
+db_pool = <machina.db.connection.Database object at 0x10ea69e50>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ea3d4f0>
+
+    async def test_carried_summary_respects_the_assembler_token_budget(db_pool, monkeypatch):
+        """Budget control: the carried entry goes through the same ``add()``
+        accounting as every other section — a tiny budget still caps the prompt."""
+        async with isolated_schema(db_pool) as (_schema, database):
+            monkeypatch.setattr(ctxmod, "db", database)
+            cm = ContextManager()
+            sid = await _session(database)
+            await _seed_aged_out_summary(database, sid)
+            recent = await cm.get_recent_context(sid, limit=10)
+    
+            budget = 220
+            prompt = PromptAssembler(session_budget=budget).assemble(
+                system_prompt="You are a test agent.",
+                goal=None,
+                recent_chunks=recent,
+                retrieved_chunks=[],
+                query="continue the task",
+            )
+            assert get_token_count(prompt) <= budget + 5
+>           assert "## Compacted Context" in prompt
+E           AssertionError: assert '## Compacted Context' in 'You are a test agent.\n\n\n## Recent Activity\n[user_message] turn 7\n[user_message] turn 8\n[user_message] turn 9\n\n\n## Current Query\ncontinue the task'
+
+tests/test_holistic_m5b_summary_window.py:262: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_holistic_m5b_summary_window.py::test_summary_aged_out_of_the_window_still_reaches_the_assembler
+FAILED tests/test_holistic_m5b_summary_window.py::test_unusable_newest_summary_does_not_mask_older_usable_one
+FAILED tests/test_holistic_m5b_summary_window.py::test_carried_summary_respects_the_assembler_token_budget
+ERROR tests/test_holistic_m5b_summary_window.py::test_only_the_latest_usable_live_summary_is_carried
+3 failed, 2 passed, 1 error in 74.40s (0:01:14)

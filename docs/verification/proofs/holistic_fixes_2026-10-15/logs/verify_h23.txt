@@ -1,0 +1,6 @@
+PASS: echo reports the requested effort
+PASS: effective effort equals the echo (env shadow synced)
+PASS: MACHINA_REASONING_EFFORT now carries the requested value
+PASS: off echo reports provider default
+PASS: off is effective even though env previously carried 'high'
+RESULT: FIX VERIFIED — the echo is the effective setting under an env shadow

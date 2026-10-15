@@ -1,0 +1,24 @@
+probed module: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/interop_head.py
+stub resolution: {'opencode': '/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-r4gpx2ky/opencode', 'codex': '/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-r4gpx2ky/codex', 'hermes': '/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-r4gpx2ky/hermes'}
+
+platform=opencode prompt='--help'
+  command    = ['/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-r4gpx2ky/opencode', 'run', '--help']
+  exit_code  = 0
+  ok         = True
+  stdout     = 'OPENCODE HELP (usage text, exit 0)'
+  stderr     = ''
+
+platform=codex prompt='--help'
+  command    = ['/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-r4gpx2ky/codex', 'exec', '--help']
+  exit_code  = 0
+  ok         = True
+  stdout     = 'CODEX HELP (usage text, exit 0)'
+  stderr     = ''
+
+platform=hermes prompt='--help'
+  command    = ['/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/h09-stubs-r4gpx2ky/hermes', '-z', '--help']
+  exit_code  = 2
+  ok         = False
+  stdout     = ''
+  stderr     = 'usage: hermes: error: argument -z/--oneshot: expected one argument'
+

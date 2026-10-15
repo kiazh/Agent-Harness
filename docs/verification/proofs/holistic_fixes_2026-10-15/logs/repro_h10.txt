@@ -1,0 +1,6 @@
+== H10: config/transport max_tokens disagreement ==
+Config.set('max_tokens', 65536) -> ok  (cfg.max_tokens=65536)
+save + reload -> max_tokens=65536 (saved successfully)
+provider.complete(max_tokens=65536) -> ValidationError: max_tokens must be between 1 and 32768, got 65536
+HTTP posts attempted: 0
+RESULT: REPRODUCED — saved value is rejected at request time before provider contact

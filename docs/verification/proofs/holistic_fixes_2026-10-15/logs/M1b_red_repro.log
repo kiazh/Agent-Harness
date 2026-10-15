@@ -1,0 +1,10 @@
+2026-10-15 13:07:48,005 [AUDIT] {"timestamp": 1792084068.005853, "event": "memory_pending_create", "pending_id": "3ea075b2-ad76-449d-a1b0-e7ba175e78b2", "agent_id": "harness", "category": "fact", "redactions": []}
+Audit event dropped before the writer started; event was not persisted
+2026-10-15 13:07:48,010 [AUDIT] {"timestamp": 1792084068.010043, "event": "memory_add", "memory_id": "7477731d-fde8-441c-889f-6e5501f36a9c", "agent_id": "harness", "category": "fact", "importance": 0.5, "quarantined": false}
+Audit event dropped before the writer started; event was not persisted
+2026-10-15 13:07:48,011 [AUDIT] {"timestamp": 1792084068.011306, "event": "memory_approved", "pending_id": "3ea075b2-ad76-449d-a1b0-e7ba175e78b2", "memory_id": "7477731d-fde8-441c-889f-6e5501f36a9c", "auto_approved": false}
+Audit event dropped before the writer started; event was not persisted
+submitted under        : fake:model-a:1536
+pending row space      : <column unavailable: UndefinedColumnError>
+completed memory space : _fake:model-b:1536
+RESULT: BUG — completed row was tagged with the post-switch space

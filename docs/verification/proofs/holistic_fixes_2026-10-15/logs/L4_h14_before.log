@@ -1,0 +1,7 @@
+policy: cp -RL source clone -> allowed (routine trusted project command)
+cp exit=0 stderr=''
+clone/data is_symlink=False is_file=True
+read_file('clone/data') exposes outside bytes: True
+  content: 'OUTSIDE-PRIVATE-CONTENT-9f2c'
+RESULT: ESCAPE — policy allowed the dereferencing copy
+exit=1

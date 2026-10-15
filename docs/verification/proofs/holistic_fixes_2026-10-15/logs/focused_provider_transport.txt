@@ -1,0 +1,18 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 138 items
+
+tests/test_provider_rate_limit.py ............                           [  8%]
+tests/test_provider_context_audit.py ............                        [ 17%]
+tests/test_r5_011_013_provider_transport.py ...........                  [ 25%]
+tests/test_deep_provider_fallback.py .........                           [ 31%]
+tests/test_providers_direct.py ........................                  [ 49%]
+tests/test_provider_custom.py ......................                     [ 65%]
+tests/test_fm2_provider.py ............................................. [ 97%]
+...                                                                      [100%]
+
+============================= 138 passed in 3.32s ==============================

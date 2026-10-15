@@ -1,0 +1,33 @@
+{
+  "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+  "full_file_count": 305,
+  "full_line_count": 87543,
+  "hash_mismatches": [],
+  "missing_application_python_sql_typescript": [],
+  "excluded": [
+    {
+      "path": "ui/package-lock.json",
+      "line_count": 1759,
+      "sha256": "dfde5ef030e1024c9ab7e9eac704f0f687ce6c95d1b54335bd8d5392bbf2faeb",
+      "status": "excluded_generated",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "reason": "Generated dependency resolution; not application source; not claimed as line-by-line reviewed."
+    },
+    {
+      "path": "uv.lock",
+      "line_count": 3878,
+      "sha256": "e96247db430f25ed635267fa6d1b6df0bf94c756d00136666b95275a8f73d88e",
+      "status": "excluded_generated",
+      "baseline": "20a1faf4809584aa0d63e78b198d4e89604721f7",
+      "reason": "Generated dependency resolution; not application source; not claimed as line-by-line reviewed."
+    }
+  ],
+  "source_manifests": [
+    "root_coverage.json",
+    "runtime_coverage.json",
+    "security_coverage.json",
+    "ui_coverage.json"
+  ],
+  "final_snapshot": "64fc75fb6715f628709d2f3ad8162170c69cbdbd",
+  "final_snapshot_note": "Application source hashes unchanged; four subsequent skill reference text diffs reviewed separately."
+}

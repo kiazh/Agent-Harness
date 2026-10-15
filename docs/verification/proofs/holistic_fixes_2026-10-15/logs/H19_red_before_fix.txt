@@ -1,0 +1,83 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_______ test_shutdown_closes_every_component_of_the_active_rag_pipeline ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1098caea0>
+
+    async def test_shutdown_closes_every_component_of_the_active_rag_pipeline(monkeypatch):
+        """H19: shutdown closed the active pipeline's embedder but left its
+        reranker (HTTP/Cohere client) open and kept the closed generation cached;
+        releasing the active pipeline must close all owned components and reset
+        the recorded generation."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+    
+        from machina.core import runtime as runtime_module
+        from machina.observability import audit as audit_mod
+        from machina.tools import rag as rag_tools
+    
+        embedder = SimpleNamespace(close=AsyncMock())
+        reranker = SimpleNamespace(close=AsyncMock())
+        monkeypatch.setattr(
+            rag_tools,
+            "_rag_pipeline",
+            SimpleNamespace(_embedder=embedder, _reranker=reranker),
+        )
+        monkeypatch.setattr(rag_tools, "_rag_pipeline_identity", ((0,), (0,), (0.0, 0.0)))
+        monkeypatch.setattr(runtime_module, "drain_background_tasks", AsyncMock())
+        monkeypatch.setattr(audit_mod.audit_persistence, "stop", AsyncMock())
+        monkeypatch.setattr("machina.rag.embedder.close_shared_embedder", AsyncMock())
+        monkeypatch.setattr("machina.db.connection.db.close", AsyncMock())
+    
+        runtime = RuntimeServices(_started=True)
+        await runtime.shutdown(timeout=1.0)
+    
+        embedder.close.assert_awaited_once()
+>       reranker.close.assert_awaited_once()
+
+tests/test_deep_runtime_shutdown.py:232: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <AsyncMock id='4464254592'>
+
+    def assert_awaited_once(self):
+        """
+        Assert that the mock was awaited exactly once.
+        """
+        if not self.await_count == 1:
+            msg = (f"Expected {self._mock_name or 'mock'} to have been awaited once."
+                   f" Awaited {self.await_count} times.")
+>           raise AssertionError(msg)
+E           AssertionError: Expected mock to have been awaited once. Awaited 0 times.
+
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2376: AssertionError
+_____________ test_close_active_rag_pipeline_is_one_lifecycle_seam _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a19fe30>
+
+    async def test_close_active_rag_pipeline_is_one_lifecycle_seam(monkeypatch):
+        """H19: one helper owns the full release — every owned component closes
+        (isolated failures never mask the others) and a second call is a no-op."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+    
+        from machina.tools import rag as rag_tools
+    
+        embedder = SimpleNamespace(close=AsyncMock(side_effect=RuntimeError("embedder boom")))
+        reranker = SimpleNamespace(close=AsyncMock())
+        monkeypatch.setattr(
+            rag_tools,
+            "_rag_pipeline",
+            SimpleNamespace(_embedder=embedder, _reranker=reranker),
+        )
+        monkeypatch.setattr(rag_tools, "_rag_pipeline_identity", ((0,), (0,), (0.0, 0.0)))
+    
+>       await rag_tools.close_active_rag_pipeline()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'machina.tools.rag' has no attribute 'close_active_rag_pipeline'
+
+tests/test_deep_runtime_shutdown.py:254: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_deep_runtime_shutdown.py::test_shutdown_closes_every_component_of_the_active_rag_pipeline
+FAILED tests/test_deep_runtime_shutdown.py::test_close_active_rag_pipeline_is_one_lifecycle_seam
+2 failed, 7 deselected in 0.38s

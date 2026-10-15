@@ -1,0 +1,3 @@
+close_outcome='hang' elapsed_probe=1.0s
+claim_released_before_gate=[]
+REPRODUCED: source shutdown blocked claim release (H01)

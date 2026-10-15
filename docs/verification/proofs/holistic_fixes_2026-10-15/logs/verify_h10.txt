@@ -1,0 +1,10 @@
+Ignoring invalid config max_tokens in /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/tmpv6llo90m/config.yaml: ValueError
+PASS: single ceiling constant exported: MAX_TOKENS=32768
+PASS: Config.set rejection message: max_tokens must be in range 1..32768, got 65536
+PASS: rejected set did not mutate the value
+PASS: config accepts the ceiling
+PASS: config rejects ceiling+1
+PASS: transport accepts the ceiling
+PASS: transport rejects ceiling+1
+PASS: stale file value above ceiling keeps the default
+RESULT: FIX VERIFIED — one shared ceiling; save and request time agree

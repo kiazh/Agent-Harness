@@ -1,0 +1,100 @@
+FFF.                                                                     [100%]
+=================================== FAILURES ===================================
+____________ test_error_frame_fails_stream_instead_of_empty_success ____________
+
+make = <function make.<locals>._provider at 0x109a85c70>
+
+    async def test_error_frame_fails_stream_instead_of_empty_success(make):
+        """H12: HTTP 200 + ``{"error": ...}`` frame + ``[DONE]`` used to complete
+        as a successful empty response; it must raise a typed ProviderError."""
+    
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _sse({"error": {"message": "upstream overloaded", "code": "server_error"}})
+    
+        provider = make(handler)
+>       with pytest.raises(ProviderError) as excinfo:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderError
+
+tests/test_copilot_provider.py:300: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 12:50:09,370 [AUDIT] {"timestamp": 1792083009.37075, "event": "llm_stream_start", "provider": "copilot", "model": "gpt-6.1-sol", "message_count": 2}
+2026-10-15 12:50:09,377 [AUDIT] {"timestamp": 1792083009.377121, "event": "llm_stream_complete", "provider": "copilot", "model": "gpt-6.1-sol", "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083009.37075, "event": "llm_stream_start", "provider": "copilot", "model": "gpt-6.1-sol", "message_count": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083009.377121, "event": "llm_stream_complete", "provider": "copilot", "model": "gpt-6.1-sol", "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+________ test_error_frame_after_partial_output_fails_without_done_event ________
+
+make = <function make.<locals>._provider at 0x109b2f5e0>
+
+    async def test_error_frame_after_partial_output_fails_without_done_event(make):
+        """H12: text already yielded stays yielded, but an explicit error frame
+        must never be reported as a completed partial response."""
+    
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _sse(_text_chunk("partial "), {"error": "upstream exploded"})
+    
+        provider = make(handler)
+        events: list = []
+>       with pytest.raises(ProviderError) as excinfo:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderError
+
+tests/test_copilot_provider.py:317: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 12:50:09,406 [AUDIT] {"timestamp": 1792083009.406118, "event": "llm_stream_start", "provider": "copilot", "model": "gpt-6.1-sol", "message_count": 2}
+2026-10-15 12:50:09,406 [AUDIT] {"timestamp": 1792083009.406889, "event": "llm_stream_complete", "provider": "copilot", "model": "gpt-6.1-sol", "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083009.406118, "event": "llm_stream_start", "provider": "copilot", "model": "gpt-6.1-sol", "message_count": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083009.406889, "event": "llm_stream_complete", "provider": "copilot", "model": "gpt-6.1-sol", "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+______ test_error_frame_finishes_reservation_failed_without_success_usage ______
+
+make = <function make.<locals>._provider at 0x109a866c0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109abdf20>
+
+    async def test_error_frame_finishes_reservation_failed_without_success_usage(make, monkeypatch):
+        """H12: the failed call keeps conservative accounting — the reservation is
+        finished ``failed`` and the already-yielded partial output is not counted
+        as a successful completion."""
+        import uuid
+    
+        from machina.core.provider import copilot as copilot_module
+    
+        finished: list[dict] = []
+    
+        class _Store:
+            async def reserve(self, *args, **kwargs):
+                return uuid.UUID(int=1)
+    
+            async def finish(self, reservation_id, usage=None, *, failed=False, model=None):
+                finished.append({"usage": usage, "failed": failed})
+                return True
+    
+        monkeypatch.setattr(copilot_module, "usage_store", _Store())
+    
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _sse(_text_chunk("partial "), {"error": {"message": "boom"}})
+    
+        provider = make(handler)
+>       with pytest.raises(ProviderError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderError
+
+tests/test_copilot_provider.py:349: Failed
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 12:50:09,412 [AUDIT] {"timestamp": 1792083009.412545, "event": "llm_stream_start", "provider": "copilot", "model": "gpt-6.1-sol", "message_count": 2}
+2026-10-15 12:50:09,413 [AUDIT] {"timestamp": 1792083009.4131799, "event": "llm_stream_complete", "provider": "copilot", "model": "gpt-6.1-sol", "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083009.412545, "event": "llm_stream_start", "provider": "copilot", "model": "gpt-6.1-sol", "message_count": 2}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:244 {"timestamp": 1792083009.4131799, "event": "llm_stream_complete", "provider": "copilot", "model": "gpt-6.1-sol", "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+=========================== short test summary info ============================
+FAILED tests/test_copilot_provider.py::test_error_frame_fails_stream_instead_of_empty_success
+FAILED tests/test_copilot_provider.py::test_error_frame_after_partial_output_fails_without_done_event
+FAILED tests/test_copilot_provider.py::test_error_frame_finishes_reservation_failed_without_success_usage
+3 failed, 1 passed, 11 deselected in 0.36s
