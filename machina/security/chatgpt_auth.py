@@ -8,11 +8,15 @@ loopback redirect (``http://localhost:1455/auth/callback``) is fixed by the
 client registration, so the PKCE helpers here implement the same flow the
 Codex CLI exposes.
 
-Refresh exchanges are serialized per store with the repository's flock idiom
-(``machina/interop.py`` / ``machina/connectors/store.py``) and all credential
+Refresh exchanges are serialized per store (``machina.security.store_fence``;
+acquisition is bounded and fails typed under contention) and all credential
 publication is fenced by an authentication generation: a logout bumps the
 generation (durably, next to the store) and removes the store, so a late
 callback, exchange, or refresh response cannot resurrect revoked credentials.
+A refresh whose caller-supplied tokens predate a logout refuses to run at all
+(the store is gone and must not be recreated), and a login exchange whose
+store was benignly rotated by a peer still publishes its fresh pair instead of
+treating the rotation as a cancellation.
 Token values read from or written to the store are registered with the
 process-wide secret-redaction registry, so they are redactable in tool
 results and logs even when they were never resolved as named secrets.
@@ -43,15 +47,8 @@ import httpx
 
 from machina.core.config import config
 from machina.core.exceptions import ProviderError
+from machina.security import store_fence
 from machina.security.secrets import remember_secret_value
-
-# Store locking follows machina/interop.py: an exclusive OS file lock on a
-# sibling ``.lock`` file (POSIX flock; msvcrt on Windows).
-_WINDOWS = os.name == "nt"
-if _WINDOWS:  # pragma: no cover - platform branch
-    import msvcrt
-else:
-    import fcntl
 
 # Public Codex CLI OAuth registration (client id + fixed loopback redirect).
 CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -175,37 +172,23 @@ def invalidate_credentials(path: str | Path | None = None) -> int:
 
 @contextmanager
 def _store_lock(target: Path) -> Iterator[None]:
-    """Exclusive per-store lock (same flock idiom as machina/interop.py).
+    """Exclusive per-store lock (bounded; see ``machina.security.store_fence``).
 
     Serializes whole read -> exchange -> publish sections across threads AND
     processes, so two concurrent refreshes can never submit the same rotating
-    refresh token. The lock file holds no state and the atomic store replace
-    keeps the store itself always readable.
+    refresh token. Acquisition is bounded by the shared helper's
+    ``STORE_LOCK_TIMEOUT_SECONDS`` and surfaces the store's typed error
+    ``chatgpt_auth_lock_timeout`` under contention instead of blocking forever.
     """
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(str(target) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
-    acquired = False
     try:
-        if _WINDOWS:  # pragma: no cover - platform branch
-            # msvcrt locks a byte range from the current file position.
-            if os.fstat(fd).st_size == 0:
-                os.write(fd, b"\0")
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-        else:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        acquired = True
-        yield
-    finally:
-        try:
-            if acquired:
-                if _WINDOWS:  # pragma: no cover - platform branch
-                    os.lseek(fd, 0, os.SEEK_SET)
-                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+        with store_fence.store_lock(target):
+            yield
+    except store_fence.StoreLockTimeout as exc:
+        raise ChatGPTAuthError(
+            "timed out waiting for the ChatGPT token store lock (another process is "
+            f"refreshing the credentials); retry; {LOGIN_HINT}",
+            code="chatgpt_auth_lock_timeout",
+        ) from exc
 
 
 def _store_fingerprint(target: Path) -> tuple[bool, bytes]:
@@ -531,10 +514,13 @@ def refresh(
     Refresh tokens are single-use with rotation: if the store already holds a
     different pair (a peer process refreshed first), that pair is adopted
     instead of replaying a consumed token. The whole read -> exchange ->
-    publish section is serialized per store (flock), so concurrent callers
-    submit the rotating token exactly once, and publication is fenced against
-    a logout that removed the store or bumped its generation while the
-    response was in flight.
+    publish section is serialized per store (bounded lock; see
+    :mod:`machina.security.store_fence`), so concurrent callers submit the
+    rotating token exactly once, and publication is fenced against a logout
+    that removed the store or bumped its generation while the response was in
+    flight. Caller-supplied tokens whose store no longer exists (they were
+    loaded before a logout) refuse with ``chatgpt_auth_signed_out`` instead of
+    recreating the removed store.
     """
     target = Path(path) if path is not None else auth_path()
     with _store_lock(target):
@@ -547,6 +533,16 @@ def refresh(
             raise ChatGPTAuthError(
                 f"not signed in to ChatGPT: no tokens stored and nothing to refresh; {LOGIN_HINT}",
                 code="chatgpt_auth_missing",
+            )
+        if tokens and stored is None:
+            # The caller's pair was loaded while a store existed, but the
+            # store is gone now (a logout landed after they were issued): a
+            # refresh must not resurrect revoked credentials, so it refuses
+            # before replaying the stale rotating token against the network.
+            raise ChatGPTAuthError(
+                "ChatGPT credentials were signed out after they were loaded; the removed "
+                f"token store will not be recreated by a refresh; {LOGIN_HINT}",
+                code="chatgpt_auth_signed_out",
             )
         # Peer adoption: a store rotation that we have not seen means our
         # refresh token may already be consumed; use the store's pair when it
@@ -718,6 +714,15 @@ def login_url(
     )
 
 
+def _cancelled_error() -> ChatGPTAuthError:
+    """The typed error for a login flow a logout invalidated (never tokens)."""
+    return ChatGPTAuthError(
+        "ChatGPT sign-in was cancelled before the token exchange completed; "
+        f"start it again. {LOGIN_HINT}",
+        code="chatgpt_auth_cancelled",
+    )
+
+
 def exchange_code(
     code: str,
     *,
@@ -731,20 +736,21 @@ def exchange_code(
     """Swap an authorization code (+PKCE verifier) for tokens and persist them.
 
     Publication is fenced: when a caller passes the *generation* it captured
-    when the login flow started (and the store snapshot taken here), a logout
-    that landed while the exchange was in flight raises
-    ``chatgpt_auth_cancelled`` instead of recreating revoked credentials.
+    when the login flow started, a logout that landed while the exchange was
+    in flight raises ``chatgpt_auth_cancelled`` instead of recreating revoked
+    credentials. A content change that did NOT bump the generation is a benign
+    peer rotation (another process refreshed while this exchange ran): the
+    exchanged pair is the newer credential and the one-time code was already
+    spent, so it publishes instead of false-cancelling the completed login. A
+    store *removed* without a generation bump also cancels — that state is
+    indistinguishable from a revocation and must not be recreated.
     """
     if not str(code).strip():
         raise ChatGPTAuthError("authorization code is empty", code="chatgpt_code_missing")
     target = Path(path) if path is not None else auth_path()
     if generation is not None and credential_generation(target) != generation:
         # Logout already invalidated this flow: do not even consume the code.
-        raise ChatGPTAuthError(
-            "ChatGPT sign-in was cancelled before the token exchange completed; "
-            f"start it again. {LOGIN_HINT}",
-            code="chatgpt_auth_cancelled",
-        )
+        raise _cancelled_error()
     snapshot = _store_fingerprint(target)
     http, owns_client = _client_or_new(client, timeout)
     try:
@@ -802,16 +808,20 @@ def exchange_code(
     assert normalized is not None  # access_token is non-empty by the check above
     normalized["last_refresh"] = _utc_now_z()
     with _store_lock(target):
-        cancelled = generation is not None and credential_generation(target) != generation
-        if not cancelled and _store_fingerprint(target) != snapshot:
-            # The store appeared/disappeared/changed while the exchange ran
-            # (logout removed it, or another login wrote it): do not clobber.
-            cancelled = True
-        if cancelled:
-            raise ChatGPTAuthError(
-                "ChatGPT sign-in was cancelled before the token exchange completed; "
-                f"start it again. {LOGIN_HINT}",
-                code="chatgpt_auth_cancelled",
-            )
+        if generation is not None and credential_generation(target) != generation:
+            # A logout invalidated this flow while the exchange was in
+            # flight: never publish revoked credentials.
+            raise _cancelled_error()
+        # A content change without a generation bump is a benign peer rotation
+        # (a refresh elsewhere rotated the store while this exchange ran). The
+        # one-time code was already consumed, so the fresh login pair is the
+        # newest credential: publish it instead of false-cancelling. A store
+        # that was REMOVED out from under the exchange still cancels — that
+        # state is indistinguishable from a revocation and must not be
+        # recreated.
+        was_present, _ = snapshot
+        now_present, _ = _store_fingerprint(target)
+        if was_present and not now_present:
+            raise _cancelled_error()
         save_tokens(normalized, target)
     return normalized

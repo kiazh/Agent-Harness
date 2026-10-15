@@ -13,6 +13,8 @@ in ``~/.machina/auth/copilot.json`` (0600, atomic replace);
 The interactive login is GitHub's standard device flow with VS Code's public
 GitHub App client id (published in OSS; the same id the reference Hermes
 implementation uses), so no browser listener and no client secret are needed.
+A logout bumps the store's authentication generation, so a device
+authorization completing afterwards writes nothing.
 
 No token value is ever logged or embedded in an error message; callers get
 :class:`CopilotAuthError` with a stable ``code`` and an actionable hint.
@@ -35,6 +37,7 @@ import httpx
 
 from machina.core.config import config
 from machina.core.exceptions import ProviderError
+from machina.security import store_fence
 
 # VS Code's public GitHub App client id (device flow; no secret).
 COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
@@ -74,6 +77,16 @@ def auth_path() -> Path:
         home = str(config.get("machina_home") or "")
     root = Path(home).expanduser() if home else Path.home() / ".machina"
     return root / "auth" / "copilot.json"
+
+
+def credential_generation(path: str | Path | None = None) -> int:
+    """Current authentication generation for the store (see ``store_fence``).
+
+    Captured before a device flow starts; a logout bumps it, and
+    :func:`publish_device_token` then refuses to publish.
+    """
+    target = Path(path) if path is not None else auth_path()
+    return store_fence.credential_generation(target)
 
 
 def _utc_now_z() -> str:
@@ -257,6 +270,18 @@ def import_from_gh_cli(
     return load_tokens(target)
 
 
+def logout(*, path: str | Path | None = None) -> bool:
+    """Remove the Machina token store and fence in-flight authentication work.
+
+    The generation is bumped (durably, next to the store) before the unlink,
+    so a device flow completing after a logout writes nothing. The gh CLI's
+    credential store is never touched: the next resolution re-imports it.
+    Returns True when a store existed and was removed.
+    """
+    target = Path(path) if path is not None else auth_path()
+    return store_fence.fenced_logout(target)
+
+
 def status(*, path: str | Path | None = None, probe_gh: bool = True) -> dict[str, Any]:
     """Read-only status: signed in?, token family, account, source. Never tokens.
 
@@ -424,6 +449,43 @@ def device_flow_poll(
         "GitHub device authorization timed out; run the login again",
         code="copilot_device_timeout",
     )
+
+
+def _device_cancelled() -> CopilotAuthError:
+    return CopilotAuthError(
+        "GitHub device authorization was cancelled by a logout; run the login again",
+        code="copilot_auth_cancelled",
+    )
+
+
+def publish_device_token(
+    token: str,
+    *,
+    account: str | None,
+    generation: int,
+    path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Persist a device-flow token, fenced against a concurrent logout.
+
+    The caller captures :func:`credential_generation` before the device flow
+    starts; a logout bumps it, so a flow completing afterwards raises
+    ``copilot_auth_cancelled`` and writes nothing.
+    """
+    target = Path(path) if path is not None else auth_path()
+    with store_fence.store_lock(target):
+        if store_fence.credential_generation(target) != generation:
+            raise _device_cancelled()
+        save_tokens({"token": token, "account": account}, target)
+        published = load_tokens(target)
+        if store_fence.credential_generation(target) != generation:
+            # A logout raced the publish gate: undo our own write so the
+            # store stays removed.
+            if published is not None and published.get("token") == str(token).strip():
+                with suppress(FileNotFoundError):
+                    target.unlink()
+            raise _device_cancelled()
+        assert published is not None  # the atomic save above just wrote it
+        return published
 
 
 def resolve_tokens(
