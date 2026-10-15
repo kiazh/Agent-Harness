@@ -79,6 +79,33 @@ class AuditPersistence:
             await asyncio.wait({task}, timeout=0.1)
             raise
 
+    def reset(self) -> None:
+        """Normalize to a clean, unstarted generation (recovery/test seam).
+
+        Drops any owner count, writer task, and queue left by a previous
+        generation and clears ``_ever_started`` so the singleton is
+        indistinguishable from a freshly constructed one. This is the
+        documented way for a harness (or a recovery path) to shed a leaked
+        generation without reaching into private attributes.
+
+        A task bound to a different (or already-dead) event loop cannot be
+        awaited or drained here, so it is dropped, not joined: any events it
+        still held were already lost with that loop. Logs when it discards
+        live state so a leak stays visible rather than silently vanishing.
+        """
+        if self._owners or self._task is not None or self._queue is not None:
+            logger.warning(
+                "AuditPersistence.reset() discarding state "
+                "(owners=%s, task=%s, queue=%s); any queued events were dropped",
+                self._owners,
+                self._task,
+                self._queue,
+            )
+        self._owners = 0
+        self._task = None
+        self._queue = None
+        self._ever_started = False
+
     async def _run(self, queue: asyncio.Queue[dict[str, Any] | None]) -> None:
         while True:
             entry = await queue.get()

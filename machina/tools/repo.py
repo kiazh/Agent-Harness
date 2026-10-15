@@ -16,6 +16,7 @@ import shutil
 from machina.skills import repo_install
 from machina.skills.registry import skill_registry
 from machina.tools.base import registry
+from machina.tools.file import _run_worker_joined
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,13 @@ async def repo_stage(url: str) -> str:
         return f"Error: {exc}"
     clone_parent = None
     try:
-        repo_dir, revision = await asyncio.to_thread(repo_install.clone_repo, source)
+        # Clone and staged-plan publication are filesystem effects, so their
+        # workers are joined on cancellation (HELD-44 semantics via
+        # _run_worker_joined): a cancelled stage must not detach a worker that
+        # finishes writing after turn ownership is released. The scan read has
+        # no effects and stays on bare to_thread (same read/write split as
+        # tools/file.py).
+        repo_dir, revision = await _run_worker_joined(lambda: repo_install.clone_repo(source))
         clone_parent = repo_dir.parent
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
@@ -63,7 +70,7 @@ async def repo_stage(url: str) -> str:
         return "Error: staging failed (filesystem error)"
     try:
         plan = await asyncio.to_thread(repo_install.scan_repo, repo_dir, source, revision)
-        await asyncio.to_thread(repo_install.write_staged_plan, plan, repo_dir)
+        await _run_worker_joined(lambda: repo_install.write_staged_plan(plan, repo_dir))
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
     except OSError:
@@ -71,7 +78,9 @@ async def repo_stage(url: str) -> str:
         return "Error: staging failed (filesystem error)"
     finally:
         if clone_parent is not None:
-            await asyncio.to_thread(shutil.rmtree, clone_parent, ignore_errors=True)
+            # Cleanup is also joined so the discarded clone is gone before
+            # cancellation is reported.
+            await _run_worker_joined(lambda: shutil.rmtree(clone_parent, ignore_errors=True))
     summary = plan.summary()
     lines = [
         f"Staged {source.url} at {revision[:12]} (plan {plan.digest[:16]}...).",
@@ -132,8 +141,11 @@ async def repo_stage(url: str) -> str:
 async def repo_activate(digest: str) -> str:
     try:
         detail, staged = await asyncio.to_thread(repo_install.load_staged_plan, digest)
-        installed = await asyncio.to_thread(
-            repo_install.activate_plan, detail, staged, skills_dir_for_install()
+        skills_dir = skills_dir_for_install()
+        # The install is the publishing filesystem effect: join its worker so a
+        # cancelled activation cannot install skills after ownership releases.
+        installed = await _run_worker_joined(
+            lambda: repo_install.activate_plan(detail, staged, skills_dir)
         )
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
