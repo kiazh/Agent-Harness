@@ -472,7 +472,10 @@ def test_recent_context_ordering_sql():
     import pathlib
 
     src = pathlib.Path("machina/core/context.py").read_text()
-    assert "ORDER BY created_at DESC, id DESC" in src
+    # HELD-55: the durable event ordinal joins the tie-break (id stays as the
+    # final fallback); ordering keeps created_at first for cross-batch order.
+    assert "ORDER BY created_at DESC, event_seq DESC NULLS LAST, id DESC" in src
+    assert "ORDER BY created_at DESC, id DESC" not in src
 
 
 # ─── 6. Document count uses stable identity ──────────────────────────────

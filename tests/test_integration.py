@@ -616,7 +616,17 @@ class TestSessionContextIntegration:
             tokens = await context_manager.get_token_usage(session_id)
             assert tokens == 150
 
-            # Delete chunks
+            # Delete chunks (transactional double, same pattern as the
+            # comprehensive twin: R4-096 removed the production test-double
+            # branch, so the mock must drive acquire/transaction — acquire is a
+            # sync call returning an async CM, hence MagicMock here).
+            connection = MagicMock()
+            connection.execute = AsyncMock(side_effect=["DELETE 5", "DELETE 1"])
+            connection.fetchval = AsyncMock(return_value=True)
+            connection.transaction = MagicMock()
+            mock_db.acquire = MagicMock()
+            mock_db.acquire.return_value.__aenter__.return_value = connection
+            mock_db.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
             count = await context_manager.delete_chunks(session_id)
             assert count == 5
 
