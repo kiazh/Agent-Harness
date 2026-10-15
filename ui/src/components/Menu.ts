@@ -146,23 +146,87 @@ export class Menu implements Component {
 		return cap === undefined ? live : Math.min(cap, live);
 	}
 
-	private visibleWindow(visible: SelectItem[]): SelectItem[] {
+	/** Sanitized title lines. Titles are untrusted (session titles, recall
+	 * previews) and may carry embedded newlines, so the title occupies more
+	 * than one physical row. */
+	private titleLines(): string[] {
+		return sanitizeDisplay(this.title).split("\n");
+	}
+
+	/**
+	 * Raw physical rows for one filtered item, before padding/styling. This
+	 * is the single physical-row→item map shared by layout (render),
+	 * hit-testing (handleMouse) and viewport budgeting (visibleWindow): an
+	 * embedded newline in a label or description is one more physical row
+	 * here and everywhere. The `[x]`/`[ ]` and selection markers are fixed
+	 * width, so spans never shift under selection or checks.
+	 */
+	private itemRows(item: SelectItem, content: number, selected: string | undefined): { rows: string[]; section: boolean } {
+		if (isSection(item)) {
+			return { rows: sanitizeDisplay(item.label ?? item.value).split("\n"), section: true };
+		}
+		const label = `${this.multiSelect ? (this.checked.has(item.value) ? "[x] " : "[ ] ") : ""}${sanitizeDisplay(item.label ?? item.value)}`;
+		const head = item.value === selected
+			? `${ICONS.selectedMarker} ${label}`
+			: `  ${label}`;
+		// Descriptions yield at narrow widths; primary labels carry actions.
+		const room = Math.max(0, content - visibleWidth(head) - 2);
+		const tail = item.description && room > 4 ? `  ${truncateToWidth(sanitizeDisplay(item.description), room)}` : "";
+		return { rows: `${head}${tail}`.split("\n"), section: false };
+	}
+
+	private visibleWindow(visible: SelectItem[], content: number): SelectItem[] {
+		if (visible.length === 0) return [];
+		// The budget counts physical rows, not items: a two-line entry
+		// consumes two rows of the viewport.
 		const budget = this.rowBudget();
+		const selected = this.getSelectedItem()?.value;
+		const spans = visible.map((item) => this.itemRows(item, content, selected).rows.length);
 		const at = Math.max(0, visible.findIndex(item => item.value === this.selectedValue));
-		const start = Math.max(0, Math.min(visible.length - budget, at - Math.floor(budget / 2)));
-		return visible.slice(start, start + budget);
+		// Center the selection by physical rows, then fill leftover budget.
+		const before = Math.floor(Math.max(0, budget - (spans[at] ?? 1)) / 2);
+		let start = at;
+		let rowsBefore = 0;
+		while (start > 0 && rowsBefore + (spans[start - 1] ?? 1) <= before) {
+			rowsBefore += spans[start - 1]!;
+			start--;
+		}
+		let end = at;
+		let rows = 0;
+		for (let i = start; i <= end; i++) rows += spans[i]!;
+		while (end + 1 < visible.length && rows + (spans[end + 1] ?? 1) <= budget) {
+			end++;
+			rows += spans[end]!;
+		}
+		while (start > 0 && rows + (spans[start - 1] ?? 1) <= budget) {
+			start--;
+			rows += spans[start]!;
+		}
+		return visible.slice(start, end + 1);
 	}
 
 	handleMouse(event: TuiMouseEvent): ReturnType<NonNullable<Component["handleMouse"]>> {
 		if (!this.multiSelect || event.button !== "left") return undefined;
-		const item = this.visibleWindow(this.filtered())[event.y - 2];
-		if (!item || isSection(item)) return undefined;
-		if (event.type === "click") {
-			this.select(item.value);
-			this.toggle(item.value);
-			return { handled: true, focus: true, render: true };
+		const content = Math.max(1, event.width);
+		const selected = this.getSelectedItem()?.value;
+		const window = this.visibleWindow(this.filtered(), content);
+		// Item rows start after the (possibly multi-line) title + filter row.
+		let row = event.y - this.titleLines().length - 1;
+		if (row < 0) return undefined;
+		for (const item of window) {
+			const entry = this.itemRows(item, content, selected);
+			if (row < entry.rows.length) {
+				if (entry.section) return undefined;
+				if (event.type === "click") {
+					this.select(item.value);
+					this.toggle(item.value);
+					return { handled: true, focus: true, render: true };
+				}
+				if (event.type === "press") return { handled: true, focus: true };
+				return undefined;
+			}
+			row -= entry.rows.length;
 		}
-		if (event.type === "press") return { handled: true, focus: true };
 		return undefined;
 	}
 
@@ -235,8 +299,8 @@ export class Menu implements Component {
 		// Titles/labels/descriptions are untrusted (session titles, recall
 		// previews, model IDs): sanitize first, then split embedded newlines
 		// into physical rows so a payload cannot corrupt the viewport.
-		const out = sanitizeDisplay(this.title)
-			.split("\n")
+		const titleRows = this.titleLines();
+		const out = titleRows
 			.map((line, index) => truncateToWidth(`${theme.dim(line)}${index === 0 ? ` ${count}` : ""}`, content));
 		out.push(
 			this.filter
@@ -248,23 +312,17 @@ export class Menu implements Component {
 		} else {
 			// Live budget: follow the constructed cap and the viewport so the
 			// selection and cancel hint stay visible on short windows.
-			for (const item of this.visibleWindow(visible)) {
-				if (isSection(item)) {
-					for (const line of sanitizeDisplay(item.label ?? item.value).split("\n")) {
+			for (const item of this.visibleWindow(visible, content)) {
+				const entry = this.itemRows(item, content, selected);
+				if (entry.section) {
+					for (const line of entry.rows) {
 						out.push(truncateToWidth(theme.dim(line), content));
 					}
 					continue;
 				}
-				const label = `${this.multiSelect ? (this.checked.has(item.value) ? "[x] " : "[ ] ") : ""}${sanitizeDisplay(item.label ?? item.value)}`;
-				const head = item.value === selected
-					? `${ICONS.selectedMarker} ${label}`
-					: `  ${label}`;
-				// Descriptions yield at narrow widths; primary labels carry actions.
-				const room = Math.max(0, content - visibleWidth(head) - 2);
-				const tail = item.description && room > 4 ? `  ${truncateToWidth(sanitizeDisplay(item.description), room)}` : "";
 				// Each embedded newline becomes its own physical row; the
 				// selection bar spans every row of the selected entry.
-				for (const row of `${head}${tail}`.split("\n")) {
+				for (const row of entry.rows) {
 					const padded = `${row}${" ".repeat(Math.max(0, content - visibleWidth(row)))}`;
 					out.push(item.value === selected ? selectionBar(padded, content) : padded);
 				}
