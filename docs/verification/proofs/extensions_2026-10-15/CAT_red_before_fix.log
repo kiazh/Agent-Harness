@@ -1,0 +1,17 @@
+# RED demonstration — the old default pin must now fail (2026-10-15)
+# Pre-fix value in HEAD:
+134:    DEFAULT_MODEL = "gpt-4o"
+
+# Current module rejects the stale id:
+Ignoring unreadable config persona_description in /Users/shadow/.machina/config.yaml: ImportError
+ImportError
+/Users/shadow/machina/machina/core/config.py:616 (load)
+/Users/shadow/machina/machina/core/config.py:282 (validate_value)
+/Users/shadow/machina/machina/memory/__init__.py:15 (<module>)
+/Users/shadow/machina/machina/memory/approval.py:23 (<module>)
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from machina.core.provider.copilot import CopilotProvider; assert CopilotProvider.DEFAULT_MODEL == 'gpt-4o', 'RED: old gpt-4o pin is gone; current=' + CopilotProvider.DEFAULT_MODEL
+                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RED: old gpt-4o pin is gone; current=gpt-6.1-sol
+exit=1

@@ -1,0 +1,19 @@
+# hermes status (provider list) — 2026-10-15
+
+┌─────────────────────────────────────────────────────────┐
+│                 ☤ Hermes Agent Status                  │
+└─────────────────────────────────────────────────────────┘
+
+  Model:        stepfun/step-5-preview:free
+  Provider:     Nous Portal
+  Providers:    Nous Portal, GitHub Copilot, DeepSeek
+  Gateway:      ✓ running
+  Platforms:    none configured
+  Jobs:         0
+
+
+# ~/.hermes/config.yaml model section (no copilot default is configured):
+model:
+  default: stepfun/step-5-preview:free
+  provider: nous
+  base_url: https://inference-api.nousresearch.com/v1

@@ -1,0 +1,6 @@
+# ruff — CAT model catalogues (2026-10-15)
+# cmd: .venv/bin/python -m ruff check <files>
+All checks passed!
+
+# cmd: .venv/bin/python -m ruff format --check <files>
+4 files already formatted

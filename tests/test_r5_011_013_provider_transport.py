@@ -330,7 +330,7 @@ async def test_r5_g2_copilot_stream_no_space_frames(_high_rate_limit):
     from machina.core.provider.copilot import CopilotProvider
 
     provider = CopilotProvider.__new__(CopilotProvider)
-    provider.model = "gpt-4o"
+    provider.model = "gpt-6.1-sol"
     provider._default_effort = ""
     provider._rate_limiter = AsyncMock()
     provider._rate_limit_key = "copilot"

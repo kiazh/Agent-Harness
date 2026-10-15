@@ -131,7 +131,7 @@ def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
 class CopilotProvider(LLMProvider, RateLimitBinding):
     """OpenAI-compatible Copilot API over the user's Copilot subscription."""
 
-    DEFAULT_MODEL = "gpt-4o"
+    DEFAULT_MODEL = "gpt-6.1-sol"  # live Copilot catalog, 2026-10-15
 
     def __init__(
         self,

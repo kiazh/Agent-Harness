@@ -68,7 +68,7 @@ def make(monkeypatch, tmp_path):
     def _provider(
         handler,
         *,
-        model: str | None = "gpt-4o",
+        model: str | None = "gpt-6.1-sol",
         token: str | None = "gho_test",
         write_store: bool = True,
     ) -> CopilotProvider:
@@ -101,7 +101,7 @@ async def test_wire_headers_and_text_stream(make):
         assert request.headers["x-initiator"] == "agent"
         assert request.headers["user-agent"].startswith("GitHubCopilotChat/")
         body = json.loads(request.content)
-        assert body["model"] == "gpt-4o"
+        assert body["model"] == "gpt-6.1-sol"
         assert body["stream"] is True
         assert body["messages"][1] == {"role": "user", "content": "hello"}
         return _sse(
@@ -269,9 +269,9 @@ async def test_complete_drains_stream(make):
 
 
 def test_factory_builds_copilot_provider_and_strips_prefix():
-    provider = get_provider("copilot", model="copilot/gpt-4o")
+    provider = get_provider("copilot", model="copilot/gpt-6.1-sol")
     assert isinstance(provider, CopilotProvider)
-    assert provider.model == "gpt-4o"
+    assert provider.model == "gpt-6.1-sol"
 
 
 async def test_stream_without_usage_marks_estimate(make):
