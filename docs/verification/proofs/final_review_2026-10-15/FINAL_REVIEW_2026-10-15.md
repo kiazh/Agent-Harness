@@ -37,7 +37,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 |---|---|---|---|
 | S1 | P2 | `_check_ip_public` missed CGNAT (100.100.100.200 metadata) + ranges | FIXED 56c0222 |
 | S2 | P2 | MCP mode ceiling bypassed when `mode=None` (inherits operator mode) | LANE (misc) |
-| S3 | P2 | Embedded-`@` DB URL password leaks partially past the redactor | FIXED 0e933a8 |
+| S3 | P2 | Embedded-`@` DB URL leak + password-only userinfo (`:pw@`) | FIXED 0e933a8 + 4c00c00* |
 | S4 | P2 | REV `:N:path` git revspec bypasses the credential gate | FIXED e0590e0 |
 | S5 | P2 | `grep -id recurse` compact clusters bypass recursive-read review | FIXED e0590e0 |
 | S6 | P3 | `_sanitize_value` kwargs can override event/timestamp (spoofing) | FIXED 0e933a8 |
@@ -47,6 +47,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | S10 | P3 | `device_flow_poll` unbounded slow_down sleep | FIXED bd886c1 |
 | S11 | P3 | `find_pending`/`find_approved_unclaimed` skip public_view | FIXED e0590e0 |
 | S12 | P3u | Credential params named bare `key`/`*_key` not redacted | DEFERRED (would over-redact benign `key=`; needs naming policy) |
+| S14 | P2 | Presigned-URL signatures (`sig=`, `X-Amz-Signature`) persisted in audit | FIXED (SEC-2 commit) |
 | S13 | Q | `is_loopback_base_url` treats 0.0.0.0 as loopback | DEFERRED (pre-existing; document) |
 
 ## C. Core runtime
