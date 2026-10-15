@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 
 from machina.core.compression import (
     CompressionConfig,
@@ -399,3 +401,105 @@ class TestCompressionIntegration:
         assert comp_config.enabled is True
         assert comp_config.threshold == 0.8
         assert comp_config.target_ratio == 0.5
+
+
+# ---------------------------------------------------------------------------
+# R4-011 E2E: compaction keeps delegated result text (real DB)
+# ---------------------------------------------------------------------------
+
+_CHILD_MARKER = "R4-011 delegated child output: 7af3 checks passed"
+
+
+@pytest_asyncio.fixture
+async def live_db():
+    """Connect the shared DB to MACHINA_TEST_DATABASE_URL (skip when absent)."""
+    if not os.environ.get("MACHINA_TEST_DATABASE_URL"):
+        pytest.skip("MACHINA_TEST_DATABASE_URL not set")
+    from machina.db.connection import db
+
+    await db.connect()
+    yield db
+    await db.close()
+
+
+class _EchoSummarizer:
+    """Provider-boundary fake: echoes the summarization prompt it receives."""
+
+    model = "echo-summarizer"
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def complete(self, **kwargs):
+        prompt = kwargs["messages"][-1]["content"]
+        self.prompts.append(prompt)
+        return LLMResponse(
+            content="SUMMARY: " + prompt,
+            model=self.model,
+            usage={"total_tokens": 1},
+        )
+
+    async def close(self) -> None:
+        pass
+
+
+async def test_e2e_compaction_keeps_delegated_result_text(live_db, monkeypatch):
+    """Real DB + real ``services.compress_session`` path; fake only the network.
+
+    The orchestrator stores delegated results as
+    ``payload={"agent": ..., "content": ...}`` (orchestrator.py:417-423);
+    the summarizer prompt must carry that content so the persisted summary
+    cannot silently drop the child's output.
+    """
+    from machina import services as svc
+    from machina.core import provider as provmod
+    from machina.core.config import config
+    from machina.core.context import context_manager
+    from machina.core.session import session_manager
+
+    fake = _EchoSummarizer()
+    monkeypatch.setattr(provmod, "get_provider", lambda provider=None, model=None: fake)
+    monkeypatch.setattr(config, "compression_llm_summarize", True)
+    monkeypatch.setattr(config, "compression_preserve_recent", 1)
+
+    session = await session_manager.create(title="r4-011-compaction", agent_id="harness")
+    try:
+        oldest = await context_manager.add_chunk(
+            session.id, "harness", "user_message", {"content": "please delegate"}, token_count=5
+        )
+        delegated = await context_manager.add_chunk(
+            session.id,
+            "researcher",
+            "result",
+            {"agent": "researcher", "content": f"[researcher] {_CHILD_MARKER}"},
+            token_count=12,
+        )
+        newest = await context_manager.add_chunk(
+            session.id, "harness", "user_message", {"content": "continue"}, token_count=5
+        )
+        # Deterministic recency: add_chunk has no created_at argument.
+        now = datetime.now(UTC).replace(tzinfo=None)
+        for chunk, age in ((newest, 0), (delegated, 1), (oldest, 2)):
+            await live_db.execute(
+                "UPDATE context_chunks SET created_at = $2 WHERE id = $1",
+                chunk.id,
+                now - timedelta(seconds=age),
+            )
+
+        outcome = await svc.compress_session_with_status(session)
+        assert outcome.status == "completed"
+        assert outcome.result is not None
+        assert outcome.result.method == "llm_summarize"
+
+        summaries = [
+            c
+            for c in await context_manager.get_all_chunks(session.id)
+            if c.chunk_type == "compression_summary"
+        ]
+        assert len(summaries) == 1
+        # The prompt at the provider boundary carried the delegated output,
+        # and the persisted summary (echo) kept it.
+        assert any(_CHILD_MARKER in p for p in fake.prompts)
+        assert _CHILD_MARKER in summaries[0].payload["content"]
+    finally:
+        await live_db.execute("DELETE FROM sessions WHERE id = $1", session.id)

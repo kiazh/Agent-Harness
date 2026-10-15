@@ -822,7 +822,7 @@ class ContextCompressor:
             return text
         elif chunk_type == "result":
             status = payload.get("status", "ok")
-            result = payload.get("result", "")
+            result = payload.get("result", payload.get("content", ""))
             if isinstance(result, str) and len(result) > 200:
                 result = result[:200] + "..."
             return f"[Result] {status}: {result}"
