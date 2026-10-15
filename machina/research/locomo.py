@@ -487,8 +487,15 @@ async def evaluate_session_recall(
     separate sessions. Cleanup removes both sessions and their archive rows.
     Returns evidence metrics and mean query latency in milliseconds.
 
-    With ``title_only=True`` only session-title hits are scored — the
-    title-only baseline used to show what transcript search adds.
+    With ``title_only=True`` the title baseline is scored: sessions are titled
+    from their opening turn (``SessionManager.generate_title``, production
+    parity), a matched title identifies its session, and that session's dialogue
+    IDs are scored in turn order (title hits carry ``chunk_id=None``, so they
+    cannot be mapped through the chunk table). This measures whether a title-only
+    search can locate the session that holds the evidence — the title-only
+    baseline used to show what transcript search adds. Without ``title_only``
+    the transcript (session-recall) baseline is scored and session titles stay a
+    neutral placeholder, since its ranking ignores title hits anyway.
     """
     if not 1 <= k <= 100:
         raise ValueError("k must be between 1 and 100")
@@ -507,13 +514,33 @@ async def evaluate_session_recall(
         agent_id = f"locomo-recall-{uuid.uuid4()}"
         session_ids: list[uuid.UUID] = []
         identifiers: dict[uuid.UUID, str] = {}
+        # Dialogue IDs archived per session, in turn order. Title hits carry
+        # chunk_id=None, so a title-only ranking must expand the matched
+        # session to its evidence IDs instead of looking up a chunk.
+        session_evidence: dict[uuid.UUID, list[str]] = {}
         try:
             for offset in range(0, len(conversation.turns), turns_per_session):
-                session = await session_manager.create(title="LoCoMo transcript", agent_id=agent_id)
+                window = conversation.turns[offset : offset + turns_per_session]
+                # The title-only baseline needs titles that carry content: a
+                # single generic placeholder can never match a question, which
+                # is what made the old baseline structurally unable to retrieve.
+                # The transcript (session-recall) baseline is scored separately
+                # and must not be perturbed, so it keeps the neutral placeholder
+                # (its ranking ignores title hits either way, but a
+                # content-derived title would collide with the dialogue chunk
+                # during recall's own content-hash dedup and evict it).
+                session_title = (
+                    session_manager.generate_title(window[0].text)
+                    if title_only
+                    else "LoCoMo transcript"
+                )
+                session = await session_manager.create(title=session_title, agent_id=agent_id)
                 session_ids.append(session.id)
-                for turn in conversation.turns[offset : offset + turns_per_session]:
+                session_evidence[session.id] = []
+                for turn in window:
                     chunk_id = uuid.uuid4()
                     identifiers[chunk_id] = turn.dia_id
+                    session_evidence[session.id].append(turn.dia_id)
                     await context_manager.archive_chunk(
                         session.id,
                         chunk_id,
@@ -528,10 +555,19 @@ async def evaluate_session_recall(
                 hits = await recall.discover(agent_id, question.text, limit=k)
                 query_seconds.append(time.perf_counter() - started)
                 if title_only:
-                    hits = [hit for hit in hits if hit.source == "title"]
-                rankings.append(
-                    [identifiers[hit.chunk_id] for hit in hits if hit.chunk_id in identifiers]
-                )
+                    # Comparable session→evidence ranking: a title match
+                    # identifies the session, whose dialogue IDs are scored in
+                    # turn order. Mapping title hits through ``identifiers``
+                    # would always be empty because their chunk_id is None.
+                    ranking: list[str] = []
+                    for hit in hits:
+                        if hit.source == "title":
+                            ranking.extend(session_evidence.get(hit.session_id, ()))
+                    rankings.append(ranking[:k])
+                else:
+                    rankings.append(
+                        [identifiers[hit.chunk_id] for hit in hits if hit.chunk_id in identifiers]
+                    )
         finally:
             # One failed delete must not skip the remaining sessions or mask
             # the error that triggered cleanup.
