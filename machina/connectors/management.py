@@ -29,7 +29,7 @@ from machina.connectors.models import (
     ConnectorToolError,
     validate_connector_id,
 )
-from machina.connectors.service import ConnectorService, _state_only
+from machina.connectors.service import ConnectorService, _state_only, refuse_sandbox_stdio
 from machina.connectors.store import ConnectorStore
 from machina.observability.diagnostics import record_failure
 from machina.permissions.broker import get_execution_context
@@ -168,8 +168,15 @@ def disconnect_spec(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _approved_request(spec: dict[str, Any], *, tool: str, agent_id: str, session_id: str) -> None:
-    """Require the broker-stamped snapshot for exactly this rebuilt request."""
+def _approved_request(
+    spec: dict[str, Any], *, tool: str, agent_id: str, session_id: str
+) -> dict[str, Any]:
+    """Require the broker-stamped snapshot for exactly this rebuilt request.
+
+    Returns the validated snapshot so callers can enforce mode-dependent
+    launch rules (e.g. no host stdio under sandbox) against the same context
+    the approval digest bound.
+    """
     snapshot = get_execution_context()
     if not snapshot or snapshot.get("session_id") != str(session_id):
         raise ConnectorToolError(f"{tool} requires an approved active session")
@@ -183,6 +190,7 @@ def _approved_request(spec: dict[str, Any], *, tool: str, agent_id: str, session
     )
     if snapshot.get("digest") != request.digest:
         raise ConnectorToolError(f"{tool} request changed after approval; ask again")
+    return snapshot
 
 
 def _fields_of(config: ConnectorConfig) -> dict[str, Any]:
@@ -205,10 +213,23 @@ def _view(service: ConnectorService, connector_id: str) -> dict[str, Any]:
 
 
 async def _compensate(
-    service: ConnectorService, connector_id: str, prior: dict[str, Any] | None
+    service: ConnectorService,
+    connector_id: str,
+    prior: dict[str, Any] | None,
+    written_revision: int,
 ) -> str:
-    """Undo a failed add: remove a new server, restore a replaced one."""
+    """Undo a failed add, but only against the revision this operation wrote.
+
+    The configuration lock is worker-local; another process can persist a newer
+    configuration while this operation awaits its connection. Reload first,
+    then compare-and-swap on the durable revision: if it moved, a newer write
+    has superseded ours and must not be removed or reverted (F03).
+    """
     try:
+        await service._refresh_locked()
+        current = service.registry.get(connector_id)
+        if current is None or current.revision != written_revision:
+            return "compensation skipped: configuration changed during connect"
         if prior is None:
             await service._remove_locked(connector_id)
             return "configuration removed"
@@ -231,9 +252,13 @@ async def add_and_connect(
     mcp_disconnect) because cancellation is not a connect failure.
     """
     fields, config, executable = _normalize_connect(args)
-    _approved_request(
+    snapshot = _approved_request(
         connect_spec(args), tool="mcp_connect", agent_id=agent_id, session_id=session_id
     )
+    mode = str(snapshot.get("mode") or "ask")
+    # Same sandbox transport rule as existing connect/invoke, enforced before
+    # any store write or launch (F04). Typed refusal, no partial write.
+    refuse_sandbox_stdio(config, mode)
     launch_config = replace(config, command=executable) if executable else config
     async with service._configuration_lock:
         await service._refresh_locked()
@@ -241,11 +266,14 @@ async def add_and_connect(
         if existing is not None and not _owner_ok(existing, agent_id):
             raise ConnectorToolError("connector belongs to another agent")
         prior = _fields_of(existing) if existing is not None else None
-        await service._configure_locked(fields)
+        written = await service._configure_locked(fields)
+        written_revision = int(written.get("revision", -1))
         try:
-            tools = await service.connect_and_discover(config.id, launch_config=launch_config)
+            tools = await service.connect_and_discover(
+                config.id, launch_config=launch_config, mode=mode
+            )
         except Exception as exc:
-            compensated = await _compensate(service, config.id, prior)
+            compensated = await _compensate(service, config.id, prior, written_revision)
             return {
                 "connected": False,
                 "server": config.id,
