@@ -627,8 +627,12 @@ class TestSessionContextIntegration:
         mock_db = AsyncMock()
         session_id = uuid.uuid4()
 
-        mock_db.fetch = AsyncMock(
-            return_value=[
+        def _fetch(query, *args):
+            # HELD-55: the writer first reserves durable event ordinals, then
+            # runs the UNNEST batch insert.
+            if "nextval('context_chunks_event_seq')" in query:
+                return [{"v": i + 1} for i in range(args[0])]
+            return [
                 {
                     "id": uuid.uuid4(),
                     "session_id": session_id,
@@ -642,7 +646,8 @@ class TestSessionContextIntegration:
                 }
                 for i in range(5)
             ]
-        )
+
+        mock_db.fetch = AsyncMock(side_effect=_fetch)
 
         with patch("machina.core.context.db", mock_db):
             chunks = [
@@ -656,7 +661,8 @@ class TestSessionContextIntegration:
             ]
             result = await context_manager.add_chunks_batch(chunks)
             assert len(result) == 5
-            mock_db.fetch.assert_called_once()
+            # One call reserves ordinals, one performs the UNNEST batch insert.
+            assert mock_db.fetch.call_count == 2
 
 
 # ===========================================================================

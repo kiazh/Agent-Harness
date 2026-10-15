@@ -721,6 +721,10 @@ class TestContextManagerProperties:
         ]
 
         async def fake_fetch(query: str, *args):
+            # HELD-55: the writer first reserves durable event ordinals in one
+            # round-trip, then runs the UNNEST batch insert.
+            if "nextval('context_chunks_event_seq')" in query:
+                return [{"v": i + 1} for i in range(args[0])]
             (
                 ids,
                 session_ids,
@@ -731,6 +735,7 @@ class TestContextManagerProperties:
                 embeddings,
                 _search_texts,
                 doc_sources,
+                _event_seqs,
             ) = args
             return [
                 {

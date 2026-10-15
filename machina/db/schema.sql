@@ -96,6 +96,21 @@ ALTER TABLE context_chunks ADD COLUMN IF NOT EXISTS document_source TEXT;
 CREATE INDEX IF NOT EXISTS idx_context_chunks_doc_source ON context_chunks(document_source)
     WHERE chunk_type = 'document';
 
+-- HELD-55: durable event ordinal. Every row written by one batch INSERT shares
+-- the transaction's created_at, so retrieval that tie-breaks on the random
+-- client-side UUID replays a batch's user/tool/assistant events out of order
+-- (resumed prompts, exports, consolidation). event_seq is assigned in original
+-- event order at write time; created_at remains primary and the UUID (id) stays
+-- the final fallback. The runtime migration path in connection.py applies the
+-- same additive DDL to existing databases (schema.sql never runs there).
+CREATE SEQUENCE IF NOT EXISTS context_chunks_event_seq;
+ALTER TABLE context_chunks ADD COLUMN IF NOT EXISTS event_seq BIGINT;
+ALTER TABLE context_chunks ALTER COLUMN event_seq
+    SET DEFAULT nextval('context_chunks_event_seq');
+ALTER SEQUENCE context_chunks_event_seq OWNED BY context_chunks.event_seq;
+CREATE INDEX IF NOT EXISTS idx_context_chunks_session_created_event
+    ON context_chunks(session_id, created_at DESC, event_seq DESC NULLS LAST, id DESC);
+
 -- Latest image context lives in image_context_schema.sql so both fresh
 -- installs (initialize_schema) and existing installations
 -- (initialize_runtime_schema) apply it; schema.sql alone never runs on

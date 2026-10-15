@@ -19,6 +19,20 @@ from machina.db.lazy import parse_command_count  # noqa: F401  (single impl; re-
 
 logger = logging.getLogger(__name__)
 
+# HELD-55: additive runtime migration for existing databases. schema.sql never
+# runs on an already-initialized database, so this must be applied by
+# ``initialize_runtime_schema`` too. Keep in sync with the context_chunks
+# section of schema.sql. Idempotent (IF NOT EXISTS / SET DEFAULT).
+_CONTEXT_EVENT_ORDER_MIGRATION = """
+CREATE SEQUENCE IF NOT EXISTS context_chunks_event_seq;
+ALTER TABLE context_chunks ADD COLUMN IF NOT EXISTS event_seq BIGINT;
+ALTER TABLE context_chunks ALTER COLUMN event_seq
+    SET DEFAULT nextval('context_chunks_event_seq');
+ALTER SEQUENCE context_chunks_event_seq OWNED BY context_chunks.event_seq;
+CREATE INDEX IF NOT EXISTS idx_context_chunks_session_created_event
+    ON context_chunks(session_id, created_at DESC, event_seq DESC NULLS LAST, id DESC);
+"""
+
 
 class Database:
     """Manages asyncpg connection pool."""
@@ -230,6 +244,7 @@ class Database:
             ):
                 with open(os.path.join(os.path.dirname(__file__), name), encoding="utf-8") as f:
                     await conn.execute(f.read())
+            await conn.execute(_CONTEXT_EVENT_ORDER_MIGRATION)
 
     # Standalone growth-migration entry point; migration tests apply it, no production caller. Kept (R4-106).
     async def initialize_growth_schema(self) -> None:

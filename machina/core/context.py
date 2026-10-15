@@ -99,19 +99,19 @@ _ADD_CHUNK_WITH_IMAGES_SQL = """
     """
 
 _ADD_CHUNKS_BATCH_SQL = """
-    INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
-    SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[])
+    INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, event_seq)
+    SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[], $10::bigint[])
     RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
     """
 
 _ADD_CHUNKS_BATCH_WITH_IMAGES_SQL = """
     WITH inserted AS (
-        INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
-        SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[])
+        INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, event_seq)
+        SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[], $10::bigint[])
         RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
     ), latest_images AS (
         INSERT INTO session_image_context (session_id, agent_id, images_msgpack)
-        SELECT * FROM UNNEST($10::uuid[], $11::text[], $12::bytea[]) WHERE TRUE
+        SELECT * FROM UNNEST($11::uuid[], $12::text[], $13::bytea[]) WHERE TRUE
         ON CONFLICT (session_id, agent_id) DO UPDATE
         SET images_msgpack=EXCLUDED.images_msgpack, updated_at=now()
     )
@@ -258,8 +258,23 @@ class ContextManager:
         # inserted. Selecting by session_id with a LIMIT would also match
         # pre-existing rows in that session (created_at is identical for every
         # row written in one transaction, so the ordering is nondeterministic).
+        #
+        # HELD-55: assign a durable event ordinal in the caller's original event
+        # order. The whole batch shares one transaction created_at, so without
+        # this the retrieval tie-break falls through to the random UUID and a
+        # batch's user/tool/assistant events replay out of order. Sequence
+        # values are allocated in one round-trip and sorted ascending so the
+        # i-th chunk gets the i-th ordinal regardless of nextval call order.
+        seq_rows = await db.fetch(
+            "SELECT nextval('context_chunks_event_seq') AS v FROM generate_series(1, $1::int)",
+            len(records),
+        )
+        ordinals = sorted(int(r["v"]) for r in seq_rows)
         chunk_ids = [uuid.uuid4() for _ in records]
-        records_with_ids = [(cid, *rec) for cid, rec in zip(chunk_ids, records, strict=True)]
+        records_with_ids = [
+            (cid, *rec, ordinal)
+            for cid, rec, ordinal in zip(chunk_ids, records, ordinals, strict=True)
+        ]
 
         # Use a single execute with RETURNING to insert all rows and get them
         # back in one round-trip, avoiding the executemany + extra fetch.
@@ -274,6 +289,7 @@ class ContextManager:
             [r[6] for r in records_with_ids],
             [r[7] for r in records_with_ids],
             [r[8] for r in records_with_ids],
+            [r[9] for r in records_with_ids],
         )
         if not image_updates:
             rows = await db.fetch(query, *base_args)
@@ -502,8 +518,9 @@ class ContextManager:
     ) -> list[ContextChunk]:
         """Get context chunks for a session, newest first.
 
-        Deterministic tie order (created_at DESC, id DESC) so timestamp ties
-        never scramble conversations or pagination.
+        Deterministic tie order (created_at DESC, event_seq DESC, id DESC) so a
+        batch written in one transaction (identical created_at) still replays in
+        original event order; the random UUID is only the final fallback.
         """
         if chunk_type:
             rows = await db.fetch(
@@ -511,7 +528,7 @@ class ContextManager:
                 SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
                 FROM context_chunks
                 WHERE session_id = $1 AND chunk_type = $2
-                ORDER BY created_at DESC, id DESC
+                ORDER BY created_at DESC, event_seq DESC NULLS LAST, id DESC
                 LIMIT $3 OFFSET $4
                 """,
                 session_id,
@@ -525,7 +542,7 @@ class ContextManager:
                 SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
                 FROM context_chunks
                 WHERE session_id = $1
-                ORDER BY created_at DESC, id DESC
+                ORDER BY created_at DESC, event_seq DESC NULLS LAST, id DESC
                 LIMIT $2 OFFSET $3
                 """,
                 session_id,
@@ -605,7 +622,7 @@ class ContextManager:
             WHERE session_id = $1
               AND ($3::uuid IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
                    > (COALESCE($2::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $3::uuid))
-            ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) ASC, id ASC
+            ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) ASC, event_seq ASC NULLS LAST, id ASC
             LIMIT $4
             """,
             session_id,
@@ -626,7 +643,7 @@ class ContextManager:
             """
             WITH transcript AS (
                 SELECT id, session_id, agent_id, chunk_type, payload_msgpack,
-                       token_count, embedding, created_at, accessed_at,
+                       token_count, embedding, created_at, accessed_at, event_seq,
                        1 AS source_priority, created_at AS saved_at, id AS source_id
                 FROM context_chunks WHERE session_id = $1
                   AND chunk_type IN ('user_message', 'assistant_message', 'tool_call', 'compression_summary')
@@ -634,6 +651,7 @@ class ContextManager:
                 SELECT chunk_id, session_id, COALESCE(agent_id, 'harness'), chunk_type,
                        payload_msgpack, token_count, embedding,
                        COALESCE(original_created_at, archived_at), NULL::timestamptz,
+                       NULL::bigint,
                        0, archived_at, id
                 FROM context_archive WHERE session_id = $1
                   AND chunk_type IN ('user_message', 'assistant_message', 'tool_call', 'compression_summary')
@@ -642,7 +660,7 @@ class ContextManager:
                 ORDER BY id, source_priority, saved_at ASC NULLS LAST, source_id ASC
             )
             SELECT * FROM deduplicated
-            ORDER BY created_at DESC NULLS LAST, id DESC
+            ORDER BY created_at DESC NULLS LAST, event_seq DESC NULLS LAST, id DESC
             """,
             session_id,
         )
@@ -691,7 +709,7 @@ class ContextManager:
             SELECT payload_msgpack, chunk_type, token_count
             FROM context_chunks
             WHERE session_id = $1
-            ORDER BY created_at DESC, id DESC
+            ORDER BY created_at DESC, event_seq DESC NULLS LAST, id DESC
             LIMIT $2
             """,
             session_id,
