@@ -1,6 +1,7 @@
 """Shared test fixtures and global state isolation."""
 
 import asyncio
+import logging
 import os
 
 import pytest
@@ -156,6 +157,25 @@ def reset_singletons(monkeypatch):
     from machina.core.session_mode import reset_for_tests as reset_session_modes
 
     reset_session_modes()
+
+    # The audit writer is a process-global, loop-bound singleton. A test that
+    # initialized a gateway without closing it leaks an ownership reference and
+    # a writer task bound to its now-dead event loop; a later test's stop()
+    # then no-ops (observed as the r5_018 direct-submit race under the full
+    # suite). Normalize to a clean generation before each test; log so the
+    # leak stays visible rather than silently reset.
+    from machina.observability.audit import audit_persistence as audit_writer
+
+    if audit_writer._owners or audit_writer._task is not None:
+        logging.getLogger(__name__).warning(
+            "reset_singletons: audit persistence carried state across tests "
+            "(owners=%s, task=%s); resetting",
+            audit_writer._owners,
+            audit_writer._task,
+        )
+    audit_writer._owners = 0
+    audit_writer._task = None
+    audit_writer._queue = None
 
     yield
 
