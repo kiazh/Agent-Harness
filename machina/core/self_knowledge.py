@@ -2,6 +2,12 @@
 
 No filesystem, database, provider requests or secret configuration enumeration.
 Feature facts are distinct from configuration and observed learning evidence.
+
+Style: 1-3 terse sentences per entry; the brief is bounded (prompt token pin and
+``harness_status`` response cap), so trim before adding. snake_case tokens are
+configuration keys or registered tool names, pinned against the real
+inventories by ``tests/test_self_knowledge_completeness.py``; never add an
+invented name.
 """
 
 from __future__ import annotations
@@ -14,18 +20,28 @@ from machina.core.session_mode import MODES
 from machina.memory.persona import EmotionTopology
 
 FEATURES = {
-    "persona": "SoulSpec unifies identity, /persona tone (persona_description), owned lessons and RSI guidance. Agent id means role/tooling scope, not persona. persona_memory_enabled adds fact interpretations and emotion-weighted recall via persona_default_emotion; retrieval settings, not feelings.",
+    "persona": "SoulSpec unifies identity, /persona tone (persona_description), owned lessons and RSI guidance; agent id is role/tooling scope, not persona. persona_memory_enabled adds fact interpretations and emotion-weighted recall via persona_default_emotion; retrieval settings, not feelings.",
     "growth": "Per-agent preferences, style and verified lessons persist across sessions/models (learn_personality; /growth). empty notes mean no notes currently saved, not a missing feature.",
-    "rsi": "RSI adapts retrieval, relevant skill ranks, allowed-tool order and approach from weak automatic execution outcomes even with zero human ratings. Agent-written persona trials separately need three human-rated episodes to stabilize or roll back. /growth inspects revisions/evidence. No model weights, code rewriting or permission expansion; no fixed number of turns guarantees improvement.",
-    "memory": "remember/recall retrieve facts; session_recall searches conversations, not implementation documentation. RAG searches explicitly indexed documents.",
-    "web": "web_research saves fetched public pages with source URLs to session RAG for later search_documents retrieval; research is session-scoped.",
-    "skills": "Relevant bundled workflows activate automatically with bounded context; skill tools discover/read more when offered. Skills do not grant permissions.",
+    "rsi": "RSI adapts retrieval, skill ranks, tool order and approach from weak automatic outcomes without human ratings; agent-written persona trials need three human-rated episodes to stabilize or roll back (/growth shows evidence). No model weights, code rewriting or permission expansion; more turns are not proof of improvement.",
+    "memory": "remember/recall retrieve durable facts; session_recall searches conversations, not implementation documentation; search_documents searches indexed RAG documents. memory_approval_enabled routes new facts to pending queues (/memory pending|approve|reject; `machina memory-pending|memory-approve|memory-reject`); /profile and /profiles manage user profiles.",
+    "sessions": "Sessions persist conversation, model pin and goal; /sessions and /resume reopen one, /new starts one, /search finds titles, /recall searches past conversation text, /rename, /goal, /fork, /delete and /export manage the rest; CLI: `machina sessions`.",
+    "context": "Turns select evidence, not replay; /context shows what a session retains, /compress and `machina compress` summarize older context, `machina context` lists chunks. Compaction: compression_enabled, auto_compaction_enabled, compression_threshold; context_budget is legacy storage, not a turn cap.",
+    "web": "web_search finds links without fetching; web_research saves public pages with source URLs to session RAG (session-scoped) for later search_documents retrieval; web_crawl crawls sites with bounds. The TUI can autostart/stop the Firecrawl/SearXNG stack (firecrawl_autostart, firecrawl_stop_on_exit, firecrawl_home; log ~/.machina/logs/firecrawl-lifecycle.log).",
+    "skills": "First-party plus 42 curated ECC skills activate by request, trigger or task evidence with bounded context; skill tools read more when offered. /skills list|learn|proposals|approve|reject|revert|delete|curator and `machina learn|hub|curator` manage them; learned skills publish for review. Skills never grant permissions.",
+    "agents": "Delegated subagents (71 ECC roles plus harness/researcher/coder) inherit the parent's authority and allowed tools; /agents list|show|save|history|delete manages definitions and subagent sessions, /delegate picks one. A role grants no new permissions.",
+    "jobs": "Scheduled jobs run interval prompts, heartbeats, UTC-cron and scripts; /jobs list|add|script|heartbeat|cron|on|off|delete manages them. Consent-needing jobs pause for approval, never self-grant.",
+    "usage": "Usage accounting: `machina usage` and /usage show recorded tokens/requests; budgets: usage_session_token_limit, usage_session_request_limit, usage_agent_token_limit, usage_agent_request_limit (0 = unlimited).",
+    "models": "Models and providers: /models picks from provider catalogs, /default-model saves a default, /provider switches or adds OpenAI-compatible providers, /effort sets reasoning_effort; `machina providers` and /keys manage the inventory (keys in a git-ignored .env, 0600, values never shown).",
+    "auth": "/auth signs in the ChatGPT account; `machina auth chatgpt|copilot|status|logout` covers subscription sign-in, Copilot device flow, status and token removal. Machina never edits harness CLIs' auth files; Codex imports are one-way.",
+    "theme": "/theme live-previews and saves one of 41 UI skins (theme config key); Esc restores the previous skin.",
+    "modes": "Execution modes ask|workspace|sandbox|full: /mode and `machina mode` set them; full is a session-scoped grant revoked with /approvals revoke. /approvals list|allow|deny|revoke manages pending consent.",
+    "controls": "TUI /help lists commands; /config shows or sets non-secret settings (--save persists), /status reports health, /init writes AGENTS.md, /review reviews changes. Slash commands are UI actions, not model tools.",
+    "self_change": "When the user asks, the agent may change this installation within its offered tools and permissions: `machina config-set` (non-secret settings), the /config, /theme, /persona, /models, /provider, /keys, /mode, /mcp, /skills, /memory and /harnesses commands, or permission-gated file edits. Autonomous RSI never rewrites model weights, code or permissions; choices that belong to the user (model, provider, approvals) are asked, not guessed.",
     "install": "repo_stage shallow-clones a GitHub skills repo into a digest-bound review plan; repo_activate installs validated skills for that approved digest. Never runs tests/installers/hooks/package installs. MCP drafts need human /mcp review; third-party agents/commands are inventory only.",
-    "execution": "Offered tools define access. Delegation inherits authority and returns results through the parent, without live sibling peer chat; share_memory delivers signed memories. Jobs, sessions, compaction and usage budgets are supported.",
-    "controls": "TUI /persona, /growth, /profile, /sessions, /models, /provider, /jobs, /usage and /mode manage the respective features; these are UI commands, not model tools.",
-    "mcp": "TUI /mcp saves servers and explicitly connects/disconnects; the agent's mcp_connect/mcp_disconnect add/remove servers through exact approval. mcp_list/mcp_describe list servers and catalogs; mcp_call requires exact approval unless trusted-read is configured. HTTP servers support browser OAuth with PKCE; authorization does not grant tool execution permission.",
-    "harnesses": 'External agent harnesses (OpenCode, Codex, Hermes) are detected as installed/running/registered; `machina harnesses status|enable|disable|setup|run` manages them (`interop` is a kept alias). enable registers Machina\'s own MCP server with that harness so it can call machina tools; state is ~/.machina/interop.json. "connect to opencode" means `machina harnesses enable opencode`. Delegate a task with `machina harnesses run <platform> "<prompt>"` or the TUI /harnesses menu, and from chat via the terminal tool with approval. Machina does not install or authenticate harnesses and never touches their auth files.',
-    "images": "The TUI accepts dropped PNG/JPEG/GIF/WebP files and clipboard images (Ctrl+V or forwarded Cmd+V), displayed as [image 1] markers. Inline image content is sent to the provider and retained in recent conversation context. Image understanding requires a vision-capable model; markers alone do not prove an image was supplied.",
+    "execution": "Offered tools define access; approval-gated actions follow /mode and /approvals. Delegation inherits the parent's authority and returns results through the parent, without live sibling peer chat; share_memory delivers signed memories.",
+    "mcp": "TUI /mcp manages servers (save/connect/disconnect); mcp_connect/mcp_disconnect add/remove servers through exact approval. mcp_list/mcp_describe cover servers/catalogs; mcp_call requires exact approval unless trusted-read is configured. HTTP servers support browser OAuth with PKCE; authorization does not grant tool execution permission.",
+    "harnesses": 'External agent harnesses (OpenCode, Codex, Hermes) are detected installed/running/registered; `machina harnesses status|enable|disable|setup|run` manages them and registers Machina\'s MCP server (state ~/.machina/interop.json; `interop` and /interop are aliases). "connect to opencode" means `machina harnesses enable opencode`; delegate with `machina harnesses run <platform> "<prompt>"` (TUI /harnesses; chat: terminal, approval-gated). Machina never installs, authenticates or touches their auth files.',
+    "images": "The TUI accepts dropped PNG/JPEG/GIF/WebP or clipboard images (Ctrl+V), shown as [image 1] markers sent inline to the provider and retained in recent context. Image understanding needs a vision-capable model; markers alone do not prove an image was supplied.",
 }
 
 
