@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from machina.core.exceptions import MachinaError
 from machina.core.provider import LLMProvider
 from machina.core.usage import usage_store
 from machina.db.lazy import LazyDb
@@ -26,9 +27,20 @@ from machina.memory.persona import EmotionTopology, PersonaMemoryStore
 from machina.memory.store import MemoryStore, memory_store
 from machina.observability.diagnostics import record_failure
 
-__all__ = ["MemoryRetriever"]
+__all__ = ["MemoryRetrievalError", "MemoryRetriever"]
 
 logger = logging.getLogger(__name__)
+
+
+class MemoryRetrievalError(MachinaError, RuntimeError):
+    """Every attempted memory retrieval branch failed (H06).
+
+    Partial success never raises — a caller that received some candidate sets
+    keeps them. This error distinguishes a total retrieval outage from a
+    genuinely empty result, so tool/API/gateway callers can surface an error
+    instead of claiming that no relevant memory exists.
+    """
+
 
 # Default number of results to return
 db = LazyDb()
@@ -57,6 +69,19 @@ class MemoryRetriever:
     Combines dense vector search with sparse keyword matching,
     then re-ranks the merged candidates.
     """
+
+    @staticmethod
+    async def prepare_query_embedding(query: str) -> list[float] | None:
+        """Embed *query* for dense retrieval; None when no embedder (H05).
+
+        Shared preparation for every explicit search entry point (tool, API,
+        gateway), mirroring how ordinary agent preparation calls
+        ``embed_query()``. Returning None keeps the search keyword-only
+        without raising, so callers can report the mode honestly.
+        """
+        from machina.memory.embeddings import embed_query
+
+        return await embed_query(query)
 
     def __init__(
         self,
@@ -150,6 +175,11 @@ class MemoryRetriever:
 
         Returns:
             List of RetrievedMemory objects, sorted by relevance score.
+
+        Raises:
+            MemoryRetrievalError: When every attempted branch failed. Partial
+                success returns the branches that responded; a genuinely
+                empty result stays an empty list.
         """
         # Step 1 & 2: Run dense vector search and sparse keyword search concurrently
         dense_task = None
@@ -172,6 +202,7 @@ class MemoryRetriever:
 
         dense_results: list[tuple[MemoryEntry, float]] = []
         sparse_results: list[tuple[MemoryEntry, float]] = []
+        failures: list[tuple[str, Exception]] = []
 
         idx = 0
         if dense_task is not None:
@@ -179,14 +210,25 @@ class MemoryRetriever:
             idx += 1
             if isinstance(dense_res, Exception):
                 logger.warning("Dense search failed: %s", dense_res)
+                failures.append(("dense", dense_res))
             else:
                 dense_results = [(m, s) for m, s in dense_res if s >= MIN_SIMILARITY_THRESHOLD]
 
         sparse_res = results[idx]
         if isinstance(sparse_res, Exception):
             logger.warning("Sparse search failed: %s", sparse_res)
+            failures.append(("sparse", sparse_res))
         else:
             sparse_results = sparse_res
+
+        # H06: partial success is preserved; only a total outage of every
+        # attempted branch is a deliberate typed error, never an ordinary
+        # empty list that callers could mistake for "no memories exist".
+        if len(failures) == len(tasks):
+            names = ", ".join(name for name, _ in failures)
+            raise MemoryRetrievalError(
+                f"all memory retrieval branches failed ({names})"
+            ) from failures[0][1]
 
         # Defense in depth: never pass quarantined rows to the agent, even if
         # a custom store or an older query returned them.

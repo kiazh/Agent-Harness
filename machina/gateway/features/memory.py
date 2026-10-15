@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from machina.core.config import config
-from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError
+from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, OPERATION_FAILED, RpcError
 from machina.gateway.features._common import MEMORY_CATEGORIES, _int, _memory, _pending, _str, _uuid
 
 if TYPE_CHECKING:
@@ -35,10 +35,15 @@ async def memory_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Search memories (persona-conditioned by default)."""
+    """Search memories (persona-conditioned by default).
+
+    Prepares a dense query embedding like ordinary agent preparation; when no
+    embedder is available the search stays keyword-only and the response
+    reports the mode actually used (H05).
+    """
     gw.require_db()
     from machina.memory.persona import EmotionTopology
-    from machina.memory.retriever import MemoryRetriever
+    from machina.memory.retriever import MemoryRetrievalError, MemoryRetriever
 
     emotion = params.get("emotion")
     if emotion is not None:
@@ -49,14 +54,25 @@ async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
             raise RpcError(INVALID_PARAMS, "unknown emotion")
     retriever = MemoryRetriever(top_k=_int(params, "limit", 10, 1, 100))
     session = await gw.get_session(params) if params.get("sessionId") else None
-    found = await retriever.retrieve(
-        query=_str(params, "query", max_len=500),
-        category=_category(params),
-        agent_id=session.agent_id if session else None,
-        session_id=session.id if session else None,
-        emotion=emotion,
-    )
-    return {"results": [_memory(r.memory, r.score, r.persona_interpretation) for r in found]}
+    query = _str(params, "query", max_len=500)
+    # H05: dense embedding preparation shared with the tool/API surfaces.
+    query_embedding = await MemoryRetriever.prepare_query_embedding(query)
+    try:
+        found = await retriever.retrieve(
+            query=query,
+            category=_category(params),
+            agent_id=session.agent_id if session else None,
+            session_id=session.id if session else None,
+            emotion=emotion,
+            query_embedding=query_embedding,
+        )
+    except MemoryRetrievalError as exc:
+        # H06: a total retrieval outage is an error, not an empty result set.
+        raise RpcError(OPERATION_FAILED, f"memory retrieval unavailable: {exc}") from None
+    return {
+        "results": [_memory(r.memory, r.score, r.persona_interpretation) for r in found],
+        "mode": "dense+sparse" if query_embedding is not None else "keyword-only",
+    }
 
 
 async def memory_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

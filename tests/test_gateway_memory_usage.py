@@ -15,9 +15,9 @@ async def test_memory_search_passes_session_id_to_retriever(monkeypatch):
 
     mock_retriever = MagicMock()
     mock_retriever.retrieve = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "machina.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever)
-    )
+    mock_cls = MagicMock(return_value=mock_retriever)
+    mock_cls.prepare_query_embedding = AsyncMock(return_value=None)
+    monkeypatch.setattr("machina.memory.retriever.MemoryRetriever", mock_cls)
 
     mock_gw = MagicMock()
     mock_gw.require_db = MagicMock()
@@ -42,9 +42,9 @@ async def test_memory_search_without_session_id_passes_none(monkeypatch):
 
     mock_retriever = MagicMock()
     mock_retriever.retrieve = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "machina.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever)
-    )
+    mock_cls = MagicMock(return_value=mock_retriever)
+    mock_cls.prepare_query_embedding = AsyncMock(return_value=None)
+    monkeypatch.setattr("machina.memory.retriever.MemoryRetriever", mock_cls)
 
     mock_gw = MagicMock()
     mock_gw.require_db = MagicMock()

@@ -505,15 +505,19 @@ def redact_secrets(text: str) -> RedactionResult:
 # every supported format. Only text before the frontier is emitted (fully
 # redacted; complete matches inside it are removed). Everything from the
 # frontier on is withheld until more deltas arrive or flush() redacts it
-# whole. Bounded by construction: every partial pattern has an explicit max
-# length except PEM blocks and the leadless trailing digit run (R4-089: the
-# run ends at the first non-digit/space/dash char, so the hold is transient;
-# capping it cuts long spaced runs mid-window and leaks CC bytes — see
-# _DIGIT_RUN_RE). An open PEM block is withheld whole; if it grows
-# past MAX_BUFFERED_PEM the stream redactor replaces its body with the
-# standard marker and discards it — a frontier *inside* an unterminated block
-# would leak raw body lines, since the whole-string PEM pattern needs the END
-# marker to match. Formats and bounds are documented below, not "perfect".
+# whole. Partial bounds mirror the corresponding COMPLETE pattern's accepted
+# length (H02): unbounded complete formats ({20,}, {16,}, …) keep unbounded
+# partials, so a still-growing token cannot outgrow recognition and have its
+# raw tail emitted after a marker was already produced. Fixed-length formats
+# keep finite partials. PEM blocks and the leadless trailing digit run
+# (R4-089: the run ends at the first non-digit/space/dash char, so the hold
+# is transient; capping it cuts long spaced runs mid-window and leaks CC
+# bytes — see _DIGIT_RUN_RE) remain special-cased. An open PEM block is
+# withheld whole; if it grows past MAX_BUFFERED_PEM the stream redactor
+# replaces its body with the standard marker and discards it — a frontier
+# *inside* an unterminated block would leak raw body lines, since the
+# whole-string PEM pattern needs the END marker to match. Formats and bounds
+# are documented below, not "perfect".
 STREAM_TAIL_CHARS = 512  # stream-tail hold; per-format bounds documented below
 MAX_BUFFERED_PEM = 32 * 1024
 #: Marker replacing an oversized or unterminated open PEM body during
@@ -530,30 +534,35 @@ _PEM_RESUME_WINDOW = STREAM_TAIL_CHARS
 # patterns filter glued matches in ``_apply_patterns``, and the partials
 # below carry the equivalent lookbehind — a glued `sk-` (e.g. in `task-…`)
 # never withholds, so batch and stream agree.
+# H02: bounds mirror the complete patterns. Unbounded complete formats
+# (`{20,}`, `{16,}`, `[^@]+`, …) use `*`/`+` here: the token stays
+# recognized until its delimiter, so it can never outgrow the partial and
+# leak its tail. Only formats with a fixed-length complete pattern (GitHub
+# 36/40, AKIA 16, SSN 9) keep finite partials.
 _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
     # The sk- family carries the same non-alphanumeric boundary as the
     # complete patterns, so `task-…` text streams through untouched (R4-016).
-    re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9]{0,200}$"),
-    re.compile(r"(?<![A-Za-z0-9])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{0,200}$"),
-    re.compile(r"(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9\-_]{0,200}$"),
-    re.compile(r"(?<![A-Za-z0-9])sk-or-[A-Za-z0-9\-_]{0,200}$"),
-    re.compile(r"(?<![A-Za-z0-9])sk_live_[A-Za-z0-9]{0,200}$"),
-    re.compile(r"AIza[0-9A-Za-z_-]{0,200}$"),
+    re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9]*$"),
+    re.compile(r"(?<![A-Za-z0-9])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]*$"),
+    re.compile(r"(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9\-_]*$"),
+    re.compile(r"(?<![A-Za-z0-9])sk-or-[A-Za-z0-9\-_]*$"),
+    re.compile(r"(?<![A-Za-z0-9])sk_live_[A-Za-z0-9]*$"),
+    re.compile(r"AIza[0-9A-Za-z_-]*$"),
     re.compile(r"ghp_[A-Za-z0-9]{0,36}$"),
     re.compile(r"gho_[A-Za-z0-9]{0,36}$"),
     re.compile(r"ghs_[A-Za-z0-9]{0,36}$"),
     re.compile(r"ghu_[A-Za-z0-9]{0,36}$"),
     re.compile(r"github_pat_[A-Za-z0-9_]{0,255}$"),
     re.compile(r"AKIA[0-9A-Z]{0,16}$"),
-    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{0,200}$"),
-    re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]{0,500}$", re.IGNORECASE),
-    re.compile(r"(?:password|passwd|pwd)\s*[=:]\s*['\"]?[^\s'\"]{0,200}$", re.IGNORECASE),
+    re.compile(r"xox[baprs]-[A-Za-z0-9\-]*$"),
+    re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]*$", re.IGNORECASE),
+    re.compile(r"(?:password|passwd|pwd)\s*[=:]\s*['\"]?[^\s'\"]*$", re.IGNORECASE),
     # Generic assignments: the value may be quoted (any charset) or an
     # unquoted URL-safe/dotted payload; mirrors the widened value class in
     # the complete pattern (R4-016).
     re.compile(
         r"(?:secret|token|api_key|apikey|access_key|cohere_api_key|aws_secret_access_key|aws_secret_key)"
-        r"\s*[=:]\s*(?:['\"][^'\"\n]{0,300}|[A-Za-z0-9\-_/+=.~]{0,300})$",
+        r"\s*[=:]\s*(?:['\"][^'\"\n]*|[A-Za-z0-9\-_/+=.~]*)$",
         re.IGNORECASE,
     ),
     # Quoted key: value assignments (RF7-F1): hold from the identifier so a
@@ -564,18 +573,20 @@ _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:[A-Za-z0-9]+[_.-])?key['\"]?\s*[=:]\s*['\"][^'\"\n]{0,300}$",
+        r"\b(?:[A-Za-z0-9]+[_.-])?key['\"]?\s*[=:]\s*['\"][^'\"\n]*$",
         re.IGNORECASE,
     ),
-    re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^@\s]{0,300}$"),
+    re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^@\s]*$"),
     re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):?/{0,2}$"),
-    re.compile(r"//[^@\s]{1,300}$"),
+    re.compile(r"//[^@\s]+$"),
     # Assignment name with trailing spaces but no "=" yet: the "=" may arrive
     # in the next delta, and complete patterns normalize spacing on match, so
-    # emitting the spaced name now would desynchronize streamed output.
+    # emitting the spaced name now would desynchronize streamed output. The
+    # whitespace run is uncapped for the same reason as the other values:
+    # `\s*` in the complete patterns is unbounded (H02).
     re.compile(
         r"(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|cohere_api_key"
-        r"|aws_secret_access_key|aws_secret_key)\s{1,10}$",
+        r"|aws_secret_access_key|aws_secret_key)\s*$",
         re.IGNORECASE,
     ),
     # Labeled contiguous SSN (R4-016): hold from the label so the digit run
@@ -588,7 +599,7 @@ _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
         r"(?:\s+n(?:u(?:m(?:b(?:e(?:r)?)?)?)?)?)?\s*[=:]?\s*\d{0,9}$",
         re.IGNORECASE,
     ),
-    re.compile(r"eyJ[A-Za-z0-9_.\-/+=]{0,1200}$"),
+    re.compile(r"eyJ[A-Za-z0-9_.\-/+=]*$"),
 )
 
 # PEM marker-fragment partials, applied ONLY while a block is open (see
@@ -812,13 +823,15 @@ class StreamingSecretRedactor:
 
     Feed deltas; only the safe frontier (no partial secret crosses it) is
     emitted, fully redacted. The withheld suffix is retained until further
-    deltas resolve it or :meth:`flush` redacts it whole. An unterminated PEM
-    block is withheld whole; once it exceeds ``MAX_BUFFERED_PEM`` its body is
-    replaced by ``[REDACTED_PRIVATE_KEY]`` and discarded — raw body prefixes
-    are never emitted, and :meth:`flush` fails closed for any block whose END
-    never arrives. Buffering is bounded per format (see policy table above),
-    except a trailing digit run, which is held whole until the run terminates
-    (R4-089) — only emission timing, never final output.
+    deltas resolve it or :meth:`flush` redacts it whole. A still-growing
+    secret-shaped token is withheld until its delimiter, however long it
+    grows (H02): emission happens only for text the complete patterns agree
+    is not a partial secret. An unterminated PEM block is withheld whole;
+    once it exceeds ``MAX_BUFFERED_PEM`` its body is replaced by
+    ``[REDACTED_PRIVATE_KEY]`` and discarded — raw body prefixes are never
+    emitted, and :meth:`flush` fails closed for any block whose END never
+    arrives. A trailing digit run is held whole until the run terminates
+    (R4-089). Only emission timing changes, never final output.
     """
 
     def __init__(self, tail: int = STREAM_TAIL_CHARS) -> None:

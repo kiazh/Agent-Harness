@@ -62,16 +62,31 @@ async def search_memory(
     category: str | None = None,
     emotion: str | None = None,
 ) -> dict[str, Any]:
-    """Search memories by semantic similarity with optional filters."""
+    """Search memories by hybrid semantic + keyword similarity.
+
+    Reports the retrieval mode actually used: ``dense+sparse`` when a query
+    embedding was prepared, ``keyword-only`` when no embedder is available.
+    """
     from machina.memory.persona import EmotionTopology
-    from machina.memory.retriever import MemoryRetriever
+    from machina.memory.retriever import MemoryRetrievalError, MemoryRetriever
 
     if emotion and emotion not in EmotionTopology.EMOTION_PROFILES:
         raise HTTPException(400, "unknown emotion")
 
-    results = await MemoryRetriever(top_k=limit).retrieve(
-        query, agent_id=agent, category=category, emotion=emotion
-    )
+    # H05: explicit searches prepare the dense query embedding like ordinary
+    # agent preparation; None (no embedder) keeps retrieval keyword-only.
+    query_embedding = await MemoryRetriever.prepare_query_embedding(query)
+    try:
+        results = await MemoryRetriever(top_k=limit).retrieve(
+            query,
+            agent_id=agent,
+            category=category,
+            emotion=emotion,
+            query_embedding=query_embedding,
+        )
+    except MemoryRetrievalError as exc:
+        # H06: a total retrieval outage is an error, not "no memories".
+        raise HTTPException(503, f"memory retrieval unavailable: {exc}") from None
     return {
         "memories": [
             {
@@ -82,7 +97,8 @@ async def search_memory(
                 "personaInterpretation": item.persona_interpretation,
             }
             for item in results
-        ]
+        ],
+        "mode": "dense+sparse" if query_embedding is not None else "keyword-only",
     }
 
 

@@ -160,12 +160,16 @@ async def recall(
     try:
         if current_agent_id.get() is not None or current_session_id.get() is not None:
             agent_id, _ = await active_agent_scope()
+        # H05: prepare the dense query embedding exactly like ordinary agent
+        # preparation does; None when no embedder keeps retrieval keyword-only.
+        query_embedding = await MemoryRetriever.prepare_query_embedding(query)
         retriever = MemoryRetriever(store=memory_store, top_k=limit)
         results = await retriever.retrieve(
             query=query,
             agent_id=agent_id,
             category=category,
             emotion=emotion,
+            query_embedding=query_embedding,
         )
 
         if not results:
