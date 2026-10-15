@@ -5,15 +5,29 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
 from machina.core.exceptions import ToolError, ValidationError
 from machina.core.provider import audit_log
 from machina.rag.pipeline import RAGPipeline
 from machina.tools.agents import active_agent_scope
-from machina.tools.base import registry
+from machina.tools.base import _core_symbol, registry
 
 logger = logging.getLogger(__name__)
+
+
+def _execution_workspace() -> Path:
+    """Workspace root approved for this tool call (R4-026).
+
+    ``execution_context`` is the one canonical resolver; the permission
+    broker normalized the approved target against the same root. Bound
+    through the established ``machina.tools.base`` leaf-core seam so the
+    tools package core-import ratchet does not grow for one symbol.
+    """
+    execution_context = _core_symbol("machina.core.execution_context", "execution_context")
+    return execution_context("index_document").workspace
+
 
 # Global RAG pipeline instance (lazy-initialized)
 _rag_pipeline: RAGPipeline | None = None
@@ -184,13 +198,21 @@ async def index_document(
     if sid != owned_session:
         raise ToolError("document session does not belong to the active agent session")
 
+    # R4-026: resolve the target through the same canonical execution-context
+    # workspace the broker approved against, so the indexed file is the
+    # approved one — never a same-named file under machina_home/cwd.
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = _execution_workspace() / candidate
+    resolved_path = str(candidate.resolve())
+
     # AH-019: resolve the owning agent and pass it explicitly so documents
     # are not mislabeled with the pipeline default ("harness").
     pipeline = await get_rag_pipeline()
 
     try:
         chunks = await pipeline.index_document(
-            source=path,
+            source=resolved_path,
             session_id=sid,
             agent_id=agent_id,
             metadata=metadata,

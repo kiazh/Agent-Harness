@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib as _importlib
 import logging
-import os
 import sys as _sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +31,20 @@ class Document:
     source: str
     metadata: dict[str, Any] = field(default_factory=dict)
     doc_type: str = "text"
+
+
+def _default_base_dir() -> Path:
+    """The one canonical workspace root (shared with the permission broker).
+
+    Resolved per call, never cached: inside the broker's guard+execute window
+    ``execution_context`` returns the request-bound workspace snapshot, so a
+    relative path resolves to the same file the broker approved; outside a
+    tool call it falls back to the configured workspace root. Bound through
+    the ``_core_symbol`` seam so this module still imports with
+    ``machina.core`` blocked.
+    """
+    context = _core_symbol("machina.core.execution_context", "execution_context")()
+    return Path(context.workspace).resolve()
 
 
 class FileLoader:
@@ -107,13 +120,12 @@ class FileLoader:
     )
 
     def __init__(self, base_dir: str | Path | None = None) -> None:
-        self._base_dir = (
-            Path(base_dir).resolve()
-            if base_dir
-            else Path(
-                _core_symbol("machina.core.config", "config").get("machina_home") or os.getcwd()
-            ).resolve()
-        )
+        # An explicit base is anchored at construction. Without one, the base
+        # is resolved per load through ``_default_base_dir`` (the canonical
+        # execution-context workspace), so a long-lived shared loader tracks
+        # the workspace the permission broker approved against instead of
+        # freezing ``machina_home``/cwd (R4-026).
+        self._base_dir: Path | None = Path(base_dir).resolve() if base_dir else None
 
     def load(self, path: str | Path) -> Document:
         """Load a file and return a Document.
@@ -237,12 +249,13 @@ class FileLoader:
 
     def _resolve_path(self, path: str | Path) -> Path:
         """Resolve path relative to base directory, ensuring it stays inside."""
-        candidate = (self._base_dir / str(path)).resolve()
-        if not candidate.is_relative_to(self._base_dir):
+        base = self._base_dir if self._base_dir is not None else _default_base_dir()
+        candidate = (base / str(path)).resolve()
+        if not candidate.is_relative_to(base):
             raise _core_symbol("machina.core.exceptions", "ValidationError")(
-                f"Path '{path}' escapes the allowed base directory '{self._base_dir}'"
+                f"Path '{path}' escapes the allowed base directory '{base}'"
             )
-        parts = (part.lower() for part in candidate.relative_to(self._base_dir).parts)
+        parts = (part.lower() for part in candidate.relative_to(base).parts)
         private_dirs = {".git", ".aws", ".ssh", ".machina", "__pycache__"}
         private_files = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa", "id_ed25519"}
         if any(
