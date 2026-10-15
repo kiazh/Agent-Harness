@@ -438,6 +438,37 @@ log "Checking setup (machina doctor; DB/key warnings are OK, see hints above)"
 # it. Instead we persist ~/.local/bin into the shell rc file (idempotent) and,
 # on Windows, register the venv Scripts dir in the user Path via PowerShell so
 # `machina` also works in PowerShell/cmd — all without prompting.
+# --- Path quoting for generated code -------------------------------------------
+# R5-9: the shim, the shell-rc line, and the Windows Path command interpolate
+# absolute paths into executable code. A valid install path containing `$`,
+# backticks, quotes, or backslashes was reinterpreted (or executed) when that
+# code ran. Escape paths for the exact quoting layer they land in:
+#   sh_dquote_escape: `\, ", $, ` escaped for a double-quoted POSIX shell word.
+#   fish_quote: single-quote a word for fish (escape `\` and `'`).
+#   ps_squote_escape: `'` doubled for a single-quoted PowerShell string
+#     (where `$`, `"`, and `` ` `` are already literal).
+# Plain paths pass through every helper unchanged, so normal installs are
+# byte-identical to before.
+sh_dquote_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\$/\\$/g' -e 's/`/\\`/g'
+}
+fish_quote() {
+  # Safe paths stay bare (byte-identical to before, so the rc idempotency
+  # check keeps matching across upgrades); anything else is single-quoted.
+  # Escape first, wrap second (the wrapping quotes stay bare).
+  case "$1" in
+    *[[:space:]]*|*\'*|*\"*|*\`*|*\$*|*\\*|*\**|*\?*|*\#*|*\(*|*\)*|*\{*|*\}*|*\[*|*\]*|*\;*|*\|*|*\&*|*\<*|*\>*) ;;
+    *) printf '%s' "$1"; return 0 ;;
+  esac
+  local escaped
+  escaped="$(printf '%s' "$1" | sed -e 's/\\/\\\\/g')"
+  escaped="$(printf '%s' "$escaped" | sed "s/'/\\\\'/g")"
+  printf "'%s'" "$escaped"
+}
+ps_squote_escape() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
 shell_rc_file() {
   case "${SHELL:-}" in
     *fish*) printf '%s' "$HOME/.config/fish/config.fish" ;;
@@ -466,8 +497,8 @@ ensure_path_in_rc() {
     return 0
   fi
   case "${SHELL:-}" in
-    *fish*) line="set -gx PATH $dir \$PATH" ;;
-    *) line="export PATH=\"$dir:\$PATH\"" ;;
+    *fish*) line="set -gx PATH $(fish_quote "$dir") \$PATH" ;;
+    *) line="export PATH=\"$(sh_dquote_escape "$dir"):\$PATH\"" ;;
   esac
   rc="$(shell_rc_file)"
   PATH_RC="$rc"
@@ -493,16 +524,22 @@ register_windows_path() {
   [ "$OS_FAMILY" = "windows" ] || return 0
   command -v powershell.exe >/dev/null 2>&1 || return 0
   command -v cygpath >/dev/null 2>&1 || return 0
-  local windir
+  local windir windir_ps
   windir="$(cygpath -w "$(pwd)/$VENV_BIN" 2>/dev/null || true)"
   [ -n "$windir" ] || return 0
+  # R5-9: the path lands inside single-quoted PowerShell strings, where a
+  # raw `'` (e.g. an O'Connor profile dir) would terminate the string. Double
+  # it; every other character is already literal in PS single quotes, and the
+  # bash "$..." expansion inserts the value literally, so plain paths are
+  # unchanged.
+  windir_ps="$(ps_squote_escape "$windir")"
   if powershell.exe -NoProfile -NonInteractive -Command \
-    "[Environment]::SetEnvironmentVariable('Path', (([Environment]::GetEnvironmentVariable('Path','User') -split ';' | Where-Object { \$_ -ne '$windir' }) + '$windir') -join ';', 'User')" \
+    "[Environment]::SetEnvironmentVariable('Path', (([Environment]::GetEnvironmentVariable('Path','User') -split ';' | Where-Object { \$_ -ne '$windir_ps' }) + '$windir_ps') -join ';', 'User')" \
     >/dev/null 2>&1; then
     log "Registered $windir in Windows user Path (new PowerShell windows will see \`machina\`)"
   else
     warn "Could not update Windows user Path; in PowerShell run:"
-    warn "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$windir', 'User')"
+    warn "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$windir_ps', 'User')"
   fi
 }
 
@@ -519,9 +556,13 @@ if [ -f "$VENV_MACHINA" ]; then
   if [ -n "$existing_machina" ] && [ "$existing_machina" != "$VENV_MACHINA" ]; then
     log "\`machina\` already on PATH: $existing_machina (leaving it)"
   elif mkdir -p "$SHIM_DIR" 2>/dev/null; then
+    # R5-9: escape the baked-in path for the double-quoted sh word it lands
+    # in — a raw `$`, backtick, `"`, or `\` would be reinterpreted (or
+    # executed) every time the shim runs. Plain paths are unchanged.
+    SHIM_TARGET="$(sh_dquote_escape "$VENV_MACHINA")"
     cat > "$SHIM_DIR/machina" <<EOF2
 #!/usr/bin/env sh
-exec "$VENV_MACHINA" "\$@"
+exec "$SHIM_TARGET" "\$@"
 EOF2
     chmod +x "$SHIM_DIR/machina"
     log "Installed \`machina\` shim to $SHIM_DIR/machina"
