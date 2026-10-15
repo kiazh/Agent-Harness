@@ -300,10 +300,20 @@ def check_mode_cap(parent_authority: dict | None, requested_mode: str) -> None:
 async def close_agent_provider(agent, timeout: float = 5.0) -> None:
     """Release owned RAG leases and close providers with sanitized reporting.
 
-    Claim release remains the caller's independent finally. Resistant cleanup
-    remains strongly referenced until it retires; cancellation still propagates.
+    Claim release remains the caller's independent finally. An owned provider
+    is closed exactly once (AH-023). Resistant cleanup remains strongly
+    referenced until it retires.
+
+    Cancellation contract: a caller cancelling this call cancels the INNER
+    close (it observes ``CancelledError`` and ``bounded_cleanup`` records
+    ``provider.close.cancelled``), then bounded-joins it, then re-raises — so
+    the cancellation both reaches the in-flight close and never abandons a
+    half-closed provider. A genuinely wedged close still retires through the
+    independent timeout/quarantine path.
     """
-    from machina.core.background_tasks import await_joined
+    import asyncio
+
+    from machina.core.cleanup import cancel_and_join
 
     async def release_dependencies():
         try:
@@ -315,7 +325,15 @@ async def close_agent_provider(agent, timeout: float = 5.0) -> None:
         finally:
             await _close_owned_provider(agent, timeout)
 
-    await await_joined(release_dependencies())
+    operation = asyncio.ensure_future(release_dependencies())
+    try:
+        await asyncio.shield(operation)
+    except asyncio.CancelledError:
+        # Cancel the in-flight close first (the inner close observes the
+        # CancelledError and is counted), bounded-join it so nothing outlives
+        # this call, then propagate the caller's cancellation.
+        await cancel_and_join([operation], timeout, "owned provider")
+        raise
 
 
 async def _close_owned_provider(agent, timeout: float) -> None:
