@@ -17,7 +17,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | ID | Sev | Finding | Status |
 |---|---|---|---|
 | F01 | P1c | Dir-fd write chain: ancestor swap between containment check and lstat/open | FIXED 56f8ad3 |
-| F02 | P1 | Cancelling a tool batch loses records of already-completed effects | LANE (core) |
+| F02 | P1 | Cancelling a tool batch loses records of already-completed effects | FIXED dd096ad |
 | F03 | P2 | Failed connector rollback clobbers a newer concurrent config | FIXED 50efd64 |
 | F04 | P2 | Agent mcp_connect can launch a stdio connector in sandbox mode | FIXED 50efd64 |
 | F05 | P2 | Connector store flock acquired synchronously in async paths | FIXED 50efd64 |
@@ -54,11 +54,11 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 
 | ID | Sev | Finding | Status |
 |---|---|---|---|
-| C1 | P2 | Event-ordinal ordering vs `(created_at,id)` cursor skips tail rows across page boundaries | LANE (core) |
-| C2 | P1 | Cancelled batch loses completed-effect records/approvals | LANE (core) |
-| C3 | P3 | `run()` flush lacks the cancellation-safe wrapper `run_stream()` has | LANE (core) |
-| C4 | P3 | `needs_approvals` (plural) dropped by derivation | LANE (core) |
-| C5 | P3 | Flush docstring/behavior mismatch: failed batch silently dropped | LANE (core) |
+| C1 | P2 | Event-ordinal ordering vs `(created_at,id)` cursor skips tail rows across page boundaries | FIXED dd096ad |
+| C2 | P1 | Cancelled batch loses completed-effect records/approvals | FIXED dd096ad |
+| C3 | P3 | `run()` flush lacks the cancellation-safe wrapper `run_stream()` has | FIXED dd096ad |
+| C4 | P3 | `needs_approvals` (plural) dropped by derivation | FIXED dd096ad |
+| C5 | P3 | Flush docstring/behavior mismatch: failed batch silently dropped | FIXED dd096ad |
 
 ## D. Providers / config / observability
 
@@ -74,7 +74,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | P8 | P2 | Gateway global mode writes shadowed by MACHINA_EXECUTION_MODE | FIXED d1438e8 |
 | P9 | P3 | Gateway global `mode.revoke` not persisted | FIXED d1438e8 |
 | P10 | P3 | HTTP SSE v2 `tool.complete.isError` always false | FIXED 08a8f0e |
-| P11 | P3 | Source-text assertion test (r5_011_013) | FIXED c0f7f6f* |
+| P11 | P3 | Source-text assertion test (r5_011_013) | FIXED 7e68a28 |
 
 ## E. Connectors / memory
 
@@ -95,7 +95,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | T2 | P2 | (see F13) | FIXED 56f8ad3 |
 | T3 | P2 | `read_file` reads to EOF for small pages (regression) | FIXED 56f8ad3 |
 | T4 | P2 | `_atomic_write_file` duplicates `_atomic_write_file_at` | FIXED 56f8ad3 |
-| T5 | P3 | Skill-install writes still detach via bare to_thread | FIXED c0f7f6f* |
+| T5 | P3 | Skill-install writes still detach via bare to_thread | FIXED 7e68a28 |
 | T6 | P3 | `_fsync_dir_best_effort` duplicates env_file's helper | DEFERRED (hoist with atomic-write consolidation) |
 
 ## G. RAG / skills / research / db
@@ -139,8 +139,8 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 |---|---|---|---|
 | A1 | P2 | URL-redaction primitive lives in provider/audit but is consumed by rag/observability (layering) | DEFERRED (documented; hoist to a leaf module when redaction layers consolidate) |
 | A2 | P2 | store_fence is not the single fence (providers + oauth_store variants) | PARTIAL: providers delegates 5100624; oauth_store DEFERRED |
-| A3 | P3 | AuditPersistence start/stop asymmetry; conftest pokes privates | FIXED c0f7f6f* (reset() API; conftest uses it) |
-| A4 | P3 | Compaction keyset still `(created_at,id)` (documented residual) | DEFERRED (state boundary explicitly) |
+| A3 | P3 | AuditPersistence start/stop asymmetry; conftest pokes privates | FIXED 7e68a28 (reset() API; conftest uses it) |
+| A4 | P3 | Compaction keyset still `(created_at,id)` (documented residual) | FIXED dd096ad (3-key ordering + ordinal-preserving replace/fork) |
 | A5 | P3 | Deferred-import census prose says 688, tree is 687 | DEFERRED (slack, not inflation) |
 | A6 | Q | Two new tests pin privates/literals | DEFERRED |
 
@@ -156,5 +156,8 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 - Web/host surfaces: fetch TOCTOU rebind blocked, audit URL-credential redaction
   (except S3), callback state machine, lifecycle/retry/circuit.
 
-Commit trail for fixes: `56c0222` (S1/S8) · `4714e5e` (F12) · `39376d0` (UI) ·
-`8864af1` (F09/F10) · plus the lanes landing now.
+Commit trail for fixes: `56c0222` S1/S8 · `4714e5e` F12 · `39376d0` UI · `8864af1` F09/F10 · `2edea07` F07 ·
+`bdea3a3` F08/R2 · `bd886c1` S10 · `0e933a8`/`9d57b99` provider-obs+SEC2/3 · `e0590e0` S4/S5/S11 ·
+`2918981` docs-truth · `d1438e8` P8/P9 · `fa13f27` R3/R4/R5 · `56f8ad3` F01/F13/T3/T4 ·
+`5100624` misc · `08a8f0e` batch3-A · `7e68a28` batch3-B · `50efd64` connectors · `dd096ad` core ·
+`9806574` provider ratchet delta.
