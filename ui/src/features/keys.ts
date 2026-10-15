@@ -130,7 +130,7 @@ export const keysCommand: Command = {
 		}
 		if (sub === "list") {
 			const { rows, envFile } = await loadKeyRows(host);
-			host.print(`${statusTable(rows)}\n\nFile: ${envFile}\nValues are never shown. Use /keys set KEY VALUE to update one.\nChatGPT-account models need no key — sign in with /auth instead.`, "plain");
+			host.print(`${statusTable(rows)}\n\nFile: ${envFile}\nValues are never shown. Use /keys set KEY VALUE to update one.\nOpenAI account models need no key — sign in with /auth instead.`, "plain");
 			return;
 		}
 		if (sub === "set") {

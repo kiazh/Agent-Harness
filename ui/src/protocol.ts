@@ -524,6 +524,40 @@ export interface InteropActionResult {
  argv: string[][];
 }
 
+// ─── Harness menu (/harnesses → interop.list / interop.run) ──────────────────
+
+/** One harness row from interop.list (explicit fields; never secrets). */
+export interface HarnessRow {
+ /** Platform key (stable id used by interop.enable/disable/run). */
+ key: string;
+ label: string;
+ installed: boolean;
+ version: string | null;
+ running: boolean;
+ registered: boolean;
+ scope: string | null;
+ /** True when interop.run can delegate a prompt into this harness. */
+ runSupported: boolean;
+ /** Human description of the run (or why it is unsupported). */
+ runHint: string | null;
+}
+
+export interface HarnessListResult {
+ harnesses: HarnessRow[];
+ /** Path of the shared interop state file, for the status view. */
+ stateFile: string | null;
+}
+
+/** Bounded, redacted outcome of interop.run. */
+export interface HarnessRunResult {
+ ok: boolean;
+ exitCode: number | null;
+ command: string;
+ stdout: string;
+ stderr: string;
+ unsupportedReason: string | null;
+}
+
 // ─── ChatGPT-account sign-in (auth.chatgpt.* control plane) ─────────────────
 
 /** Sign-in status from auth.chatgpt.status; explicit fields, never tokens. */

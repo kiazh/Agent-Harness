@@ -43,6 +43,8 @@ def test_all_feature_methods_accessible_after_split():
         "interop.status",
         "interop.enable",
         "interop.disable",
+        "interop.list",
+        "interop.run",
         "mcp.list",
         "mcp.status",
         "mcp.configure",
@@ -122,6 +124,8 @@ def test_submodules_importable():
     assert hasattr(config, "config_get")
     assert hasattr(secrets, "secrets_list")
     assert hasattr(interop, "interop_status")
+    assert hasattr(interop, "interop_list")
+    assert hasattr(interop, "interop_run")
     assert hasattr(auth_chatgpt, "auth_chatgpt_status")
     assert hasattr(providers_feature, "models_list")
     assert hasattr(providers_feature, "providers_add")

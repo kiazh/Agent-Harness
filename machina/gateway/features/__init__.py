@@ -63,6 +63,8 @@ from machina.gateway.features.growth import (
 from machina.gateway.features.interop import (
     interop_disable,
     interop_enable,
+    interop_list,
+    interop_run,
     interop_status,
 )
 from machina.gateway.features.jobs import (
@@ -167,6 +169,8 @@ METHODS: dict[str, Handler] = {
     "interop.status": interop_status,
     "interop.enable": interop_enable,
     "interop.disable": interop_disable,
+    "interop.list": interop_list,
+    "interop.run": interop_run,
     "session.fork": session_fork,
     "session.delete": session_delete,
     "session.rename": session_rename,

@@ -155,3 +155,25 @@ reported in `fetchError`); keys are never returned or stored in the JSON store
 uses. `providers.remove` refuses built-ins and switches the active provider to
 `openrouter` when the removed one was selected. No token or key value ever
 appears in any response field.
+
+## Harness interop and the /harnesses menu (2026-10-15)
+
+Authenticated human management methods for the external-harness surface:
+
+| Method | Params | Result |
+|---|---|---|
+| `interop.list` | `{}` | `{harnesses: [{key, label, installed, version, running, registered, scope, runSupported, runHint}], stateFile}` |
+| `interop.enable` | `{platform, scope?, dry_run?}` | `machina.interop.ActionResult` (`platform`, `action`, `ok`, `changed`, `message`, `steps`, `verify`, `argv`) |
+| `interop.disable` | `{platform}` | `machina.interop.ActionResult` |
+| `interop.run` | `{platform, prompt, timeout?}` | `{ok, exitCode, command, stdout, stderr, unsupportedReason}` |
+
+`interop.list` takes one on-demand detection pass, then reports each supported
+harness with `runSupported`/`runHint` from `machina.interop.supported_runs`;
+`stateFile` is the shared interop state path. `interop.run` delegates one
+prompt into a harness on a worker thread, bounded (`timeout` 1–900s, default
+300) and capped (stdout 32k, stderr 8k), with both streams redacted;
+`unsupportedReason` is set (and `ok` false) when the harness has no run
+surface. The TUI drives this as `/harnesses` (menu → Status, Register,
+Unregister, Run a task); register/unregister edit platform config outside this
+repository behind an explicit confirmation. Streaming harness output is not
+in scope — one bounded result per invocation.

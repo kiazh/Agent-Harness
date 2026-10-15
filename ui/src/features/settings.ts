@@ -403,7 +403,7 @@ export const settingsCommands: Command[] = [
 			["openrouter", "OpenRouter (multi-model)"],
 			["openai", "OpenAI direct"],
 			["anthropic", "Anthropic direct"],
-			["chatgpt", "ChatGPT account (sign in with /auth)"],
+			["chatgpt", "OpenAI account (sign in with /auth)"],
 			["copilot", "GitHub Copilot seat (machina auth copilot)"],
 			["google", "Google direct (Gemini)"],
 			["mistral", "Mistral direct"],
@@ -434,7 +434,7 @@ export const settingsCommands: Command[] = [
 				const { config } = await host.request<ConfigGetResult>("config.get");
 				host.print(`Provider: ${config.provider}`, "plain");
 				host.print(
-					"ChatGPT-account models need no API key — sign in with /auth first. " +
+					"OpenAI account models need no API key — sign in with /auth first. " +
 						"User-added providers: /provider list · /provider add · /provider remove.",
 					"plain",
 				);
@@ -450,14 +450,14 @@ export const settingsCommands: Command[] = [
 	},
 	{
 		name: "effort",
-		description: "Show or set reasoning effort (ChatGPT: per-model low..max)",
+		description: "Show or set reasoning effort (OpenAI: per-model low..max)",
 		argumentHint: "[low|medium|high|xhigh|max|off]",
 		getArgumentCompletions: options([
 			["low", "Shallow reasoning, fast and cheap"],
 			["medium", "Balanced reasoning depth"],
 			["high", "Deep reasoning for hard problems"],
-			["xhigh", "Extra-high (ChatGPT catalog tier)"],
-			["max", "Maximum depth (ChatGPT catalog tier)"],
+			["xhigh", "Extra-high (OpenAI catalog tier)"],
+			["max", "Maximum depth (OpenAI catalog tier)"],
 			["off", "Provider default (no effort override)"],
 		]),
 		async run(args, host) {

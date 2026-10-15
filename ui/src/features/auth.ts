@@ -1,4 +1,4 @@
-// /auth — ChatGPT-account sign-in for the chatgpt provider.
+// /auth — OpenAI-account sign-in for the chatgpt provider.
 //
 // The gateway owns the browser PKCE flow: auth.chatgpt.login returns the
 // authorization URL immediately and the flow settles on the
@@ -17,10 +17,10 @@ import { splitSub } from "../commands.ts";
 import type { Command, FeatureHost } from "./types.ts";
 
 const SUBCOMMANDS: Array<[string, string]> = [
-	["status", "Show the ChatGPT sign-in status"],
-	["sign-in", "Sign in with your ChatGPT account (browser flow)"],
-	["import-codex", "Import the Codex CLI's ChatGPT credentials"],
-	["sign-out", "Remove Machina's ChatGPT tokens only"],
+	["status", "Show the OpenAI sign-in status"],
+	["sign-in", "Sign in with your OpenAI account (browser flow)"],
+	["import-codex", "Import the Codex CLI's OpenAI credentials"],
+	["sign-out", "Remove Machina's OpenAI tokens only"],
 ];
 
 /** UI bound on the settle wait; the gateway bounds its own flow at 180s. */
@@ -48,7 +48,7 @@ export function formatAuthExpiry(value: number | null): string {
 export function renderAuthStatus(status: ChatGPTAuthStatus): string {
 	if (!status.signedIn) {
 		return [
-			"ChatGPT account: not signed in.",
+			"OpenAI account: not signed in.",
 			"Sign in with /auth sign-in, or pick up the Codex CLI's credentials with /auth import-codex.",
 		].join("\n");
 	}
@@ -121,7 +121,7 @@ async function waitForOutcome(host: FeatureHost): Promise<AuthOutcome> {
 async function signIn(host: FeatureHost): Promise<void> {
 	const { url } = await host.request<ChatGPTLoginResult>("auth.chatgpt.login", {});
 	host.print(
-		`Open this in your browser to sign in with ChatGPT:\n${url}\nWaiting for the sign-in to complete…`,
+		`Open this in your browser to sign in with OpenAI:\n${url}\nWaiting for the sign-in to complete…`,
 		"plain",
 	);
 	const outcome = await waitForOutcome(host);
@@ -140,7 +140,7 @@ async function signIn(host: FeatureHost): Promise<void> {
 	const expiry =
 		outcome.expiry === null ? "" : ` Access token expires ${formatAuthExpiry(outcome.expiry)}.`;
 	host.print(
-		`Signed in to ChatGPT${account}.${expiry} Run /provider chatgpt (optionally with a model) to use the account.`,
+		`Signed in to OpenAI${account}.${expiry} Run /provider chatgpt (optionally with a model) to use the account.`,
 		"success",
 	);
 }
@@ -149,7 +149,7 @@ async function importCodex(host: FeatureHost): Promise<void> {
 	const result = await host.request<ChatGPTImportResult>("auth.chatgpt.importCodex", {});
 	if (result.imported) {
 		host.print(
-			`Imported the Codex CLI's ChatGPT credentials.\n${renderAuthStatus(result.status)}`,
+			`Imported the Codex CLI's OpenAI credentials.\n${renderAuthStatus(result.status)}`,
 			"success",
 		);
 		return;
@@ -168,11 +168,11 @@ async function signOut(host: FeatureHost): Promise<void> {
 	const result = await host.request<ChatGPTLogoutResult>("auth.chatgpt.logout", {});
 	if (result.removed) {
 		host.print(
-			"Signed out; Machina's ChatGPT token store was removed. Codex CLI credentials (~/.codex/auth.json) were left untouched.",
+			"Signed out; Machina's OpenAI token store was removed. Codex CLI credentials (~/.codex/auth.json) were left untouched.",
 			"success",
 		);
 	} else {
-		host.print("Already signed out — Machina has no ChatGPT token store to remove.", "plain");
+		host.print("Already signed out — Machina has no OpenAI token store to remove.", "plain");
 	}
 	if (result.status.signedIn && result.status.source === "codex") {
 		host.print(
@@ -184,7 +184,7 @@ async function signOut(host: FeatureHost): Promise<void> {
 
 export const authCommand: Command = {
 	name: "auth",
-	description: "ChatGPT-account sign-in for the chatgpt provider (no API key)",
+	description: "OpenAI account sign-in for the chatgpt provider (no API key)",
 	argumentHint: "[status | sign-in | import-codex | sign-out]",
 	getArgumentCompletions: (prefix: string) => {
 		const typed = prefix.trimStart().toLowerCase();

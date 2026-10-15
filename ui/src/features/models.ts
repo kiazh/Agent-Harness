@@ -3,7 +3,7 @@
 // `/models` (no args) opens one searchable picker whose rows are grouped by
 // provider. The session's selected provider comes first; every other provider
 // (built-ins and user-added named entries) follows in its own section.
-// Catalogs come from the gateway (models.list) — the live ChatGPT/Codex
+// Catalogs come from the gateway (models.list) — the live OpenAI-account/Codex
 // catalog with per-model reasoning efforts and context windows, and
 // user-added providers' pulled `/models` lists. Providers without a discovery
 // endpoint keep their curated offline rows, which stay fallback-only.
@@ -29,14 +29,14 @@ export interface ModelEntry {
 	description: string;
 }
 
-// Offline fallback only: the real catalogs (chatgpt account + user-added
+// Offline fallback only: the real catalogs (OpenAI account + user-added
 // providers) are fetched at runtime; this list keeps `/models` useful when
 // no catalog is reachable. The chatgpt row is the catalog's priority-1 slug.
 export const CURATED_MODELS: ModelEntry[] = [
 	{ model: "openrouter/free", provider: "openrouter", description: "Default free tier (multi-model)" },
 	{ model: "gpt-4o-mini", provider: "openai", description: "OpenAI direct, cheap and fast" },
 	{ model: "claude-3-5-sonnet-20241022", provider: "anthropic", description: "Anthropic direct (native API)" },
-	{ model: "gpt-6.1-sol", provider: "chatgpt", description: "ChatGPT account (Codex protocol) — sign in with /auth first" },
+	{ model: "gpt-6.1-sol", provider: "chatgpt", description: "OpenAI account (Codex protocol) — sign in with /auth first" },
 	{ model: "gemini-2.0-flash", provider: "google", description: "Google direct, long context" },
 	{ model: "mistral-small-latest", provider: "mistral", description: "Mistral direct" },
 	{ model: "llama-3.3-70b-versatile", provider: "groq", description: "Groq direct, fast inference" },
@@ -341,7 +341,7 @@ export async function openGroupedModelPicker(host: FeatureHost, grouped: Grouped
 	if (!applied) return;
 	const hints: Array<[string, unknown]> = [];
 	if (applied.provider === "chatgpt") {
-		hints.push(["Efforts", "ChatGPT models accept low/medium/high/xhigh/max per model — see /models catalog"]);
+		hints.push(["Efforts", "OpenAI account models accept low/medium/high/xhigh/max per model — see /models catalog"]);
 	}
 	hints.push(["Off-list", "Use /default-model <id> for any other model id"]);
 	hints.push(["Keys", "Missing provider key? See /keys"]);

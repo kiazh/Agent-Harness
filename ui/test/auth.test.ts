@@ -178,7 +178,7 @@ test("/auth sign-in prints the URL and settles on the completed event", async ()
 
 	host.emit(completedEvent("acct-ui", 1_800_000_000));
 	await pending;
-	assert.match(host.text(), /Signed in to ChatGPT \(acct-ui\)/);
+	assert.match(host.text(), /Signed in to OpenAI \(acct-ui\)/);
 	assert.match(host.text(), /expires 2027-01-15T08:00:00Z/);
 	assert.match(host.text(), /Run \/provider chatgpt \(optionally with a model\) to use the account/);
 	assert.equal(host.handlers.size, 0, "the settle subscription must be released");
@@ -192,7 +192,7 @@ test("/auth login is an alias with the same RPC", async () => {
 	host.emit(completedEvent(null, null));
 	await pending;
 	assert.equal(host.calls[0]!.method, "auth.chatgpt.login");
-	assert.match(host.text(), /Signed in to ChatGPT\./);
+	assert.match(host.text(), /Signed in to OpenAI\./);
 });
 
 test("/auth sign-in surfaces a failed event with guidance", async () => {
@@ -215,7 +215,7 @@ test("/auth sign-in matches its own events only", async () => {
 	host.emit({ protocolVersion: 2, sessionId: "other", turnId: "t", type: "message.delta", text: "hi" });
 	host.emit(completedEvent("acct-ui", null));
 	await pending;
-	assert.match(host.text(), /Signed in to ChatGPT \(acct-ui\)/);
+	assert.match(host.text(), /Signed in to OpenAI \(acct-ui\)/);
 });
 
 // ─── import / sign-out ───────────────────────────────────────────────────────
@@ -227,7 +227,7 @@ test("/auth import-codex reports the import and the resulting status", async () 
 	await run("/auth import-codex", host);
 	assert.deepEqual(host.calls, [{ method: "auth.chatgpt.importCodex", params: {} }]);
 	assert.equal(host.printed[0]!.kind, "success");
-	assert.match(host.text(), /Imported the Codex CLI's ChatGPT credentials/);
+	assert.match(host.text(), /Imported the Codex CLI's OpenAI credentials/);
 	assert.match(host.text(), /acct-ui/);
 });
 
@@ -289,18 +289,18 @@ test("/auth offers completion-friendly subcommands", async () => {
 	assert.ok(SLASH_COMMANDS.some((command) => command.name === "auth"));
 });
 
-test("/provider points ChatGPT-account models at /auth", async () => {
+test("/provider points OpenAI-account models at /auth", async () => {
 	const host = new AuthFakeHost();
 	host.responses["config.get"] = { config: { provider: "openrouter" }, secrets: [] };
 	await run("/provider", host);
-	assert.match(host.text(), /ChatGPT-account models need no API key — sign in with \/auth/);
+	assert.match(host.text(), /OpenAI account models need no API key — sign in with \/auth/);
 });
 
-test("/keys list points ChatGPT-account models at /auth", async () => {
+test("/keys list points OpenAI-account models at /auth", async () => {
 	const host = new AuthFakeHost();
 	host.responses["secrets.list"] = { secrets: [], envFile: "/x/.env" };
 	await run("/keys list", host);
-	assert.match(host.text(), /ChatGPT-account models need no key — sign in with \/auth/);
+	assert.match(host.text(), /OpenAI account models need no key — sign in with \/auth/);
 });
 
 // ─── pure renderers ──────────────────────────────────────────────────────────
