@@ -9,10 +9,8 @@ from machina.core.exceptions import ValidationError
 from machina.core.provider.anthropic import AnthropicProvider
 from machina.core.provider.base import LLMProvider
 from machina.core.provider.chatgpt import ChatGPTProvider
-from machina.core.provider.claude import ClaudeProvider
 from machina.core.provider.copilot import CopilotProvider
 from machina.core.provider.direct import DirectProvider
-from machina.core.provider.gemini import GeminiProvider
 from machina.core.provider.ollama import OllamaProvider
 from machina.core.provider.openrouter import OpenRouterProvider
 from machina.core.provider.specs import PROVIDER_SPECS, ProviderSpec, provider_names
@@ -118,15 +116,9 @@ def get_provider(
     elif provider == "chatgpt":
         # ChatGPT subscription tokens (Codex protocol); no API key involved.
         return ChatGPTProvider(model=model, reasoning_effort=reasoning_effort)
-    elif provider == "claude":
-        # Claude Pro/Max subscription tokens (Claude Code OAuth); no API key.
-        return ClaudeProvider(model=model, reasoning_effort=reasoning_effort)
     elif provider == "copilot":
         # GitHub Copilot seat (GitHub token); no API key.
         return CopilotProvider(model=model, reasoning_effort=reasoning_effort)
-    elif provider == "gemini":
-        # Gemini Code Assist license (gemini-cli Cloud Code Assist OAuth).
-        return GeminiProvider(model=model, reasoning_effort=reasoning_effort)
     elif provider == "custom":
         return _custom_provider(model, reasoning_effort)
     elif provider == "ollama":

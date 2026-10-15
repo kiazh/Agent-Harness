@@ -395,10 +395,9 @@ relevant configuration through the [operations guide](OPERATIONS.md).
 | DeepSeek | `DEEPSEEK_API_KEY` | Direct DeepSeek API |
 | xAI | `XAI_API_KEY` | Direct xAI API |
 | ChatGPT account | `machina auth login` (no API key) | ChatGPT subscription through the Codex protocol |
-| Claude Pro/Max | `machina auth claude login` (no API key) | Claude Code OAuth protocol |
 | GitHub Copilot | `machina auth copilot login` (or `gh` import) | Copilot seat; live-proven wire |
-| Gemini Code Assist | `machina auth gemini login` (license required) | gemini-cli flow; enterprise/workspace licenses only |
 | OpenCode Zen | `OPENCODE_API_KEY` | OpenCode Zen gateway (free + paid models) |
+| Kimi Code | `KIMI_API_KEY` (Kimi Code Console) | Kimi Code membership endpoint; OpenAI-compatible |
 | Custom | `CUSTOM_BASE_URL` and optional `CUSTOM_API_KEY` | Any OpenAI-compatible endpoint; keyless local servers supported |
 | Ollama | Running Ollama service and an installed model | Local service; no cloud key required |
 
@@ -431,20 +430,25 @@ accepts for that model are offered, and a rejected level names the supported
 set. When the live fetch is unavailable the listing falls back to the Codex
 CLI's read-only cache and then to a dated snapshot of verified rows.
 
-**More subscription sign-ins.** `claude` (Claude Pro/Max via the Claude Code
-OAuth protocol), `copilot` (a GitHub Copilot seat - live-proven: model list,
-completions and tool calls through the real wire), and `gemini` (Gemini Code
-Assist - code-assist enterprise/workspace licenses only; Google stopped serving
-consumer sign-ins on 2026-06-18 and the provider answers a typed
-`gemini_not_eligible` otherwise) sign in with
-`machina auth <provider> login|status|logout`, import an existing local CLI
-login read-only where one exists, and keep tokens under `~/.machina/auth/`
-(0600). The TUI's `/auth` card currently covers ChatGPT; the others are
-CLI-first for now. The research verdicts for further targets live in
+**More subscription sign-ins.** `copilot` (a GitHub Copilot seat - live-proven:
+model list, completions and tool calls through the real wire) signs in with
+`machina auth copilot login|status|logout`, imports an existing local CLI
+login read-only where one exists, and keeps tokens under `~/.machina/auth/`
+(0600). The TUI's `/auth` card currently covers ChatGPT; copilot is CLI-first
+for now.
+
+**Removed subscription flows (2026-10-14).** The Claude Pro/Max and Gemini
+Code Assist OAuth flows were removed: Anthropic's legal-and-compliance docs
+(2026-02-19) declare subscription OAuth tokens "not permitted" in any product
+other than Claude Code / native Anthropic apps, and Google's Gemini CLI FAQ
+declares third-party OAuth reuse a direct ToS violation subject to account
+suspension. Both remain fully supported through their API-key providers
+(`anthropic` with `ANTHROPIC_API_KEY`, `google` with `GOOGLE_API_KEY`); a
+session or config pinned to the removed names now receives the standard
+unknown-provider error. The research verdicts for further targets live in
 `docs/verification/proofs/oauth_research_2026-10-14/`: Kiro is not feasible as
 a native provider (AWS enforces its ToS against third-party clients; an
-ACP-interop path via the official `kiro-cli` is scoped), Kimi K3 is possible
-(device flow and wire pinned; not yet implemented), and Cursor/Windsurf/
+ACP-interop path via the official `kiro-cli` is scoped), and Cursor/Windsurf/
 Antigravity/iFlow are not feasible.
 
 **Custom endpoints.** The `custom` provider reaches any OpenAI-compatible
@@ -457,6 +461,17 @@ endpoint (LM Studio, vLLM, llama.cpp, a Hermes loopback proxy, …) through
 `OPENCODE_BASE_URL`). Zen lists free and paid models, but the free tier is gated
 to the OpenCode client: keyless or placeholder-key requests answer HTTP 403
 (`FreeTierError`), so use a genuine console key.
+
+**Kimi Code.** The `kimi` provider reaches Kimi Code's official third-party
+API endpoint (`https://api.kimi.ai/coding/v1`; China uses
+`https://api.kimi.com/coding/v1`) with a `KIMI_API_KEY` created in the Kimi
+Code Console - a membership is required for coding quota, and each model id
+maps to a tier: `k3` (up to 1M context for higher tiers, 256K below), `k3-256k`
+(256K), `kimi-for-coding` (default; up to 1M) and `kimi-for-coding-highspeed`
+(256K, faster output). The wire documents a top-level `reasoning_effort`
+(`low`/`high`/`max`); the harness sends it only when explicitly set, so use
+`low`/`high` for this provider (its wire does not accept `medium`). Docs:
+<https://www.kimi.com/code/docs/en/>.
 
 **Your own providers.** `machina providers add <name> <base_url>` (or the
 TUI's `/provider add`) registers any OpenAI-compatible endpoint; the key is

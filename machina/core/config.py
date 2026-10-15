@@ -35,6 +35,7 @@ SECRET_KEYS = frozenset(
         "deepseek_api_key",
         "xai_api_key",
         "opencode_api_key",
+        "kimi_api_key",
         "custom_api_key",
         "cohere_api_key",
         "database_url",
@@ -188,6 +189,7 @@ DEFAULTS: dict[str, Any] = {
     "deepseek_api_key": "",
     "xai_api_key": "",
     "opencode_api_key": "",
+    "kimi_api_key": "",
     # Generic OpenAI-compatible provider ("custom"): any base URL (LM Studio,
     # vLLM, llama.cpp, the Hermes loopback proxy, ...). The key is optional —
     # local endpoints commonly run keyless.
@@ -233,6 +235,7 @@ LEGACY_ENV_VARS: dict[str, str] = {
     "deepseek_api_key": "DEEPSEEK_API_KEY",
     "xai_api_key": "XAI_API_KEY",
     "opencode_api_key": "OPENCODE_API_KEY",
+    "kimi_api_key": "KIMI_API_KEY",
     "custom_base_url": "CUSTOM_BASE_URL",
     "custom_api_key": "CUSTOM_API_KEY",
     "opencode_base_url": "OPENCODE_BASE_URL",
@@ -428,6 +431,7 @@ class Config:
     deepseek_api_key: str = field(default="", repr=False)
     xai_api_key: str = field(default="", repr=False)
     opencode_api_key: str = field(default="", repr=False)
+    kimi_api_key: str = field(default="", repr=False)
     # "custom" provider: any OpenAI-compatible base URL; key optional.
     custom_base_url: str = ""
     custom_api_key: str = field(default="", repr=False)

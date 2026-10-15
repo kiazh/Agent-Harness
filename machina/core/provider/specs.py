@@ -114,14 +114,25 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         reasoning="none",
         description="OpenCode Zen (free + paid models, OpenAI-compatible gateway)",
     ),
+    "kimi": ProviderSpec(
+        name="kimi",
+        # Kimi Code (overseas base; China uses
+        # https://api.kimi.com/coding/v1). Subscribers create a key in the
+        # Kimi Code Console; the OpenAI-compatible endpoint documents a
+        # top-level reasoning_effort (low/high/max) for k3 / k3-256k /
+        # kimi-for-coding, so the OpenAI-style knob is wired as-is.
+        base_url="https://api.kimi.ai/coding/v1",
+        api_key_env="KIMI_API_KEY",
+        default_model="kimi-for-coding",
+        reasoning="openai",
+        description="Kimi Code (K3/K2.8 coding models; membership API key)",
+    ),
 }
 
 # Every chat provider the harness can route to: OpenRouter (multi-model),
 # the direct families above, Anthropic (native API), ChatGPT subscription
-# accounts (Codex protocol; auth-file based, no API key), Claude Pro/Max
-# subscription accounts (Claude Code OAuth; auth-file based), GitHub Copilot
-# seats (GitHub token; auth-file based), Gemini Code Assist licenses
-# (gemini-cli Cloud Code Assist OAuth; auth-file based), and "custom" — any
+# accounts (Codex protocol; auth-file based, no API key), GitHub Copilot
+# seats (GitHub token; auth-file based), and "custom" — any
 # OpenAI-compatible endpoint configured via CUSTOM_BASE_URL (built dynamically
 # in factory.py, so it is deliberately absent from PROVIDER_SPECS, the fixed
 # vendor table).
@@ -170,9 +181,7 @@ PROVIDERS: tuple[str, ...] = _ProviderRegistry(
         *tuple(PROVIDER_SPECS),
         "anthropic",
         "chatgpt",
-        "claude",
         "copilot",
-        "gemini",
         "custom",
         "ollama",
     )

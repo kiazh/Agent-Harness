@@ -26,11 +26,9 @@ from .audit import audit_log
 from .base import LLMProvider
 from .caches import _cache_clear  # noqa: F401 — documented test-only seam (tests/conftest.py)
 from .chatgpt import ChatGPTProvider  # noqa: F401 — chatgpt-account import surface
-from .claude import ClaudeProvider  # noqa: F401 — claude-subscription import surface
 from .copilot import CopilotProvider  # noqa: F401 — copilot-seat import surface
 from .direct import DirectProvider  # noqa: F401 — pre-split import surface
 from .factory import get_provider
-from .gemini import GeminiProvider  # noqa: F401 — gemini-license import surface
 from .ollama import OllamaProvider  # noqa: F401 — pre-split import surface
 from .openrouter import OpenRouterProvider  # noqa: F401 — pre-split import surface
 from .rate_limit import AsyncTokenBucket, reload_rate_limiters

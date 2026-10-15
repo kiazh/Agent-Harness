@@ -44,6 +44,7 @@ export const CURATED_MODELS: ModelEntry[] = [
 	{ model: "deepseek-chat", provider: "deepseek", description: "DeepSeek direct (use deepseek-reasoner to think)" },
 	{ model: "grok-4", provider: "xai", description: "xAI direct (Grok)" },
 	{ model: "big-pickle", provider: "opencode", description: "OpenCode Zen gateway (set OPENCODE_API_KEY)" },
+	{ model: "kimi-for-coding", provider: "kimi", description: "Kimi Code membership tier (set KIMI_API_KEY)" },
 	{ model: "llama3.1", provider: "ollama", description: "Local via Ollama" },
 	{ model: "mistral", provider: "ollama", description: "Local via Ollama" },
 	{ model: "codellama", provider: "ollama", description: "Local code model" },

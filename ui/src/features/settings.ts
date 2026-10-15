@@ -390,7 +390,7 @@ export const settingsCommands: Command[] = [
 	{
 		name: "provider",
 		description: "Show or set a provider; add/remove user-added providers",
-		argumentHint: "[list|add [name url]|remove [name]|openrouter|openai|anthropic|chatgpt|claude|copilot|gemini|google|mistral|groq|together|deepseek|xai|opencode|custom|ollama|<name>]",
+		argumentHint: "[list|add [name url]|remove [name]|openrouter|openai|anthropic|chatgpt|copilot|google|mistral|groq|together|deepseek|xai|opencode|kimi|custom|ollama|<name>]",
 		getArgumentCompletions: options([
 			["list", "List built-in and user-added providers"],
 			["add", "Add a provider (name + base URL + optional key)"],
@@ -399,9 +399,7 @@ export const settingsCommands: Command[] = [
 			["openai", "OpenAI direct"],
 			["anthropic", "Anthropic direct"],
 			["chatgpt", "ChatGPT account (sign in with /auth)"],
-			["claude", "Claude Pro/Max subscription (machina auth claude)"],
 			["copilot", "GitHub Copilot seat (machina auth copilot)"],
-			["gemini", "Gemini Code Assist license (machina auth gemini)"],
 			["google", "Google direct (Gemini)"],
 			["mistral", "Mistral direct"],
 			["groq", "Groq direct"],
@@ -409,6 +407,7 @@ export const settingsCommands: Command[] = [
 			["deepseek", "DeepSeek direct"],
 			["xai", "xAI direct (Grok)"],
 			["opencode", "OpenCode Zen gateway (OPENCODE_API_KEY)"],
+			["kimi", "Kimi Code (KIMI_API_KEY; membership quota)"],
 			["custom", "Custom OpenAI-compatible endpoint (CUSTOM_BASE_URL)"],
 			["ollama", "Ollama (local models)"],
 		]),

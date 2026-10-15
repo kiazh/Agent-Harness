@@ -26,6 +26,14 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "mistral-small": 128_000,
     "deepseek-chat": 64_000,
     "deepseek-reasoner": 64_000,
+    # Kimi Code membership models (kimi.com/code/docs model table): k3 is 1M
+    # for higher tiers / 256K below, k3-256k is fixed 256K, kimi-for-coding
+    # (K2.8 Preview) is 1M, and its HighSpeed variant is 256K. Longest-key
+    # matching keeps k3-256k and kimi-for-coding-highspeed on their own rows.
+    "k3-256k": 262_144,
+    "k3": 1_048_576,
+    "kimi-for-coding-highspeed": 262_144,
+    "kimi-for-coding": 1_048_576,
     # Local serving — conservative defaults tied to typical num_ctx.
     # Sized so the derived budget lands exactly on the legacy floor.
     "llama3.1": 32_000,

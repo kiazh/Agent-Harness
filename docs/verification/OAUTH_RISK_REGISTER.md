@@ -45,3 +45,20 @@ fail-closed throughout: every reviewed broad-except either degrades to a
 safe state (`signed_out` / `storage_unavailable` / `failed`) or propagates.
 Regression tests added: `tests/test_s5_oauth_stride.py` (2 tests).
 Existing suites `test_connectors_oauth_*` + gateway OAuth suites remain green.
+
+## Subscription-provider compliance update (2026-10-14, owner-directed)
+
+Scope note: this register otherwise covers the connector OAuth boundary above;
+this section records the risk decision for Machina's own LLM subscription
+sign-ins, whose vendor terms changed during the round-4 review.
+
+| Change | Reason (primary sources) | Disposition |
+|---|---|---|
+| **Removed:** Claude Pro/Max OAuth flow (`security/claude_auth.py`, `core/provider/claude.py`, the `auth claude` CLI sub-app, `provider=claude` routing, stored `~/.machina/auth/claude.json`) | Anthropic legal-and-compliance (2026-02-19): Free/Pro/Max OAuth tokens are for Claude Code and native Anthropic apps only — "not permitted in any other product, tool, or service"; third-party developers may not offer Claude.ai login or route requests through subscription credentials; enforcement/bans documented (2026-02). | Removed entirely. Kept: `provider=anthropic` API-key path (`ANTHROPIC_API_KEY`), unchanged. Removal guard: `tests/test_subscription_removals.py`. |
+| **Removed:** Gemini Code Assist OAuth flow (`security/gemini_auth.py`, `core/provider/gemini.py`, the `auth gemini` CLI sub-app, `provider=gemini` routing, stored `~/.machina/auth/gemini.json`, gemini-cli `~/.gemini/oauth_creds.json` import) | Google Gemini CLI FAQ: third-party OAuth reuse is a direct ToS violation subject to account suspension; abuse detection live (discussion #22970, 2026-10-11) and account/project suspensions documented (#18999, #25648). | Removed entirely. Kept: `provider=google` API-key path (`GOOGLE_API_KEY`), unchanged. Removal guard: `tests/test_subscription_removals.py`. |
+| **Added:** Kimi Code API-key provider (`provider=kimi`, `KIMI_API_KEY`, `https://api.kimi.ai/coding/v1`) | Kimi Code docs (2026-10-14): subscribers "can also obtain an API Key to integrate Kimi Code's model capabilities into third-party development tools and platforms" — officially sanctioned, key-based (no OAuth piggyback), first-party guides for Claude Code/OpenCode/Codex. | Accepted. Proof: `tests/test_kimi_provider.py` (spec + MockTransport wire shape). |
+| **Kept:** GitHub Copilot seat (`provider=copilot`) | No prohibition found in current GitHub Generative AI Services Terms; GitHub actively ships an ACP server for third-party use. Raw-token reuse remains a grey area; the sanctioned bridge is the official Copilot CLI (ACP/`-p`), scoped as a future migration. | Kept, with the nuance noted. |
+
+A user or saved session pinned to a removed provider name now receives the
+standard unknown-provider error; no removal-specific error machinery exists.
+Evidence: `docs/verification/proofs/codebase_review_round4_2026-10-14/R4-GEMINI_CLAUDE_KIMI.md`.

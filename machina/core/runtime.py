@@ -339,20 +339,6 @@ def _detect_providers() -> dict[str, Any]:
                     reason = "via Codex login (run `machina auth login --import-codex` to copy it)"
             else:
                 reason = "not signed in - run `machina auth login` (or --import-codex)"
-        elif selected == "claude":
-            # Claude Pro/Max subscription: readiness comes from the auth store
-            # (Machina's token file or an existing Claude Code login).
-            from machina.security.claude_auth import status as _claude_status
-
-            st = _claude_status()
-            if st.get("signed_in"):
-                key_ok = True
-                if st.get("expired"):
-                    reason = "session expired; refreshes on the next call"
-                elif st.get("source") == "claude":
-                    reason = "via Claude Code login (run `machina auth claude login --import-claude` to copy it)"
-            else:
-                reason = "not signed in - run `machina auth claude login` (or --import-claude)"
         elif selected == "copilot":
             # GitHub Copilot seat: readiness comes from the auth store
             # (Machina's token file or the `gh auth token` credential).
@@ -367,20 +353,6 @@ def _detect_providers() -> dict[str, Any]:
                     )
             else:
                 reason = "not signed in - run `machina auth copilot login` (or --import-gh)"
-        elif selected == "gemini":
-            # Gemini Code Assist license: readiness comes from the auth store
-            # (Machina's token file or an existing gemini-cli login).
-            from machina.security.gemini_auth import status as _gemini_status
-
-            st = _gemini_status()
-            if st.get("signed_in"):
-                key_ok = True
-                if st.get("expired"):
-                    reason = "session expired; refreshes on the next call"
-                elif st.get("source") == "gemini-cli":
-                    reason = "via gemini-cli login (run `machina auth gemini login --import-gemini` to copy it)"
-            else:
-                reason = "not signed in - run `machina auth gemini login` (or --import-gemini)"
         elif selected == "ollama":
             key_ok = _ollama_reachable()
             reason = "" if key_ok else "Ollama daemon unreachable"

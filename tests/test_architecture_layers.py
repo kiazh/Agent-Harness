@@ -157,7 +157,7 @@ _CORE_IMPORT_CEILINGS = {
 # machina/research/benchmark.py's architecture section (round-2 review N6:
 # the hand-mirrored literal drifted once already). Moves only with the delta
 # table documented inside test_deferred_import_count_ratchet.
-DEFERRED_IMPORT_CAP = 692
+DEFERRED_IMPORT_CAP = 689
 
 
 def test_module_level_core_imports_only_shrink():
@@ -262,6 +262,10 @@ def test_deferred_import_count_ratchet():
     #        branches bind their security.*_auth status probes lazily so the
     #        provider probe never imports the auth stack unless selected.
     #   Census 689 -> 692, so cap 689 -> 692.
+    #   Vendor-compliance removal (2026-10-14): -2 deferred imports — the
+    #   claude/gemini readiness branches are gone with their subscription
+    #   flows (owner-directed; vendor terms). Census measured at 689 on this
+    #   tree after the removal, so cap 692 -> 689.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
@@ -368,13 +372,20 @@ def test_deferred_import_count_ratchet():
 #     Package total 4258 -> 5501 by exactly the combined delta (57 round-3
 #     fixes + 1186 subscription-auth wave). Unreviewed growth beyond this is
 #     rejected.
+#   Vendor-compliance removal (2026-10-14): -720 provider lines — deleted
+#     core/provider/claude.py (109) and core/provider/gemini.py (611), the
+#     subscription OAuth transports (vendor terms; owner-directed). The
+#     factory branches/imports shrink factory.py 146 -> 138 and
+#     __init__.py 55 -> 53; the same wave adds the Kimi Code spec + registry
+#     comment, specs.py 179 -> 188 (+9). Package total 5501 -> 4780 by
+#     exactly this delta (measured post-``ruff format``).
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/agent.py", 2057),
     ("core/compression.py", 999),
-    ("core/provider/__init__.py", 55),
+    ("core/provider/__init__.py", 53),
     ("core/provider/_log.py", 10),
     ("core/provider/reasoning.py", 61),
-    ("core/provider/specs.py", 179),
+    ("core/provider/specs.py", 188),
     ("core/provider/audit.py", 147),
     ("core/provider/rate_limit.py", 79),
     ("core/provider/caches.py", 97),
@@ -385,11 +396,9 @@ GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/provider/direct.py", 347),
     ("core/provider/anthropic.py", 577),
     ("core/provider/chatgpt.py", 678),
-    ("core/provider/factory.py", 146),
+    ("core/provider/factory.py", 138),
     ("core/provider/catalog.py", 553),
-    ("core/provider/claude.py", 109),
     ("core/provider/copilot.py", 425),
-    ("core/provider/gemini.py", 611),
 )
 
 
@@ -411,7 +420,10 @@ def test_god_file_ceilings_only_fall(relative_path, ceiling):
 # 5501 = 4258 + 57 for the round-3 review fixes (chatgpt.py +49, direct.py
 #        +8) + 1186 for the subscription-auth provider wave (claude/copilot/
 #        gemini first-class providers; itemized in the delta table above).
-_PROVIDER_PACKAGE_TOTAL_CEILING = 5501
+# 4780 = 5501 - 720 for the vendor-compliance removal (claude.py + gemini.py
+#        deleted) - 8 (factory.py branches/imports) - 2 (__init__.py exports)
+#        + 9 (specs.py: the Kimi Code spec + registry comment, same wave).
+_PROVIDER_PACKAGE_TOTAL_CEILING = 4780
 
 
 def test_provider_package_total_only_falls():

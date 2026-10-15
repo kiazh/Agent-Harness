@@ -24,6 +24,11 @@ def test_known_models_resolve_to_documented_windows():
     assert context_window_for("llama-3.3-70b-versatile") == 128_000
     assert context_window_for("meta-llama/Llama-3.3-70B-Instruct-Turbo") == 128_000
     assert context_window_for("mistral-small-latest") == 128_000
+    # Kimi Code membership models (kimi.com/code/docs model table).
+    assert context_window_for("k3") == 1_048_576
+    assert context_window_for("k3-256k") == 262_144
+    assert context_window_for("kimi-for-coding") == 1_048_576
+    assert context_window_for("kimi-for-coding-highspeed") == 262_144
 
 
 def test_unknown_and_empty_models_keep_legacy_behavior():
@@ -38,6 +43,9 @@ def test_longest_match_wins_for_ambiguous_ids():
     # Bare "mistral" is the local build; "mistral-small-…" is the API model.
     assert context_window_for("mistral") == 32_000
     assert context_window_for("mistral-small-latest") == 128_000
+    # "k3" is a prefix of "k3-256k"; the longer key keeps its own window.
+    assert context_window_for("k3-256k") == 262_144
+    assert context_window_for("kimi-for-coding-highspeed") == 262_144
 
 
 def test_capacity_is_the_full_model_window():
