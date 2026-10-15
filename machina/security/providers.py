@@ -43,6 +43,7 @@ from urllib.parse import urlparse
 import httpx
 
 from machina.observability.diagnostics import record_failure
+from machina.security import store_fence
 from machina.security.env_file import (
     find_env_file,
     read_env_values,
@@ -292,7 +293,7 @@ def _save_store(store: dict[str, Any]) -> Path:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
     try:
-        os.chmod(tmp_name, 0o600)
+        store_fence.chmod_temp_file(fd, tmp_name, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(store, handle, indent=2, sort_keys=True)
             handle.write("\n")

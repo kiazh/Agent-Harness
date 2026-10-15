@@ -114,7 +114,7 @@ def invalidate_credentials(path: str | Path) -> int:
         file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix=file.name + ".", suffix=".tmp", dir=str(file.parent))
         try:
-            os.chmod(tmp_name, 0o600)
+            chmod_temp_file(fd, tmp_name, 0o600)
             with os.fdopen(fd, "w", encoding="ascii") as handle:
                 handle.write(f"{durable}\n")
                 handle.flush()
@@ -200,6 +200,24 @@ def store_fingerprint(target: str | Path) -> tuple[bool, bytes]:
         return False, b""
     except OSError:
         return True, b""
+
+
+def chmod_temp_file(fd: int, tmp_name: str | Path, mode: int = 0o600) -> None:
+    """chmod a fresh mkstemp path; close *fd* when chmod fails before fdopen.
+
+    ``mkstemp`` hands back an open descriptor plus a path, and every store
+    writer chmods the path before ``fdopen`` takes ownership of the
+    descriptor. When that chmod raises, the descriptor would leak (``fdopen``
+    never runs and the caller's ``except`` only unlinks the temp name), so
+    close it here and reraise unchanged. The temp-name unlink stays with
+    the caller. (R4-049b.)
+    """
+    try:
+        os.chmod(tmp_name, mode)
+    except BaseException:
+        with suppress(OSError):
+            os.close(fd)
+        raise
 
 
 def fenced_logout(path: str | Path) -> bool:

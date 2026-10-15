@@ -150,7 +150,7 @@ def invalidate_credentials(path: str | Path | None = None) -> int:
         file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix=file.name + ".", suffix=".tmp", dir=str(file.parent))
         try:
-            os.chmod(tmp_name, 0o600)
+            store_fence.chmod_temp_file(fd, tmp_name, 0o600)
             with os.fdopen(fd, "w", encoding="ascii") as handle:
                 handle.write(f"{durable}\n")
                 handle.flush()
@@ -316,7 +316,7 @@ def save_tokens(tokens: dict[str, Any], path: str | Path | None = None) -> Path:
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=str(target.parent))
     try:
-        os.chmod(tmp_name, 0o600)
+        store_fence.chmod_temp_file(fd, tmp_name, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(normalized, handle, indent=2, sort_keys=True)
             handle.write("\n")
