@@ -9,12 +9,25 @@ from typing import Any
 
 @dataclass
 class Chunk:
-    """A text chunk with metadata."""
+    """A text chunk with metadata.
+
+    ``start``/``end`` are half-open character offsets into the text passed
+    to :meth:`RecursiveCharacterTextSplitter.split_text` (``None`` when
+    unknown — a chunk assembled by hand, or one produced by
+    ``split_markdown``/``split_code``, which split per section so no
+    document-level offset exists). They let
+    :meth:`RecursiveCharacterTextSplitter._apply_overlap` verify that two
+    chunks really abut in the source before gluing one's tail onto the other:
+    overlap that bridges a dropped separator would fabricate a span that
+    never existed (R5-F2).
+    """
 
     text: str
     index: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     token_count: int = 0
+    start: int | None = None
+    end: int | None = None
 
 
 #: File extensions and common aliases mapped to the canonical language names
@@ -100,14 +113,20 @@ class RecursiveCharacterTextSplitter:
             bounded: list[Chunk] = []
             for chunk in chunks:
                 if len(chunk.text) > max_chars:
+                    offset = 0
                     for piece in self._hard_split(chunk.text, max_chars):
+                        start = None if chunk.start is None else chunk.start + offset
+                        end = None if start is None else start + len(piece)
                         bounded.append(
                             Chunk(
                                 text=piece,
                                 metadata=dict(chunk.metadata),
                                 token_count=self._estimate_tokens(piece),
+                                start=start,
+                                end=end,
                             )
                         )
+                        offset += len(piece)
                 else:
                     bounded.append(chunk)
             chunks = bounded
@@ -183,9 +202,12 @@ class RecursiveCharacterTextSplitter:
             sub_chunks = self.split_text(current_text.strip(), section_meta)
             chunks.extend(sub_chunks)
 
-        # Re-index
+        # Re-index. Offsets from the per-section split_text calls are relative
+        # to each section substring, not the document: don't advertise them.
         for i, chunk in enumerate(chunks):
             chunk.index = i
+            chunk.start = None
+            chunk.end = None
 
         return chunks
 
@@ -278,8 +300,12 @@ class RecursiveCharacterTextSplitter:
             # Fallback to recursive splitting
             chunks = self.split_text(text, base_metadata)
 
+        # Offsets from the per-block split_text calls are relative to each
+        # block substring, not the document: don't advertise them.
         for i, chunk in enumerate(chunks):
             chunk.index = i
+            chunk.start = None
+            chunk.end = None
 
         return chunks
 
@@ -288,76 +314,139 @@ class RecursiveCharacterTextSplitter:
         text: str,
         separators: list[str],
         metadata: dict[str, Any],
+        base_offset: int = 0,
     ) -> list[Chunk]:
-        """Recursively split text using the given separators."""
+        """Recursively split text using the given separators.
+
+        Chunks are assembled as *literal slices of ``text``* (offsets in
+        ``base_offset``), never by re-joining a separator-stripped part list.
+        That keeps every emission a genuine source substring and keeps
+        consecutive emissions adjacent even when a too-large part is recursed
+        (R5-F2): the separator run between the recursed part and the following
+        part is captured as the real source gap instead of being silently
+        dropped, so :meth:`_apply_overlap` can never splice across it.
+        """
         if not text:
             return []
 
         if not separators:
             # No more separators — force split by character
-            return self._force_split(text, self.chunk_size, metadata)
+            return self._force_split(text, self.chunk_size, metadata, base_offset)
 
         sep = separators[0]
         remaining = separators[1:]
 
         if sep == "":
-            return self._force_split(text, self.chunk_size, metadata)
+            return self._force_split(text, self.chunk_size, metadata, base_offset)
 
-        # Split on the separator
-        if self.is_separator_regex:
-            parts = re.split(sep, text)
-        else:
-            parts = text.split(sep)
+        # Content spans (start, end) between separators, empty spans retained
+        # so the offsets stay exact (``sep.join(text.split(sep)) == text``).
+        spans = self._separator_spans(text, sep)
+        parts = [(start, end) for start, end in spans if end > start]
 
         chunks: list[Chunk] = []
-        current_text = ""
+        # Accumulated span [cur_start, cur_end) in `text`, as source offsets.
+        cur_start: int | None = None
+        cur_end: int | None = None
 
-        for part in parts:
-            if not part:
-                continue
-
-            candidate = current_text + (sep if current_text else "") + part
+        for i, (part_start, part_end) in enumerate(parts):
+            if cur_start is None:
+                cand_start = part_start
+            else:
+                cand_start = cur_start
+            # Candidate includes the true separator run before this part.
+            candidate = text[cand_start:part_end]
 
             if self._estimate_tokens(candidate) <= self.chunk_size:
-                current_text = candidate
-            else:
-                # Current part doesn't fit. Retain a PLAIN separator at the
-                # tail of the emitted chunk: it was consumed from the source
-                # between current_text and part, and keeping it restores
-                # source adjacency — the prerequisite for overlap-merged
-                # chunks staying genuine substrings of the source (no
-                # fabricated spans; property test in test_fm5_chunker).
-                keep_sep = "" if self.is_separator_regex else sep
-                if current_text:
-                    emitted = current_text + keep_sep
-                    chunks.append(
-                        Chunk(
-                            text=emitted,
-                            metadata=dict(metadata),
-                            token_count=self._estimate_tokens(emitted),
-                        )
+                cur_start, cur_end = cand_start, part_end
+                continue
+
+            # Candidate doesn't fit. Emit everything up to (and including)
+            # the real source gap preceding this part, so the emitted chunk
+            # ends exactly where this part begins — adjacency preserved.
+            if cur_start is not None:
+                emitted = text[cur_start:part_start]
+                chunks.append(
+                    Chunk(
+                        text=emitted,
+                        metadata=dict(metadata),
+                        token_count=self._estimate_tokens(emitted),
+                        start=base_offset + cur_start,
+                        end=base_offset + part_start,
                     )
+                )
 
-                # If the part itself is too large, recurse with next separator
-                if self._estimate_tokens(part) > self.chunk_size and remaining:
-                    sub_chunks = self._split_recursive(part, remaining, metadata)
-                    chunks.extend(sub_chunks)
-                    current_text = ""
-                else:
-                    current_text = part
+            # If the part itself is too large, recurse with next separator.
+            part_text = text[part_start:part_end]
+            if self._estimate_tokens(part_text) > self.chunk_size and remaining:
+                sub_chunks = self._split_recursive(
+                    part_text, remaining, metadata, base_offset + part_start
+                )
+                # Bridge the recursion back to the following part: extend the
+                # last sub-chunk over the source gap up to the next part's
+                # start (a genuine source slice, never fabricated). Start the
+                # gap at the sub-chunk's real end, which may sit before
+                # ``part_end`` because the recursion can drop trailing
+                # separators inside the part.
+                if i + 1 < len(parts) and sub_chunks:
+                    last = sub_chunks[-1]
+                    next_start = parts[i + 1][0]
+                    last_end = last.end - base_offset if last.end is not None else part_end
+                    gap = text[last_end:next_start]
+                    if gap:
+                        last.text = last.text + gap
+                        last.token_count = self._estimate_tokens(last.text)
+                    if last.end is not None:
+                        last.end = base_offset + next_start
+                chunks.extend(sub_chunks)
+                cur_start = cur_end = None
+            else:
+                cur_start, cur_end = part_start, part_end
 
-        if current_text:
+        if cur_start is not None:
+            emitted = text[cur_start:cur_end]
             chunks.append(
                 Chunk(
-                    text=current_text,
+                    text=emitted,
                     metadata=dict(metadata),
-                    token_count=self._estimate_tokens(current_text),
+                    token_count=self._estimate_tokens(emitted),
+                    start=base_offset + cur_start,
+                    end=base_offset + cur_end,
                 )
             )
 
         return chunks
 
-    def _force_split(self, text: str, size: int, metadata: dict[str, Any]) -> list[Chunk]:
+    def _separator_spans(self, text: str, sep: str) -> list[tuple[int, int]]:
+        """Return ``(start, end)`` content spans split out of *text* by *sep*.
+
+        For a literal separator the spans are exact because
+        ``sep.join(text.split(sep)) == text``. For a regex separator the
+        spans are the runs between matches (non-capturing separators).
+        """
+        if not self.is_separator_regex:
+            spans: list[tuple[int, int]] = []
+            cursor = 0
+            for piece in text.split(sep):
+                spans.append((cursor, cursor + len(piece)))
+                cursor += len(piece) + len(sep)
+            return spans
+
+        spans = []
+        last = 0
+        for match in re.finditer(sep, text):
+            spans.append((last, match.start()))
+            last = match.end()
+        spans.append((last, len(text)))
+        return spans
+
+    def _force_split(
+        self,
+        text: str,
+        size: int,
+        metadata: dict[str, Any],
+        base_offset: int = 0,
+    ) -> list[Chunk]:
         """Force split text into fixed-size chunks by character count."""
         if size <= 0:
             raise ValueError(f"chunk size must be positive, got {size}")
@@ -371,6 +460,8 @@ class RecursiveCharacterTextSplitter:
                     text=chunk_text,
                     metadata=dict(metadata),
                     token_count=self._estimate_tokens(chunk_text),
+                    start=base_offset + i,
+                    end=base_offset + i + len(chunk_text),
                 )
             )
         return chunks
@@ -385,6 +476,13 @@ class RecursiveCharacterTextSplitter:
         exceed the hard limit, the overlap is trimmed to fit and the current
         chunk is preserved whole — the old overflow branch emitted duplicate
         fragments of the previous chunk instead of delivering overlap.
+
+        Overlap is only prepended when the previous chunk and the current
+        chunk genuinely abut in the source (``prev.end == cur.start``). A
+        suffix of a chunk that is separated from the next chunk by dropped
+        source characters must never be glued on, or the merge fabricates a
+        span that never existed (R5-F2). When offsets are unknown the guard
+        is skipped for backward compatibility.
         """
         if len(chunks) <= 1:
             return chunks
@@ -394,8 +492,10 @@ class RecursiveCharacterTextSplitter:
         max_chars = self.chunk_size * 4
 
         for i in range(1, len(chunks)):
-            prev_text = result[-1].text
-            current_text = chunks[i].text
+            prev = result[-1]
+            prev_text = prev.text
+            current = chunks[i]
+            current_text = current.text
 
             # Tail slice of previous chunk as overlap (handles prev <= overlap).
             overlap_text = prev_text[max(0, len(prev_text) - overlap_chars) :]
@@ -411,22 +511,32 @@ class RecursiveCharacterTextSplitter:
                 # Keep the separator at the start of the overlap.
                 overlap_text = overlap_text[best_idx:]
 
-            base_meta = dict(chunks[i].metadata)
+            # Adjacency guard: refuse overlap that would bridge a gap in the
+            # source (only checkable when both chunks carry offsets).
+            if prev.end is not None and current.start is not None and prev.end != current.start:
+                overlap_text = ""
+
+            base_meta = dict(current.metadata)
 
             if len(current_text) >= max_chars:
                 # Current chunk already fills the hard limit: emit it with a
                 # boundary-aligned hard split. No overlap is appended (there
                 # is no room) and nothing is duplicated.
+                offset = 0
                 for piece_idx, piece in enumerate(self._hard_split(current_text, max_chars)):
                     piece_meta = dict(base_meta)
                     piece_meta["overlap_piece"] = piece_idx
+                    start = None if current.start is None else current.start + offset
                     result.append(
                         Chunk(
                             text=piece,
                             metadata=piece_meta,
                             token_count=self._estimate_tokens(piece),
+                            start=start,
+                            end=None if start is None else start + len(piece),
                         )
                     )
+                    offset += len(piece)
                 continue
 
             # Trim the overlap (never the current text) so the merged chunk
@@ -435,11 +545,16 @@ class RecursiveCharacterTextSplitter:
             if len(overlap_text) > room:
                 overlap_text = overlap_text[-room:] if room > 0 else ""
             merged = overlap_text + current_text if overlap_text else current_text
+            start = current.start
+            if overlap_text and current.start is not None:
+                start = current.start - len(overlap_text)
             result.append(
                 Chunk(
                     text=merged,
                     metadata=dict(base_meta),
                     token_count=self._estimate_tokens(merged),
+                    start=start,
+                    end=current.end,
                 )
             )
 
