@@ -9,7 +9,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
-from contextlib import aclosing, nullcontext
+from contextlib import nullcontext
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from functools import wraps
@@ -18,6 +18,7 @@ from typing import Any
 from rich.console import Console
 
 from machina.core.assembler import PromptAssembler
+from machina.core.background_tasks import joined_teardown
 from machina.core.background_tasks import consolidation_inflight as _consolidation_inflight
 from machina.core.background_tasks import pending_learning_reviews as _pending_learning_reviews
 from machina.core.config import config
@@ -129,7 +130,7 @@ def instrument_stream(func):
         # tasks are created: a contextvar/span entered inside this generator
         # would neither survive across steps nor detach in its own context.
         try:
-            async with aclosing(func(self, session_id, user_message, verbose, **kwargs)) as events:
+            async with joined_teardown(stream=func(self, session_id, user_message, verbose, **kwargs)) as events:
                 async for event in events:
                     if event.type == "done":
                         if event.response is not None and not event.response.needs_approval:
@@ -435,25 +436,23 @@ class BaseReActAgent:
                 usage = None
                 actual_model = None
                 completed = False
-                try:
-                    async for event in self.provider.stream_complete(
+                async with joined_teardown(
+                    stream=self.provider.stream_complete(
                         messages=messages,
                         tools=tools,
                         max_tokens=int(config.get("max_tokens")),
-                    ):
+                    ),
+                    cleanup=lambda: self._finish_usage(
+                        reservation, usage, failed=not completed, model=actual_model
+                    ),
+                ) as events:
+                    async for event in events:
                         emitted = True
                         if event.type == "done" and event.response is not None:
                             usage = event.response.usage
                             actual_model = event.response.model
                             completed = True
                         yield event
-                finally:
-                    await self._finish_usage(
-                        reservation,
-                        usage,
-                        failed=not completed,
-                        model=actual_model,
-                    )
                 return
             except (UsageBudgetExceededError, DatabaseError):
                 raise
@@ -768,7 +767,7 @@ class BaseReActAgent:
         Thin wrapper over :meth:`_execute_tool_calls_stream` (the single
         implementation) that prints progress when *verbose* is set.
         """
-        async with aclosing(self._execute_tool_calls_stream(
+        async with joined_teardown(stream=self._execute_tool_calls_stream(
             response, messages, tool_calls_made, session_id, pending_chunks
         )) as events:
             async for event in events:
@@ -1777,186 +1776,187 @@ class ReActAgent(BaseReActAgent):
             pass
         # S3.1(c)+S3.2 END turn-start advisory
         pending_chunks: list[dict[str, Any]] = []
-        try:
-            session, messages = await self._prepare_context(
-                session_id,
-                user_message,
-                include_memory=True,
-                pending_chunks=pending_chunks,
-                images=images,
-            )
-            # AH-015: persist the user message immediately so cancellation during
-            # the first LLM call cannot lose it. Wrapped like the stream loop (F3):
-            # a CancelledError during this DB write must still persist the user
-            # message with an interruption marker rather than dropping the batch.
+        async with joined_teardown(cleanup=lambda: self._flush_pending_chunks(pending_chunks)):
             try:
-                await self._flush_pending_chunks(pending_chunks)
-            except asyncio.CancelledError:
-                await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-                raise
-
-            total_tokens = 0
-            tool_calls_made = []
-
-            iteration = 0
-            # S3.1(d) BEGIN progress history (revert: delete 2 lines; unbounded loop unchanged)
-            _s3_progress_history: list = []
-            # S3.1(d) END progress history
-            while True:
-                if verbose:
-                    console.print(f"[dim]Iteration {iteration + 1}[/dim]")
-
-                # Capacity applies to this request, never cumulative billed usage.
-                self._condense_history(messages)
-                tool_defs = self._tool_defs()
-                effective_budget = _effective_turn_budget(session, self.provider)
-                request_tokens = _request_context_tokens(messages, tool_defs, self.provider)
-                if request_tokens > effective_budget:
-                    logger.warning(
-                        "Model context window exceeded (%d > %d)",
-                        request_tokens,
-                        effective_budget,
-                    )
-                    audit_log(
-                        "agent_request_context_exceeded",
-                        session_id=str(session_id),
-                        total_tokens=total_tokens,
-                        request_tokens=request_tokens,
-                        context_window=effective_budget,
-                    )
-                    await self._flush_pending_chunks(pending_chunks)
-                    self._schedule_memory_consolidation(session_id)
-                    return AgentResponse(
-                        content="Current request exceeds the model context window. Compact the context or select a model with a larger window.",
-                        outcome="failed",
-                        tool_calls=tool_calls_made,
-                        tokens_used=total_tokens,
-                        iterations=iteration,
-                    )
-                try:
-                    response = await self._call_llm_with_retry(
-                        messages=messages,
-                        tools=tool_defs,
-                        session_id=session_id,
-                    )
-                except UsageBudgetExceededError as e:
-                    await self._flush_pending_chunks(pending_chunks)
-                    audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
-                    return AgentResponse(
-                        content=str(e),
-                        outcome="failed",
-                        tool_calls=tool_calls_made,
-                        tokens_used=total_tokens,
-                        iterations=iteration,
-                    )
-                except Exception as e:
-                    await self._flush_pending_chunks(pending_chunks)
-                    logger.exception("LLM call ultimately failed")
-                    audit_log(
-                        "agent_run_llm_error",
-                        session_id=str(session_id),
-                        error=str(e),
-                        iteration=iteration,
-                    )
-                    self._schedule_memory_consolidation(session_id)
-                    return AgentResponse(
-                        content="LLM provider error. Check server logs.",
-                        outcome="failed",
-                        tool_calls=tool_calls_made,
-                        tokens_used=total_tokens,
-                        iterations=iteration + 1,
-                    )
-
-                total_tokens += response.usage.get("total_tokens", 0)
-                metrics.record_tokens(
-                    str(session_id),
-                    response.usage.get("prompt_tokens", 0),
-                    response.usage.get("completion_tokens", 0),
+                session, messages = await self._prepare_context(
+                    session_id,
+                    user_message,
+                    include_memory=True,
+                    pending_chunks=pending_chunks,
+                    images=images,
                 )
-                if not response.tool_calls:
-                    content = response.content or ""
-                    pending_chunks.append(
-                        {
-                            "session_id": session_id,
-                            "agent_id": self.agent_id,
-                            "chunk_type": "assistant_message",
-                            "payload": {"content": content},
-                            "token_count": len(content) // 4,
-                        }
-                    )
-                    await self._flush_pending_chunks(pending_chunks)
-                    await session_manager.update_activity(session_id)
-                    audit_log(
-                        "agent_run_complete",
-                        session_id=str(session_id),
-                        iterations=iteration + 1,
-                        total_tokens=total_tokens,
-                        tool_calls_count=len(tool_calls_made),
-                    )
-                    # Consolidate memories after successful run
-                    self._schedule_memory_consolidation(session_id)
-                    completed = AgentResponse(
-                        content=content,
-                        tool_calls=tool_calls_made,
-                        tokens_used=total_tokens,
-                        iterations=iteration + 1,
-                    )
-                    self._schedule_learning_review(session_id, user_message, completed)
-                    return completed
-                if response.content:
-                    pending_chunks.append(
-                        {
-                            "session_id": session_id,
-                            "agent_id": self.agent_id,
-                            "chunk_type": "assistant_message",
-                            "payload": {"content": response.content},
-                            "token_count": len(response.content) // 4,
-                        }
-                    )
-                    try:
-                        await self._flush_pending_chunks(pending_chunks)
-                    except asyncio.CancelledError:
-                        await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-                        raise
-                batch_start = len(tool_calls_made)
+                # AH-015: persist the user message immediately so cancellation during
+                # the first LLM call cannot lose it. Wrapped like the stream loop (F3):
+                # a CancelledError during this DB write must still persist the user
+                # message with an interruption marker rather than dropping the batch.
                 try:
-                    await self._execute_tool_calls(
-                        response, messages, tool_calls_made, session_id, verbose, pending_chunks
-                    )
                     await self._flush_pending_chunks(pending_chunks)
-                except BaseException:
+                except asyncio.CancelledError:
                     await self._flush_pending_cancellation_safe(pending_chunks, session_id)
                     raise
-                batch = tool_calls_made[batch_start:]
-                total_tokens += sum(entry.get("delegated_tokens", 0) for entry in batch)
-                pauses = collect_pauses(batch)
-                if pauses:
-                    return AgentResponse(
-                        content="Waiting for approval.",
-                        tool_calls=tool_calls_made,
-                        tokens_used=total_tokens,
-                        iterations=iteration + 1,
-                        needs_approval=pauses,
+
+                total_tokens = 0
+                tool_calls_made = []
+
+                iteration = 0
+                # S3.1(d) BEGIN progress history (revert: delete 2 lines; unbounded loop unchanged)
+                _s3_progress_history: list = []
+                # S3.1(d) END progress history
+                while True:
+                    if verbose:
+                        console.print(f"[dim]Iteration {iteration + 1}[/dim]")
+
+                    # Capacity applies to this request, never cumulative billed usage.
+                    self._condense_history(messages)
+                    tool_defs = self._tool_defs()
+                    effective_budget = _effective_turn_budget(session, self.provider)
+                    request_tokens = _request_context_tokens(messages, tool_defs, self.provider)
+                    if request_tokens > effective_budget:
+                        logger.warning(
+                            "Model context window exceeded (%d > %d)",
+                            request_tokens,
+                            effective_budget,
+                        )
+                        audit_log(
+                            "agent_request_context_exceeded",
+                            session_id=str(session_id),
+                            total_tokens=total_tokens,
+                            request_tokens=request_tokens,
+                            context_window=effective_budget,
+                        )
+                        await self._flush_pending_chunks(pending_chunks)
+                        self._schedule_memory_consolidation(session_id)
+                        return AgentResponse(
+                            content="Current request exceeds the model context window. Compact the context or select a model with a larger window.",
+                            outcome="failed",
+                            tool_calls=tool_calls_made,
+                            tokens_used=total_tokens,
+                            iterations=iteration,
+                        )
+                    try:
+                        response = await self._call_llm_with_retry(
+                            messages=messages,
+                            tools=tool_defs,
+                            session_id=session_id,
+                        )
+                    except UsageBudgetExceededError as e:
+                        await self._flush_pending_chunks(pending_chunks)
+                        audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
+                        return AgentResponse(
+                            content=str(e),
+                            outcome="failed",
+                            tool_calls=tool_calls_made,
+                            tokens_used=total_tokens,
+                            iterations=iteration,
+                        )
+                    except Exception as e:
+                        await self._flush_pending_chunks(pending_chunks)
+                        logger.exception("LLM call ultimately failed")
+                        audit_log(
+                            "agent_run_llm_error",
+                            session_id=str(session_id),
+                            error=str(e),
+                            iteration=iteration,
+                        )
+                        self._schedule_memory_consolidation(session_id)
+                        return AgentResponse(
+                            content="LLM provider error. Check server logs.",
+                            outcome="failed",
+                            tool_calls=tool_calls_made,
+                            tokens_used=total_tokens,
+                            iterations=iteration + 1,
+                        )
+
+                    total_tokens += response.usage.get("total_tokens", 0)
+                    metrics.record_tokens(
+                        str(session_id),
+                        response.usage.get("prompt_tokens", 0),
+                        response.usage.get("completion_tokens", 0),
                     )
-                # S3.1(d) stagnation hook: shared batch tail (turn_flow owns the
-                # guarded wiring access; stagnation-only, never a cap).
-                _s3_progress_history, _s3_text = await stagnation_step(
-                    _s3_progress_history,
-                    batch,
-                    tool_calls_made,
-                    session_id=session_id,
-                    session_manager=session_manager,
-                    audit=audit_log,
-                    flush=lambda: self._flush_pending_chunks(pending_chunks),
-                )
-                if _s3_text is not None:
-                    self._schedule_memory_consolidation(session_id)
-                    return stopped_response(_s3_text, tool_calls_made, total_tokens, iteration + 1)
-                iteration += 1
-        except BaseException:
-            if pending_chunks:
-                await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-            raise
+                    if not response.tool_calls:
+                        content = response.content or ""
+                        pending_chunks.append(
+                            {
+                                "session_id": session_id,
+                                "agent_id": self.agent_id,
+                                "chunk_type": "assistant_message",
+                                "payload": {"content": content},
+                                "token_count": len(content) // 4,
+                            }
+                        )
+                        await self._flush_pending_chunks(pending_chunks)
+                        await session_manager.update_activity(session_id)
+                        audit_log(
+                            "agent_run_complete",
+                            session_id=str(session_id),
+                            iterations=iteration + 1,
+                            total_tokens=total_tokens,
+                            tool_calls_count=len(tool_calls_made),
+                        )
+                        # Consolidate memories after successful run
+                        self._schedule_memory_consolidation(session_id)
+                        completed = AgentResponse(
+                            content=content,
+                            tool_calls=tool_calls_made,
+                            tokens_used=total_tokens,
+                            iterations=iteration + 1,
+                        )
+                        self._schedule_learning_review(session_id, user_message, completed)
+                        return completed
+                    if response.content:
+                        pending_chunks.append(
+                            {
+                                "session_id": session_id,
+                                "agent_id": self.agent_id,
+                                "chunk_type": "assistant_message",
+                                "payload": {"content": response.content},
+                                "token_count": len(response.content) // 4,
+                            }
+                        )
+                        try:
+                            await self._flush_pending_chunks(pending_chunks)
+                        except asyncio.CancelledError:
+                            await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                            raise
+                    batch_start = len(tool_calls_made)
+                    try:
+                        await self._execute_tool_calls(
+                            response, messages, tool_calls_made, session_id, verbose, pending_chunks
+                        )
+                        await self._flush_pending_chunks(pending_chunks)
+                    except BaseException:
+                        await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                        raise
+                    batch = tool_calls_made[batch_start:]
+                    total_tokens += sum(entry.get("delegated_tokens", 0) for entry in batch)
+                    pauses = collect_pauses(batch)
+                    if pauses:
+                        return AgentResponse(
+                            content="Waiting for approval.",
+                            tool_calls=tool_calls_made,
+                            tokens_used=total_tokens,
+                            iterations=iteration + 1,
+                            needs_approval=pauses,
+                        )
+                    # S3.1(d) stagnation hook: shared batch tail (turn_flow owns the
+                    # guarded wiring access; stagnation-only, never a cap).
+                    _s3_progress_history, _s3_text = await stagnation_step(
+                        _s3_progress_history,
+                        batch,
+                        tool_calls_made,
+                        session_id=session_id,
+                        session_manager=session_manager,
+                        audit=audit_log,
+                        flush=lambda: self._flush_pending_chunks(pending_chunks),
+                    )
+                    if _s3_text is not None:
+                        self._schedule_memory_consolidation(session_id)
+                        return stopped_response(_s3_text, tool_calls_made, total_tokens, iteration + 1)
+                    iteration += 1
+            except BaseException:
+                if pending_chunks:
+                    await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                raise
 
     @instrument_stream
     async def run_stream(
@@ -1987,258 +1987,258 @@ class ReActAgent(BaseReActAgent):
             pass
         # S3.1(c)+S3.2 END stream turn-start advisory
         pending_chunks: list[dict[str, Any]] = []
-        try:
-            session, messages = await self._prepare_context(
-                session_id,
-                user_message,
-                include_memory=True,
-                pending_chunks=pending_chunks,
-                images=images,
-            )
-            # AH-015: persist the user message immediately; run_stream otherwise
-            # holds everything in pending until the final done event, so a
-            # CancelledError would drop the entire turn. Incremental flushing
-            # below preserves tool records as well.
+        async with joined_teardown(cleanup=lambda: self._flush_pending_chunks(pending_chunks)):
             try:
-                await self._flush_pending_chunks(pending_chunks)
-            except asyncio.CancelledError:
-                await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-                raise
-
-            total_tokens = 0
-            tool_calls_made = []
-
-            iteration = 0
-            # S3.1(d) BEGIN stream progress history (revert: delete 2 lines; unbounded loop unchanged)
-            _s3_progress_history: list = []
-            # S3.1(d) END stream progress history
-            while True:
-                if verbose:
-                    console.print(f"[dim]Iteration {iteration + 1}[/dim]")
-
-                # Capacity applies to this request, never cumulative billed usage.
-                self._condense_history(messages)
-                tool_defs = self._tool_defs()
-                effective_budget = _effective_turn_budget(session, self.provider)
-                request_tokens = _request_context_tokens(messages, tool_defs, self.provider)
-                if request_tokens > effective_budget:
-                    logger.warning(
-                        "Model context window exceeded (%d > %d)",
-                        request_tokens,
-                        effective_budget,
-                    )
-                    audit_log(
-                        "agent_request_context_exceeded",
-                        session_id=str(session_id),
-                        total_tokens=total_tokens,
-                        request_tokens=request_tokens,
-                        context_window=effective_budget,
-                    )
-                    await self._flush_pending_chunks(pending_chunks)
-                    # M1 (final pass): mirror run()'s failed-path catch-up so a
-                    # failed interactive turn consolidates like a failed job.
-                    self._schedule_memory_consolidation(session_id)
-                    yield StreamEvent(
-                        type="done",
-                        response=AgentResponse(
-                            content="Current request exceeds the model context window. Compact the context or select a model with a larger window.",
-                            outcome="failed",
-                            tool_calls=tool_calls_made,
-                            tokens_used=total_tokens,
-                            iterations=iteration,
-                        ),
-                    )
-                    return
-
-                # Stream LLM call with retry
-                streamed_text: list[str] = []
+                session, messages = await self._prepare_context(
+                    session_id,
+                    user_message,
+                    include_memory=True,
+                    pending_chunks=pending_chunks,
+                    images=images,
+                )
+                # AH-015: persist the user message immediately; run_stream otherwise
+                # holds everything in pending until the final done event, so a
+                # CancelledError would drop the entire turn. Incremental flushing
+                # below preserves tool records as well.
                 try:
-                    final_response = None
-                    async for event in self._stream_llm_with_retry(
-                        messages=messages,
-                        tools=tool_defs,
-                        session_id=session_id,
-                    ):
-                        if event.type == "text":
-                            streamed_text.append(event.content or "")
-                            yield StreamEvent(type="text", content=event.content)
-                        elif event.type == "done":
-                            final_response = event.response
-                            total_tokens += event.response.usage.get("total_tokens", 0)
-                            metrics.record_tokens(
-                                str(session_id),
-                                event.response.usage.get("prompt_tokens", 0),
-                                event.response.usage.get("completion_tokens", 0),
-                            )
-                            yield StreamEvent(
-                                type="token_usage",
-                                tokens_used=event.response.usage.get("total_tokens", 0),
-                            )
-
-                    if final_response is None:
-                        raise RuntimeError("Stream completed without a final response")
-
+                    await self._flush_pending_chunks(pending_chunks)
                 except asyncio.CancelledError:
-                    if streamed_text:
-                        content = "".join(streamed_text)
+                    await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                    raise
+
+                total_tokens = 0
+                tool_calls_made = []
+
+                iteration = 0
+                # S3.1(d) BEGIN stream progress history (revert: delete 2 lines; unbounded loop unchanged)
+                _s3_progress_history: list = []
+                # S3.1(d) END stream progress history
+                while True:
+                    if verbose:
+                        console.print(f"[dim]Iteration {iteration + 1}[/dim]")
+
+                    # Capacity applies to this request, never cumulative billed usage.
+                    self._condense_history(messages)
+                    tool_defs = self._tool_defs()
+                    effective_budget = _effective_turn_budget(session, self.provider)
+                    request_tokens = _request_context_tokens(messages, tool_defs, self.provider)
+                    if request_tokens > effective_budget:
+                        logger.warning(
+                            "Model context window exceeded (%d > %d)",
+                            request_tokens,
+                            effective_budget,
+                        )
+                        audit_log(
+                            "agent_request_context_exceeded",
+                            session_id=str(session_id),
+                            total_tokens=total_tokens,
+                            request_tokens=request_tokens,
+                            context_window=effective_budget,
+                        )
+                        await self._flush_pending_chunks(pending_chunks)
+                        # M1 (final pass): mirror run()'s failed-path catch-up so a
+                        # failed interactive turn consolidates like a failed job.
+                        self._schedule_memory_consolidation(session_id)
+                        yield StreamEvent(
+                            type="done",
+                            response=AgentResponse(
+                                content="Current request exceeds the model context window. Compact the context or select a model with a larger window.",
+                                outcome="failed",
+                                tool_calls=tool_calls_made,
+                                tokens_used=total_tokens,
+                                iterations=iteration,
+                            ),
+                        )
+                        return
+
+                    # Stream LLM call with retry
+                    streamed_text: list[str] = []
+                    try:
+                        final_response = None
+                        async with joined_teardown(stream=self._stream_llm_with_retry(
+                            messages=messages, tools=tool_defs, session_id=session_id,
+                        )) as events:
+                            async for event in events:
+                                if event.type == "text":
+                                    streamed_text.append(event.content or "")
+                                    yield StreamEvent(type="text", content=event.content)
+                                elif event.type == "done":
+                                    final_response = event.response
+                                    total_tokens += event.response.usage.get("total_tokens", 0)
+                                    metrics.record_tokens(
+                                        str(session_id),
+                                        event.response.usage.get("prompt_tokens", 0),
+                                        event.response.usage.get("completion_tokens", 0),
+                                    )
+                                    yield StreamEvent(
+                                        type="token_usage",
+                                        tokens_used=event.response.usage.get("total_tokens", 0),
+                                    )
+
+                        if final_response is None:
+                            raise RuntimeError("Stream completed without a final response")
+
+                    except asyncio.CancelledError:
+                        if streamed_text:
+                            content = "".join(streamed_text)
+                            pending_chunks.append(
+                                {
+                                    "session_id": session_id,
+                                    "agent_id": self.agent_id,
+                                    "chunk_type": "assistant_message",
+                                    "payload": {"content": content, "interrupted": True},
+                                    "token_count": len(content) // 4,
+                                }
+                            )
+                        await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                        raise
+                    except UsageBudgetExceededError as e:
+                        await self._flush_pending_chunks(pending_chunks)
+                        audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
+                        yield StreamEvent(
+                            type="done",
+                            response=AgentResponse(
+                                content=str(e),
+                                outcome="failed",
+                                tool_calls=tool_calls_made,
+                                tokens_used=total_tokens,
+                                iterations=iteration,
+                            ),
+                        )
+                        return
+                    except Exception as e:
+                        await self._flush_pending_chunks(pending_chunks)
+                        logger.exception("LLM stream ultimately failed")
+                        audit_log(
+                            "agent_run_llm_error",
+                            session_id=str(session_id),
+                            error=str(e),
+                            iteration=iteration,
+                        )
+                        # M1 (final pass): mirror run()'s failed-path catch-up.
+                        self._schedule_memory_consolidation(session_id)
+                        yield StreamEvent(
+                            type="done",
+                            response=AgentResponse(
+                                content="LLM provider error. Check server logs.",
+                                outcome="failed",
+                                tool_calls=tool_calls_made,
+                                tokens_used=total_tokens,
+                                iterations=iteration + 1,
+                            ),
+                        )
+                        return
+
+                    response = final_response
+                    if not response.tool_calls:
+                        content = response.content or ""
                         pending_chunks.append(
                             {
                                 "session_id": session_id,
                                 "agent_id": self.agent_id,
                                 "chunk_type": "assistant_message",
-                                "payload": {"content": content, "interrupted": True},
+                                "payload": {"content": content},
                                 "token_count": len(content) // 4,
                             }
                         )
-                    await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-                    raise
-                except UsageBudgetExceededError as e:
-                    await self._flush_pending_chunks(pending_chunks)
-                    audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
-                    yield StreamEvent(
-                        type="done",
-                        response=AgentResponse(
-                            content=str(e),
-                            outcome="failed",
-                            tool_calls=tool_calls_made,
-                            tokens_used=total_tokens,
-                            iterations=iteration,
-                        ),
-                    )
-                    return
-                except Exception as e:
-                    await self._flush_pending_chunks(pending_chunks)
-                    logger.exception("LLM stream ultimately failed")
-                    audit_log(
-                        "agent_run_llm_error",
-                        session_id=str(session_id),
-                        error=str(e),
-                        iteration=iteration,
-                    )
-                    # M1 (final pass): mirror run()'s failed-path catch-up.
-                    self._schedule_memory_consolidation(session_id)
-                    yield StreamEvent(
-                        type="done",
-                        response=AgentResponse(
-                            content="LLM provider error. Check server logs.",
-                            outcome="failed",
+                        await self._flush_pending_chunks(pending_chunks)
+                        await session_manager.update_activity(session_id)
+                        audit_log(
+                            "agent_run_complete",
+                            session_id=str(session_id),
+                            iterations=iteration + 1,
+                            total_tokens=total_tokens,
+                            tool_calls_count=len(tool_calls_made),
+                        )
+                        self._schedule_memory_consolidation(session_id)
+                        completed = AgentResponse(
+                            content=content,
                             tool_calls=tool_calls_made,
                             tokens_used=total_tokens,
                             iterations=iteration + 1,
-                        ),
-                    )
-                    return
+                        )
+                        self._schedule_learning_review(session_id, user_message, completed)
+                        yield StreamEvent(
+                            type="done",
+                            response=completed,
+                        )
+                        return
 
-                response = final_response
-                if not response.tool_calls:
-                    content = response.content or ""
-                    pending_chunks.append(
-                        {
-                            "session_id": session_id,
-                            "agent_id": self.agent_id,
-                            "chunk_type": "assistant_message",
-                            "payload": {"content": content},
-                            "token_count": len(content) // 4,
-                        }
-                    )
-                    await self._flush_pending_chunks(pending_chunks)
-                    await session_manager.update_activity(session_id)
-                    audit_log(
-                        "agent_run_complete",
-                        session_id=str(session_id),
-                        iterations=iteration + 1,
-                        total_tokens=total_tokens,
-                        tool_calls_count=len(tool_calls_made),
-                    )
-                    self._schedule_memory_consolidation(session_id)
-                    completed = AgentResponse(
-                        content=content,
-                        tool_calls=tool_calls_made,
-                        tokens_used=total_tokens,
-                        iterations=iteration + 1,
-                    )
-                    self._schedule_learning_review(session_id, user_message, completed)
-                    yield StreamEvent(
-                        type="done",
-                        response=completed,
-                    )
-                    return
-
-                # Execute tool calls with streaming events.
-                if response.content:
-                    pending_chunks.append(
-                        {
-                            "session_id": session_id,
-                            "agent_id": self.agent_id,
-                            "chunk_type": "assistant_message",
-                            "payload": {"content": response.content},
-                            "token_count": len(response.content) // 4,
-                        }
-                    )
+                    # Execute tool calls with streaming events.
+                    if response.content:
+                        pending_chunks.append(
+                            {
+                                "session_id": session_id,
+                                "agent_id": self.agent_id,
+                                "chunk_type": "assistant_message",
+                                "payload": {"content": response.content},
+                                "token_count": len(response.content) // 4,
+                            }
+                        )
+                        try:
+                            await self._flush_pending_chunks(pending_chunks)
+                        except asyncio.CancelledError:
+                            await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                            raise
+                    batch_start = len(tool_calls_made)
+                    # AH-015: run_stream previously held ALL history in pending until
+                    # the final done event — a CancelledError bypassed `except
+                    # Exception` and dropped user/tool records. Flush incrementally
+                    # and, on cancellation, persist what completed with an explicit
+                    # interruption marker.
                     try:
-                        await self._flush_pending_chunks(pending_chunks)
-                    except asyncio.CancelledError:
+                        async with joined_teardown(stream=self._execute_tool_calls_stream(
+                            response, messages, tool_calls_made, session_id, pending_chunks
+                        )) as events:
+                            async for event in events:
+                                yield event
+                    except BaseException:
                         await self._flush_pending_cancellation_safe(pending_chunks, session_id)
                         raise
-                batch_start = len(tool_calls_made)
-                # AH-015: run_stream previously held ALL history in pending until
-                # the final done event — a CancelledError bypassed `except
-                # Exception` and dropped user/tool records. Flush incrementally
-                # and, on cancellation, persist what completed with an explicit
-                # interruption marker.
-                try:
-                    async with aclosing(self._execute_tool_calls_stream(
-                        response, messages, tool_calls_made, session_id, pending_chunks
-                    )) as events:
-                        async for event in events:
-                            yield event
-                except BaseException:
-                    await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-                    raise
 
-                # Persist completed child/tool records before yielding a pause.
-                try:
-                    await self._flush_pending_chunks(pending_chunks)
-                except BaseException:
+                    # Persist completed child/tool records before yielding a pause.
+                    try:
+                        await self._flush_pending_chunks(pending_chunks)
+                    except BaseException:
+                        await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                        raise
+                    batch = tool_calls_made[batch_start:]
+                    total_tokens += sum(entry.get("delegated_tokens", 0) for entry in batch)
+                    pauses = collect_pauses(batch)
+                    if pauses:
+                        yield StreamEvent(
+                            type="done",
+                            response=AgentResponse(
+                                content="Waiting for approval.",
+                                tool_calls=tool_calls_made,
+                                tokens_used=total_tokens,
+                                iterations=iteration + 1,
+                                needs_approval=pauses,
+                            ),
+                        )
+                        return
+                    # S3.1(d) stream stagnation hook: shared batch tail (turn_flow owns
+                    # the guarded wiring access; stagnation-only, never a cap).
+                    _s3_progress_history, _s3_text = await stagnation_step(
+                        _s3_progress_history,
+                        batch,
+                        tool_calls_made,
+                        session_id=session_id,
+                        session_manager=session_manager,
+                        audit=audit_log,
+                        flush=lambda: self._flush_pending_chunks(pending_chunks),
+                    )
+                    if _s3_text is not None:
+                        self._schedule_memory_consolidation(session_id)
+                        yield StreamEvent(
+                            type="done",
+                            response=stopped_response(
+                                _s3_text, tool_calls_made, total_tokens, iteration + 1
+                            ),
+                        )
+                        return
+                    iteration += 1
+            except BaseException:
+                if pending_chunks:
                     await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-                    raise
-                batch = tool_calls_made[batch_start:]
-                total_tokens += sum(entry.get("delegated_tokens", 0) for entry in batch)
-                pauses = collect_pauses(batch)
-                if pauses:
-                    yield StreamEvent(
-                        type="done",
-                        response=AgentResponse(
-                            content="Waiting for approval.",
-                            tool_calls=tool_calls_made,
-                            tokens_used=total_tokens,
-                            iterations=iteration + 1,
-                            needs_approval=pauses,
-                        ),
-                    )
-                    return
-                # S3.1(d) stream stagnation hook: shared batch tail (turn_flow owns
-                # the guarded wiring access; stagnation-only, never a cap).
-                _s3_progress_history, _s3_text = await stagnation_step(
-                    _s3_progress_history,
-                    batch,
-                    tool_calls_made,
-                    session_id=session_id,
-                    session_manager=session_manager,
-                    audit=audit_log,
-                    flush=lambda: self._flush_pending_chunks(pending_chunks),
-                )
-                if _s3_text is not None:
-                    self._schedule_memory_consolidation(session_id)
-                    yield StreamEvent(
-                        type="done",
-                        response=stopped_response(
-                            _s3_text, tool_calls_made, total_tokens, iteration + 1
-                        ),
-                    )
-                    return
-                iteration += 1
-        except BaseException:
-            if pending_chunks:
-                await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-            raise
+                raise

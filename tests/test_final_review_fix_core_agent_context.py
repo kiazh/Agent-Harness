@@ -543,3 +543,58 @@ async def test_run_joins_post_tool_flush_during_repeated_cancellation(sleep_tool
     records = [chunk for chunk in persisted if chunk["chunk_type"] == "tool_call"]
     assert len(records) == 1
     assert records[0]["payload"]["result"] == "done-persisted"
+
+
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+async def test_closing_text_stream_joins_provider_and_usage_finalization(monkeypatch, repeat_cancel):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from machina.core import agent as agent_module
+    from machina.core.agent import ReActAgent
+    from machina.core.models import StreamEvent
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    order = []
+
+    class Provider:
+        async def stream_complete(self, **kwargs):
+            try:
+                yield StreamEvent(type="text", content="partial")
+                await asyncio.Event().wait()
+            finally:
+                entered.set()
+                await release.wait()
+                order.append("provider stream")
+
+    async def finish(*args, **kwargs):
+        await asyncio.sleep(0)
+        order.append("usage")
+
+    agent = ReActAgent.__new__(ReActAgent)
+    agent.agent_id = "test-agent"
+    agent.allowed_tools = None
+    agent.provider = Provider()
+    monkeypatch.setattr(agent, "_prepare_context", AsyncMock(return_value=(SimpleNamespace(), [])))
+    monkeypatch.setattr(agent, "_reserve_usage", AsyncMock(return_value=uuid.uuid4()))
+    monkeypatch.setattr(agent, "_finish_usage", finish)
+    monkeypatch.setattr(agent, "_condense_history", lambda messages: None)
+    monkeypatch.setattr(agent, "_tool_defs", lambda: [])
+    monkeypatch.setattr(agent_module, "_effective_turn_budget", lambda *args: 1000)
+    monkeypatch.setattr(agent_module, "_request_context_tokens", lambda *args: 1)
+    stream = agent.run_stream(uuid.uuid4(), "run", verbose=False)
+    event = await anext(stream)
+    assert event.type == "text"
+    closing = asyncio.create_task(stream.aclose())
+    await asyncio.wait_for(entered.wait(), 5)
+    if repeat_cancel:
+        closing.cancel()
+        await asyncio.sleep(0)
+        closing.cancel()
+    assert order == []
+    release.set()
+    if repeat_cancel:
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+    else:
+        await closing
+    assert order == ["provider stream", "usage"]

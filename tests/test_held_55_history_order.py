@@ -332,3 +332,21 @@ async def test_fork_preserves_event_seq(db_pool, monkeypatch):
         child_seqs = [r["event_seq"] for r in child_rows]
         assert child_seqs == [1, 2, 3, 4], child_seqs
         assert child_seqs == sorted(parent_rows.values())
+
+
+async def test_snapshot_keeps_null_ordinal_cursor_after_nonnull_history(db_pool, monkeypatch):
+    from machina.core.serialization import payload_to_msgpack
+
+    async with isolated_schema(db_pool) as (_schema, database):
+        monkeypatch.setattr(ctxmod, "db", database)
+        cm = ContextManager()
+        sid = await _session(database)
+        await database.executemany(
+            "INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, created_at, event_seq) "
+            "VALUES ($1, $2, 'harness', 'user_message', $3, '2020-01-01'::timestamptz, $4)",
+            [(uuid.UUID(int=i), sid, payload_to_msgpack({"content": str(i)}), i if i <= 500 else None)
+             for i in range(1, 1002)],
+        )
+        chunks = await cm.get_all_chunks(sid)
+        assert len(chunks) == 1001
+        assert len({chunk.id for chunk in chunks}) == 1001

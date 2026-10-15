@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 
 import asyncpg
 
-from machina.core.context import context_manager
+from machina.core.context import NULL_EVENT_SEQ_ASC, context_manager
 from machina.core.models import ContextChunk
 from machina.core.provider import LLMProvider, audit_log
 from machina.db.lazy import LazyDb
@@ -71,10 +71,6 @@ DEFAULT_DEDUP_THRESHOLD = 0.85
 
 # Maximum chunks to process in a single consolidation run
 MAX_CHUNKS_PER_CONSOLIDATION = 100
-
-# Stands in for a NULL event_seq when deriving the checkpoint key so a legacy
-# row sorts exactly as `ORDER BY ... NULLS LAST` places it (HELD-55 F1).
-_SEQ_NULL_SENTINEL = 9223372036854775807
 
 
 def _cosine_similarity(a: list[float] | None, b: list[float] | None) -> float:
@@ -329,7 +325,7 @@ class MemoryConsolidator:
                 key=lambda c: (
                     c.created_at.isoformat() if getattr(c, "created_at", None) else "",
                     (
-                        _SEQ_NULL_SENTINEL
+                        NULL_EVENT_SEQ_ASC
                         if getattr(c, "event_seq", None) is None
                         else int(c.event_seq)
                     ),
@@ -340,11 +336,9 @@ class MemoryConsolidator:
                 "id": str(latest.id),
                 "at": latest.created_at.isoformat() if latest.created_at else None,
             }
-            # Additive optional ordinal so the next run uses the exact 3-key
-            # predicate. Omitted for a legacy row (NULL seq) so that stored
-            # cursor keeps the legacy 2-key path.
-            if getattr(latest, "event_seq", None) is not None:
-                checkpoint["seq"] = int(latest.event_seq)
+            checkpoint["seq"] = (
+                NULL_EVENT_SEQ_ASC if getattr(latest, "event_seq", None) is None else int(latest.event_seq)
+            )
             return checkpoint
 
         # Step 1: Format conversation for LLM

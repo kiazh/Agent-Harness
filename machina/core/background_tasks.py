@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -145,3 +146,19 @@ async def await_joined(operation, *, capture_result: bool = False):
         if capture_result and not task.cancelled() and task.exception() is None:
             raise CompletedOnCancellation(task.result()) from None
         raise
+
+
+@asynccontextmanager
+async def joined_teardown(*, stream=None, cleanup=None):
+    try:
+        yield stream
+    finally:
+        async def finish():
+            try:
+                if stream is not None:
+                    await stream.aclose()
+            finally:
+                if cleanup is not None:
+                    await cleanup()
+
+        await await_joined(finish())

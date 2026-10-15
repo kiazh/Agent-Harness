@@ -29,6 +29,9 @@ __all__ = ["ContextChunk", "ContextManager", "context_manager"]
 
 db = LazyDb()
 
+NULL_EVENT_SEQ_ASC = 9223372036854775807
+NULL_EVENT_SEQ_DESC = -9223372036854775808
+
 # Five 255-character names can consume 5100 UTF-8 bytes; allow the bounded
 # keys, media types and MessagePack headers in addition to those names.
 _MAX_IMAGE_CONTEXT_BYTES = MAX_TOTAL_IMAGE_BYTES + 8192
@@ -747,7 +750,7 @@ class ContextManager:
             last = page[-1]
             before_time = last.created_at
             before_id = last.id
-            before_seq = last.event_seq
+            before_seq = last.event_seq if last.event_seq is not None else NULL_EVENT_SEQ_DESC
         return all_chunks
 
     async def get_recent_context(

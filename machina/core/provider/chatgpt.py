@@ -45,6 +45,7 @@ from typing import Any
 import httpx
 
 from machina import __version__
+from machina.core.background_tasks import joined_teardown
 from machina.core.config import config
 from machina.core.exceptions import ProviderError, RateLimitError
 from machina.core.metrics import metrics
@@ -660,7 +661,7 @@ class ChatGPTProvider(LLMProvider, RateLimitBinding):
     ) -> LLMResponse:
         """Non-streaming call: drain the stream and return the terminal response."""
         response: LLMResponse | None = None
-        async for event in self.stream_complete(
+        async with joined_teardown(stream=self.stream_complete(
             messages,
             model=model,
             temperature=temperature,
@@ -669,9 +670,10 @@ class ChatGPTProvider(LLMProvider, RateLimitBinding):
             reasoning_effort=reasoning_effort,
             session_id=session_id,
             agent_id=agent_id,
-        ):
-            if event.type == "done" and isinstance(event.response, LLMResponse):
-                response = event.response
+        )) as events:
+            async for event in events:
+                if event.type == "done" and isinstance(event.response, LLMResponse):
+                    response = event.response
         if response is None:
             raise ProviderError("chatgpt stream produced no terminal response")
         return response
