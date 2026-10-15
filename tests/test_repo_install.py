@@ -910,7 +910,11 @@ async def test_cancelled_repo_mutation_preserves_public_result(tmp_path, monkeyp
         return original(*args, **kwargs)
 
     monkeypatch.setattr(repo_install, method, gated)
-    operation = repo_tools.repo_activate(digest) if activate else repo_tools.repo_stage("https://github.com/o/r")
+    operation = (
+        repo_tools.repo_activate(digest)
+        if activate
+        else repo_tools.repo_stage("https://github.com/o/r")
+    )
     task = asyncio.create_task(operation)
     try:
         assert await asyncio.to_thread(entered.wait, 5)

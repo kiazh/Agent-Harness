@@ -130,7 +130,9 @@ def instrument_stream(func):
         # tasks are created: a contextvar/span entered inside this generator
         # would neither survive across steps nor detach in its own context.
         try:
-            async with joined_teardown(stream=func(self, session_id, user_message, verbose, **kwargs)) as events:
+            async with joined_teardown(
+                stream=func(self, session_id, user_message, verbose, **kwargs)
+            ) as events:
                 async for event in events:
                     if event.type == "done":
                         if event.response is not None and not event.response.needs_approval:
@@ -767,9 +769,11 @@ class BaseReActAgent:
         Thin wrapper over :meth:`_execute_tool_calls_stream` (the single
         implementation) that prints progress when *verbose* is set.
         """
-        async with joined_teardown(stream=self._execute_tool_calls_stream(
-            response, messages, tool_calls_made, session_id, pending_chunks
-        )) as events:
+        async with joined_teardown(
+            stream=self._execute_tool_calls_stream(
+                response, messages, tool_calls_made, session_id, pending_chunks
+            )
+        ) as events:
             async for event in events:
                 if not verbose:
                     continue
@@ -1038,9 +1042,9 @@ class BaseReActAgent:
 
                             def save_result(completed):
                                 item["result"] = str(completed)
-                                item["_failed"] = bool(getattr(completed, "is_error", False)) or str(
-                                    completed
-                                ).startswith("Error:")
+                                item["_failed"] = bool(
+                                    getattr(completed, "is_error", False)
+                                ) or str(completed).startswith("Error:")
                                 item["elapsed_ms"] = (time.monotonic() - start) * 1000
                                 if getattr(completed, "outcome_unknown", False):
                                     item["_outcome_unknown"] = True
@@ -1062,6 +1066,7 @@ class BaseReActAgent:
                             execution = asyncio.create_task(execute())
                             result = await asyncio.wait_for(execution, timeout=tool_timeout)
                         except asyncio.CancelledError:
+
                             async def finish_execution():
                                 outcomes = await asyncio.gather(execution, return_exceptions=True)
                                 for error in outcomes:
@@ -1345,7 +1350,9 @@ class BaseReActAgent:
         self, item, session_id, pending_chunks, tool_calls_made
     ) -> None:
         result_str = item["result"]
-        outcome = "failed" if item.get("_failed") or result_str.startswith("Error:") else "completed"
+        outcome = (
+            "failed" if item.get("_failed") or result_str.startswith("Error:") else "completed"
+        )
         await self._retire_tool_approval(item, outcome)
         if item.get("_recorded"):
             return
@@ -1402,7 +1409,9 @@ class BaseReActAgent:
         from machina.core.background_tasks import await_joined
 
         await await_joined(
-            self._finalize_completed_tools_joined(planned, session_id, pending_chunks, tool_calls_made)
+            self._finalize_completed_tools_joined(
+                planned, session_id, pending_chunks, tool_calls_made
+            )
         )
 
     async def _finalize_completed_tools_joined(
@@ -1419,7 +1428,9 @@ class BaseReActAgent:
                 if item.get("_cancelled"):
                     await self._retire_tool_approval(item, "cancelled")
                 elif "elapsed_ms" in item:
-                    await self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
+                    await self._record_tool_action(
+                        item, session_id, pending_chunks, tool_calls_made
+                    )
             except Exception as exc:
                 logger.warning("cancellation finalize failed for %s: %s", item["name"], exc)
 
@@ -1841,7 +1852,9 @@ class ReActAgent(BaseReActAgent):
                         )
                     except UsageBudgetExceededError as e:
                         await self._flush_pending_chunks(pending_chunks)
-                        audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
+                        audit_log(
+                            "agent_run_budget_exceeded", session_id=str(session_id), error=str(e)
+                        )
                         return AgentResponse(
                             content=str(e),
                             outcome="failed",
@@ -1951,7 +1964,9 @@ class ReActAgent(BaseReActAgent):
                     )
                     if _s3_text is not None:
                         self._schedule_memory_consolidation(session_id)
-                        return stopped_response(_s3_text, tool_calls_made, total_tokens, iteration + 1)
+                        return stopped_response(
+                            _s3_text, tool_calls_made, total_tokens, iteration + 1
+                        )
                     iteration += 1
             except BaseException:
                 if pending_chunks:
@@ -2055,9 +2070,13 @@ class ReActAgent(BaseReActAgent):
                     streamed_text: list[str] = []
                     try:
                         final_response = None
-                        async with joined_teardown(stream=self._stream_llm_with_retry(
-                            messages=messages, tools=tool_defs, session_id=session_id,
-                        )) as events:
+                        async with joined_teardown(
+                            stream=self._stream_llm_with_retry(
+                                messages=messages,
+                                tools=tool_defs,
+                                session_id=session_id,
+                            )
+                        ) as events:
                             async for event in events:
                                 if event.type == "text":
                                     streamed_text.append(event.content or "")
@@ -2094,7 +2113,9 @@ class ReActAgent(BaseReActAgent):
                         raise
                     except UsageBudgetExceededError as e:
                         await self._flush_pending_chunks(pending_chunks)
-                        audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
+                        audit_log(
+                            "agent_run_budget_exceeded", session_id=str(session_id), error=str(e)
+                        )
                         yield StreamEvent(
                             type="done",
                             response=AgentResponse(
@@ -2187,9 +2208,11 @@ class ReActAgent(BaseReActAgent):
                     # and, on cancellation, persist what completed with an explicit
                     # interruption marker.
                     try:
-                        async with joined_teardown(stream=self._execute_tool_calls_stream(
-                            response, messages, tool_calls_made, session_id, pending_chunks
-                        )) as events:
+                        async with joined_teardown(
+                            stream=self._execute_tool_calls_stream(
+                                response, messages, tool_calls_made, session_id, pending_chunks
+                            )
+                        ) as events:
                             async for event in events:
                                 yield event
                     except BaseException:

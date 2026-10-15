@@ -36,9 +36,7 @@ from machina.observability.traces import (
 # ─── P10: HTTP SSE v2 tool.complete isError pass-through ────────────────────
 
 
-def _tool_result_event(
-    *, result: str, name: str = "terminal", call_id: str = "c1"
-) -> StreamEvent:
+def _tool_result_event(*, result: str, name: str = "terminal", call_id: str = "c1") -> StreamEvent:
     return StreamEvent(
         type="tool_result",
         tool_name=name,
@@ -247,9 +245,7 @@ def test_flush_emits_prefix_after_real_overflow(monkeypatch):
     """Natural overflow path: a configured credential lowers the frontier, so
     the oversized block carries a genuine withheld prefix that flush must not
     discard."""
-    body = "\n".join(
-        f"BODYLINE{i:04d}" + "A" * (64 - len(f"BODYLINE{i:04d}")) for i in range(600)
-    )
+    body = "\n".join(f"BODYLINE{i:04d}" + "A" * (64 - len(f"BODYLINE{i:04d}")) for i in range(600))
     block = "-----BEGIN PRIVATE KEY-----\n" + body + "\n"
     assert len(block) > MAX_BUFFERED_PEM
     prefix = "ZZZZ"

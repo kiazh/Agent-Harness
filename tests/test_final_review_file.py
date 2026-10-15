@@ -388,6 +388,9 @@ def test_total_scan_byte_budget_does_not_limit_required_offset_traversal(monkeyp
     monkeypatch.setattr(fmod, "_READ_TOTAL_SCAN_BYTES", 128)
     page, shown, total, exact = fmod._read_page(
         io.StringIO("x" * 4096 + "\nselected\n"),
-        offset=2, limit=1, max_bytes=64, path="offset.log",
+        offset=2,
+        limit=1,
+        max_bytes=64,
+        path="offset.log",
     )
     assert (page, shown, total, exact) == ("selected\n", 1, 2, True)

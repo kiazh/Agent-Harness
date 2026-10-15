@@ -641,7 +641,9 @@ async def machina_chat(prompt: str, session_id: str | None = None, mode: str | N
             }
         )
     if "mode_ceiling_exceeded" in result.output or "mode_ceiling_exceeded" in result.stderr:
-        return _json_text({"status": "invalid_request", "code": "mode_ceiling_exceeded", "ceiling": ceiling})
+        return _json_text(
+            {"status": "invalid_request", "code": "mode_ceiling_exceeded", "ceiling": ceiling}
+        )
     diagnostic = _redacted_tail(result.output, MAX_ERROR_CHARS)
     if not diagnostic.strip():
         diagnostic = _redacted_tail(result.stderr, MAX_ERROR_CHARS)

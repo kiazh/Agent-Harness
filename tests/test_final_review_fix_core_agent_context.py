@@ -300,14 +300,13 @@ async def test_repeated_cancel_during_recording_finishes_entire_batch(monkeypatc
     monkeypatch.setattr(permission_broker, "complete", complete)
     agent = _StubAgent()
     planned = [
-        {"name": "probe", "args": {}, "result": str(i), "elapsed_ms": 1,
-         "_approval_id": str(i)}
+        {"name": "probe", "args": {}, "result": str(i), "elapsed_ms": 1, "_approval_id": str(i)}
         for i in range(2)
     ]
     pending, made = [], []
-    task = asyncio.create_task(agent._finalize_completed_tools(
-        planned, uuid.uuid4(), pending, made
-    ))
+    task = asyncio.create_task(
+        agent._finalize_completed_tools(planned, uuid.uuid4(), pending, made)
+    )
     await entered.wait()
     task.cancel()
     await asyncio.sleep(0)
@@ -407,9 +406,11 @@ async def test_repeated_cancel_joins_final_flush_and_marker(monkeypatch, pause_a
 @pytest.mark.parametrize("exit_kind", ["close", "error"])
 async def test_premature_tool_stream_exit_records_completed_effect(sleep_tool, exit_kind):
     agent = _StubAgent()
-    response = LLMResponse(content="", model="test", tool_calls=[
-        _tool_call("sleep_probe", {"delay": 0, "tag": "finished"}, 0)
-    ])
+    response = LLMResponse(
+        content="",
+        model="test",
+        tool_calls=[_tool_call("sleep_probe", {"delay": 0, "tag": "finished"}, 0)],
+    )
     pending, made = [], []
     stream = agent._execute_tool_calls_stream(response, [], made, uuid.uuid4(), pending)
     async for event in stream:
@@ -425,14 +426,21 @@ async def test_premature_tool_stream_exit_records_completed_effect(sleep_tool, e
 
 
 @pytest.mark.parametrize("cancelled", [False, True])
-async def test_failed_approval_retirement_can_retry_without_duplicate_records(monkeypatch, cancelled):
+async def test_failed_approval_retirement_can_retry_without_duplicate_records(
+    monkeypatch, cancelled
+):
     from machina.permissions.broker import permission_broker
     from unittest.mock import AsyncMock
 
     complete = AsyncMock(side_effect=[False, True])
     monkeypatch.setattr(permission_broker, "complete", complete)
-    item = {"name": "probe", "args": {}, "result": "saved", "elapsed_ms": 1,
-            "_approval_id": "approval"}
+    item = {
+        "name": "probe",
+        "args": {},
+        "result": "saved",
+        "elapsed_ms": 1,
+        "_approval_id": "approval",
+    }
     agent = _StubAgent()
     pending, made = [], []
     sid = uuid.uuid4()
@@ -459,9 +467,11 @@ async def test_closing_run_stream_flushes_completed_tool_before_return(sleep_too
     agent.agent_id = "test-agent"
     agent.allowed_tools = None
     agent.provider = SimpleNamespace()
-    response = LLMResponse(content="", model="test", tool_calls=[
-        _tool_call("sleep_probe", {"delay": 0, "tag": "persisted"}, 0)
-    ])
+    response = LLMResponse(
+        content="",
+        model="test",
+        tool_calls=[_tool_call("sleep_probe", {"delay": 0, "tag": "persisted"}, 0)],
+    )
     persisted = []
 
     async def prepare(*args, **kwargs):
@@ -505,9 +515,11 @@ async def test_run_joins_post_tool_flush_during_repeated_cancellation(sleep_tool
     agent.agent_id = "test-agent"
     agent.allowed_tools = None
     agent.provider = SimpleNamespace()
-    response = LLMResponse(content="", model="test", tool_calls=[
-        _tool_call("sleep_probe", {"delay": 0, "tag": "persisted"}, 0)
-    ])
+    response = LLMResponse(
+        content="",
+        model="test",
+        tool_calls=[_tool_call("sleep_probe", {"delay": 0, "tag": "persisted"}, 0)],
+    )
     entered, release = asyncio.Event(), asyncio.Event()
     persisted = []
 
@@ -546,7 +558,9 @@ async def test_run_joins_post_tool_flush_during_repeated_cancellation(sleep_tool
 
 
 @pytest.mark.parametrize("repeat_cancel", [False, True])
-async def test_closing_text_stream_joins_provider_and_usage_finalization(monkeypatch, repeat_cancel):
+async def test_closing_text_stream_joins_provider_and_usage_finalization(
+    monkeypatch, repeat_cancel
+):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from machina.core import agent as agent_module

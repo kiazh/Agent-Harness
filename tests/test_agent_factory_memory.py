@@ -56,7 +56,9 @@ async def test_cancelled_rag_acquisition_closes_created_provider(monkeypatch):
 
     monkeypatch.setattr(agent_factory, "_shared_rag_pipeline", cancelled)
     with pytest.raises(asyncio.CancelledError):
-        await agent_factory.build_agent_for_session(SimpleNamespace(
-            agent_id="harness", provider="openai", model="test", delegation_authority={}
-        ))
+        await agent_factory.build_agent_for_session(
+            SimpleNamespace(
+                agent_id="harness", provider="openai", model="test", delegation_authority={}
+            )
+        )
     llm.close.assert_awaited_once()

@@ -153,6 +153,7 @@ async def joined_teardown(*, stream=None, cleanup=None):
     try:
         yield stream
     finally:
+
         async def finish():
             try:
                 if stream is not None:

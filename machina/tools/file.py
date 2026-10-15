@@ -506,9 +506,7 @@ def _atomic_write_file(file_path: Path, content: str, *, mode: int | None = None
                 pass
 
 
-async def _run_worker_joined(
-    operation: Callable[[], str], *, capture_result: bool = False
-) -> str:
+async def _run_worker_joined(operation: Callable[[], str], *, capture_result: bool = False) -> str:
     """Run *operation* in a worker thread, joining it on cancellation.
 
     Cancelling the await of ``asyncio.to_thread`` stops the *await*, not the

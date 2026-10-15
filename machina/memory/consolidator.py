@@ -337,7 +337,9 @@ class MemoryConsolidator:
                 "at": latest.created_at.isoformat() if latest.created_at else None,
             }
             checkpoint["seq"] = (
-                NULL_EVENT_SEQ_ASC if getattr(latest, "event_seq", None) is None else int(latest.event_seq)
+                NULL_EVENT_SEQ_ASC
+                if getattr(latest, "event_seq", None) is None
+                else int(latest.event_seq)
             )
             return checkpoint
 

@@ -140,7 +140,9 @@ class ConnectorService:
             raise CompletedOnCancellation(result) from None
         return result
 
-    async def _configure_locked(self, fields: dict[str, Any], *, expected_revision: int | None = None) -> dict[str, Any]:
+    async def _configure_locked(
+        self, fields: dict[str, Any], *, expected_revision: int | None = None
+    ) -> dict[str, Any]:
         """Configure under the caller-held configuration lock.
 
         Composite management flows (agent mcp_connect add+launch, rollback)
@@ -203,7 +205,9 @@ class ConnectorService:
             raise CompletedOnCancellation(removed) from None
         return removed
 
-    async def _remove_locked(self, connector_id: str, *, expected_revision: int | None = None) -> bool:
+    async def _remove_locked(
+        self, connector_id: str, *, expected_revision: int | None = None
+    ) -> bool:
         """Remove under the caller-held configuration lock (see _configure_locked)."""
         await self._refresh_locked()
         if self.registry.get(connector_id) is not None:
@@ -218,7 +222,9 @@ class ConnectorService:
 
         removed = None
         try:
-            removed = await self.store.remove_async(connector_id, expected_revision=expected_revision)
+            removed = await self.store.remove_async(
+                connector_id, expected_revision=expected_revision
+            )
             await self._refresh_locked()
         except asyncio.CancelledError:
             if removed is not None:

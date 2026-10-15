@@ -274,20 +274,26 @@ async def add_and_connect(
         try:
             written = await service._configure_locked(fields)
         except CompletedOnCancellation as cancellation:
-            raise CompletedOnCancellation({
-                "connected": False, "server": cancellation.result,
-                "store": "configuration saved; connection not attempted",
-            }) from None
+            raise CompletedOnCancellation(
+                {
+                    "connected": False,
+                    "server": cancellation.result,
+                    "store": "configuration saved; connection not attempted",
+                }
+            ) from None
         written_revision = int(written.get("revision", -1))
         try:
             tools = await service.connect_and_discover(
                 config.id, launch_config=launch_config, mode=mode
             )
         except asyncio.CancelledError:
-            raise CompletedOnCancellation({
-                "server": config.id, "store": "configuration saved",
-                "connection": "interrupted",
-            }) from None
+            raise CompletedOnCancellation(
+                {
+                    "server": config.id,
+                    "store": "configuration saved",
+                    "connection": "interrupted",
+                }
+            ) from None
         except Exception as exc:
             compensated = await _compensate(service, config.id, prior, written_revision)
             return {
@@ -329,9 +335,12 @@ async def remove_server(
             try:
                 removed = await service._remove_locked(name)
             except CompletedOnCancellation as cancellation:
-                raise CompletedOnCancellation({
-                    "removed": cancellation.result, "server": name,
-                }) from None
+                raise CompletedOnCancellation(
+                    {
+                        "removed": cancellation.result,
+                        "server": name,
+                    }
+                ) from None
             return {"removed": removed, "server": name}
         disconnected = await service.manager.disconnect(name)
         return {"removed": False, "disconnected": bool(disconnected), "server": name}

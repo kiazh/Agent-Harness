@@ -344,8 +344,15 @@ async def test_snapshot_keeps_null_ordinal_cursor_after_nonnull_history(db_pool,
         await database.executemany(
             "INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, created_at, event_seq) "
             "VALUES ($1, $2, 'harness', 'user_message', $3, '2020-01-01'::timestamptz, $4)",
-            [(uuid.UUID(int=i), sid, payload_to_msgpack({"content": str(i)}), i if i <= 500 else None)
-             for i in range(1, 1002)],
+            [
+                (
+                    uuid.UUID(int=i),
+                    sid,
+                    payload_to_msgpack({"content": str(i)}),
+                    i if i <= 500 else None,
+                )
+                for i in range(1, 1002)
+            ],
         )
         chunks = await cm.get_all_chunks(sid)
         assert len(chunks) == 1001

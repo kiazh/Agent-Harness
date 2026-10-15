@@ -86,7 +86,9 @@ async def test_http_disconnect_closes_source_before_provider_and_claim(monkeypat
     class Agent:
         async def run_stream(self, *args, **kwargs):
             try:
-                yield api.StreamEvent(type="tool_result", tool_name="probe", tool_result="saved-effect")
+                yield api.StreamEvent(
+                    type="tool_result", tool_name="probe", tool_result="saved-effect"
+                )
             finally:
                 closing_started.set()
                 if repeat_cancel:
@@ -107,8 +109,11 @@ async def test_http_disconnect_closes_source_before_provider_and_claim(monkeypat
     monkeypatch.setattr(turns, "try_begin_turn", AsyncMock(return_value="owner"))
     monkeypatch.setattr(turns, "end_turn", end)
     monkeypatch.setattr(turns, "renew_turn", AsyncMock(return_value=True))
-    endpoint = next(route.endpoint for route in api.create_app().routes
-                    if route.path == "/sessions/{session_id}/prompt")
+    endpoint = next(
+        route.endpoint
+        for route in api.create_app().routes
+        if route.path == "/sessions/{session_id}/prompt"
+    )
     response = await endpoint(str(session.id), api.PromptRequest(text="work"))
     async for frame in response.body_iterator:
         if "saved-effect" in frame:

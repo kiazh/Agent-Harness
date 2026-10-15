@@ -165,6 +165,7 @@ async def _stream_session(
             boundary="app.create_app",
             renew_interval_s=_renew_interval,
         )
+
         async def close_turn():
             from machina.core.background_tasks import await_joined
 
@@ -429,9 +430,13 @@ async def _stream_session(
             close = await await_joined(cleanup())
             if close is None:
                 if not _stream_cancelled:
-                    yield frame({
-                        "type": "turn.cleanup_pending", "sessionId": session_id, "turnId": turn_id,
-                    })
+                    yield frame(
+                        {
+                            "type": "turn.cleanup_pending",
+                            "sessionId": session_id,
+                            "turnId": turn_id,
+                        }
+                    )
             else:
                 _release_failed = close.release_failed
                 # H-03: Auto-compaction is fire-and-forget background work.

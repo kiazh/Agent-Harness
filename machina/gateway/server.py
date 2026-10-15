@@ -1027,7 +1027,11 @@ class Gateway:
                                     result=payload["result"],
                                     truncated=payload["truncated"],
                                     isError=payload["isError"],
-                                    **({"outcome": payload["outcome"]} if "outcome" in payload else {}),
+                                    **(
+                                        {"outcome": payload["outcome"]}
+                                        if "outcome" in payload
+                                        else {}
+                                    ),
                                 )
                             elif turn_event.kind == "needs_approval":
                                 # Stream pause markers are surfaced by SSE as typed
@@ -1048,7 +1052,9 @@ class Gateway:
                                         getattr(final_response, "tokens_used", 0) or engine.tokens
                                     ),
                                     "iterations": (getattr(final_response, "iterations", 0) or 0),
-                                    "toolCalls": len(getattr(final_response, "tool_calls", None) or []),
+                                    "toolCalls": len(
+                                        getattr(final_response, "tool_calls", None) or []
+                                    ),
                                 }
                             else:
                                 logger.warning("Unknown turn event kind: %s", turn_event.kind)

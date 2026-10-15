@@ -104,14 +104,18 @@ class ConnectorStore:
             finally:
                 os.close(fd)
 
-    async def configure_async(self, fields: dict[str, Any], *, expected_revision: int | None = None) -> ConnectorConfig:
+    async def configure_async(
+        self, fields: dict[str, Any], *, expected_revision: int | None = None
+    ) -> ConnectorConfig:
         """Persist a configuration without parking the event loop on the lock."""
         return await await_joined(
             asyncio.to_thread(self.configure, fields, expected_revision=expected_revision),
             capture_result=True,
         )
 
-    async def remove_async(self, connector_id: str, *, expected_revision: int | None = None) -> bool:
+    async def remove_async(
+        self, connector_id: str, *, expected_revision: int | None = None
+    ) -> bool:
         """Remove a configuration without parking the event loop on the lock."""
         return await await_joined(
             asyncio.to_thread(self.remove, connector_id, expected_revision=expected_revision),
@@ -163,7 +167,9 @@ class ConnectorStore:
         except TypeError:
             raise ConfigError("invalid connector configuration") from None
 
-    def configure(self, fields: dict[str, Any], *, expected_revision: int | None = None) -> ConnectorConfig:
+    def configure(
+        self, fields: dict[str, Any], *, expected_revision: int | None = None
+    ) -> ConnectorConfig:
         config = self.validate_input(fields)
         with self._locked():
             generation, configs = self.load()

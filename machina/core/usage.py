@@ -119,11 +119,13 @@ class UsageStore:
         try:
             from machina.core.background_tasks import await_joined
 
-            await await_joined(self.finish(
-                reservation,
-                getattr(response, "usage", {}),
-                model=getattr(response, "model", None),
-            ))
+            await await_joined(
+                self.finish(
+                    reservation,
+                    getattr(response, "usage", {}),
+                    model=getattr(response, "model", None),
+                )
+            )
         except Exception as e:
             raise DatabaseError("usage accounting unavailable") from e
         return response

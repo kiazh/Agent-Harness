@@ -661,16 +661,18 @@ class ChatGPTProvider(LLMProvider, RateLimitBinding):
     ) -> LLMResponse:
         """Non-streaming call: drain the stream and return the terminal response."""
         response: LLMResponse | None = None
-        async with joined_teardown(stream=self.stream_complete(
-            messages,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            tools=tools,
-            reasoning_effort=reasoning_effort,
-            session_id=session_id,
-            agent_id=agent_id,
-        )) as events:
+        async with joined_teardown(
+            stream=self.stream_complete(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                reasoning_effort=reasoning_effort,
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+        ) as events:
             async for event in events:
                 if event.type == "done" and isinstance(event.response, LLMResponse):
                     response = event.response

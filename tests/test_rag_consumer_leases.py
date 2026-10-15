@@ -35,8 +35,9 @@ async def test_consumer_keeps_pipeline_open_until_finished(monkeypatch, consumer
         await pause()
         return []
 
-    old = SimpleNamespace(_embedder=embedder, _reranker=reranker,
-                          index_document=index, search=search)
+    old = SimpleNamespace(
+        _embedder=embedder, _reranker=reranker, index_document=index, search=search
+    )
     newer = SimpleNamespace(_embedder=None, _reranker=None)
     identity = [(0, 0, 0)]
     monkeypatch.setattr(rag, "_rag_pipeline", old)
@@ -46,8 +47,11 @@ async def test_consumer_keeps_pipeline_open_until_finished(monkeypatch, consumer
     monkeypatch.setattr(rag, "_current_pipeline_identity", lambda: identity[0])
     monkeypatch.setattr(rag, "_built_reranker_identity", lambda pipeline: None)
     monkeypatch.setattr(rag, "_build_shared_pipeline", lambda: newer)
-    monkeypatch.setattr(documents.session_manager, "get", AsyncMock(
-        return_value=SimpleNamespace(agent_id="harness")))
+    monkeypatch.setattr(
+        documents.session_manager,
+        "get",
+        AsyncMock(return_value=SimpleNamespace(agent_id="harness")),
+    )
 
     async def fetch(*args, **kwargs):
         await pause()
@@ -56,13 +60,17 @@ async def test_consumer_keeps_pipeline_open_until_finished(monkeypatch, consumer
     for module in (web_research, web_crawl):
         monkeypatch.setattr(module, "active_agent_scope", AsyncMock(return_value=("harness", sid)))
         monkeypatch.setattr(module.db, "fetchval", AsyncMock(return_value=False))
-    monkeypatch.setattr(web_research, "_search_web_results", AsyncMock(
-        return_value=[("Reference", "https://example.com", "summary")]))
+    monkeypatch.setattr(
+        web_research,
+        "_search_web_results",
+        AsyncMock(return_value=[("Reference", "https://example.com", "summary")]),
+    )
     monkeypatch.setattr(web_research, "extract_url_text", fetch)
     monkeypatch.setattr(web_crawl, "fetch_page_html", fetch)
     if consumer == "index":
-        operation = documents.index_document(CreateDocumentRequest(
-            sessionId=sid, content="reference", source="test"))
+        operation = documents.index_document(
+            CreateDocumentRequest(sessionId=sid, content="reference", source="test")
+        )
     elif consumer == "search":
         operation = documents.search_documents(sessionId=sid, query="reference", topK=5)
     elif consumer == "research":

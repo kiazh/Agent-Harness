@@ -280,14 +280,20 @@ async def test_null_ordinal_checkpoint_does_not_replay_compacted_summary(cursor_
     database = cursor_env
     sid = await database.fetchval("INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id")
     at = datetime(2026, 1, 1, tzinfo=UTC)
-    rows = [(uuid.UUID(int=100), 1, "summary"),
-            (uuid.UUID(int=1), None, "legacy-1"),
-            (uuid.UUID(int=2), None, "legacy-2")]
+    rows = [
+        (uuid.UUID(int=100), 1, "summary"),
+        (uuid.UUID(int=1), None, "legacy-1"),
+        (uuid.UUID(int=2), None, "legacy-2"),
+    ]
     for chunk_id, seq, label in rows:
         await database.execute(
             "INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, created_at, event_seq) "
             "VALUES ($1, $2, 'harness', 'user_message', $3, $4, $5)",
-            chunk_id, sid, payload_to_msgpack({"content": label}), at, seq,
+            chunk_id,
+            sid,
+            payload_to_msgpack({"content": label}),
+            at,
+            seq,
         )
     agent = _agent(_plain_consolidator())
     for _ in range(4):
@@ -295,8 +301,11 @@ async def test_null_ordinal_checkpoint_does_not_replay_compacted_summary(cursor_
     cursor = await _read_cursor(database, sid)
     assert cursor["id"] == str(uuid.UUID(int=2))
     assert cursor["seq"] == NULL_EVENT_SEQ_ASC
-    assert await context_manager.get_chunks_since(
-        sid, since_time=at, since_id=uuid.UUID(int=2), since_seq=cursor["seq"]
-    ) == []
+    assert (
+        await context_manager.get_chunks_since(
+            sid, since_time=at, since_id=uuid.UUID(int=2), since_seq=cursor["seq"]
+        )
+        == []
+    )
     legacy = await context_manager.get_chunks_since(sid, since_time=at, since_id=uuid.UUID(int=2))
     assert [chunk.id for chunk in legacy] == [uuid.UUID(int=100)]

@@ -154,9 +154,7 @@ def test_setup_force_interactive_blank_answers_remove_secrets(
     env_file = tmp_path / ".env"
     monkeypatch.setenv("MACHINA_ENV_FILE", str(env_file))
     _stub_interop(monkeypatch)
-    env_file.write_text(
-        "OPENROUTER_API_KEY=sk-or-old\nMACHINA_MODEL=old-model\n", encoding="utf-8"
-    )
+    env_file.write_text("OPENROUTER_API_KEY=sk-or-old\nMACHINA_MODEL=old-model\n", encoding="utf-8")
 
     # Accept every prompt default / skip every hidden prompt.
     result = runner.invoke(cli.app, ["setup", "--force", "--interop", "none"], input="\n" * 25)

@@ -86,8 +86,10 @@ def test_slow_down_does_not_poll_early_or_after_deadline(monkeypatch, timeout, e
     def handler(request):
         polls.append(clock.now)
         assert clock.now < timeout
-        assert all(0 < value <= min(20.0, timeout - clock.now)
-                   for value in request.extensions["timeout"].values())
+        assert all(
+            0 < value <= min(20.0, timeout - clock.now)
+            for value in request.extensions["timeout"].values()
+        )
         if len(polls) == 1:
             return httpx.Response(200, json={"error": "slow_down", "interval": 120})
         return httpx.Response(200, json={"access_token": "gho_device"})
@@ -95,12 +97,17 @@ def test_slow_down_does_not_poll_early_or_after_deadline(monkeypatch, timeout, e
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         if expected_polls == 1:
             with pytest.raises(CopilotAuthError) as caught:
-                copilot_auth.device_flow_poll("device", interval=1, timeout=timeout,
-                                              client=client, sleep=sleep)
+                copilot_auth.device_flow_poll(
+                    "device", interval=1, timeout=timeout, client=client, sleep=sleep
+                )
             assert caught.value.code == "copilot_device_timeout"
         else:
-            assert copilot_auth.device_flow_poll("device", interval=1, timeout=timeout,
-                                                client=client, sleep=sleep) == "gho_device"
+            assert (
+                copilot_auth.device_flow_poll(
+                    "device", interval=1, timeout=timeout, client=client, sleep=sleep
+                )
+                == "gho_device"
+            )
     assert len(polls) == expected_polls
     if len(polls) > 1:
         assert polls[1] - polls[0] >= 120
@@ -122,8 +129,9 @@ def test_poll_does_not_send_request_when_initial_wait_exhausts_budget(monkeypatc
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(CopilotAuthError) as caught:
-            copilot_auth.device_flow_poll("device", interval=120, timeout=10,
-                                          client=client, sleep=sleep)
+            copilot_auth.device_flow_poll(
+                "device", interval=120, timeout=10, client=client, sleep=sleep
+            )
     assert caught.value.code == "copilot_device_timeout"
     assert polls == []
     assert clock.now == 10
