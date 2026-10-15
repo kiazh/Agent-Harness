@@ -355,7 +355,9 @@ def _check_int_bounds(key: str, val: int) -> None:
         "approval_timeout": (1, 3600),
         "context_budget": (100, None),
         "max_tokens": (1, None),
-        "rate_limit_calls_per_minute": (1, None),
+        # 0 disables throttling (AsyncTokenBucket.acquire short-circuits);
+        # documented in rate_limit.py and pinned by test_f5_zero_rate.
+        "rate_limit_calls_per_minute": (0, None),
         "usage_session_token_limit": (0, None),
         "usage_session_request_limit": (0, None),
         "usage_agent_token_limit": (0, None),

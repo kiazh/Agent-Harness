@@ -197,6 +197,11 @@ class RuntimeServices:
         during shutdown are rejected. Caller cancellation still attempts
         remaining service cleanup (100ms per stage), then propagates, so
         restarting cannot acquire audit ownership a second time.
+
+        Ordering: background work is drained *before* the audit writer is
+        stopped (mirroring the gateway), so consolidation/learning tasks that
+        emit audit events still get persisted instead of being dropped by a
+        writer that already stopped.
         """
         async with self._lock:
             self._shutting_down = True
@@ -225,6 +230,20 @@ class RuntimeServices:
                 except Exception:
                     logger.exception("connector shutdown failed")
                 try:
+                    # Drain agent background work BEFORE stopping the audit
+                    # writer: consolidation/learning tasks emit audit events,
+                    # and a submit after the writer stops is dropped
+                    # (observability/audit.py). Mirrors the gateway close order
+                    # (gateway/server.py) so both shutdown paths preserve the
+                    # rows (final-review gateway F5).
+                    await drain_background_tasks(
+                        timeout=min(0.1 if cancellation is not None else 5, timeout)
+                    )
+                except asyncio.CancelledError as e:
+                    cancellation = e
+                except Exception:
+                    logger.exception("background drain failed")
+                try:
                     from machina.observability.audit import audit_persistence
 
                     await _bounded_cleanup(
@@ -236,14 +255,6 @@ class RuntimeServices:
                     cancellation = e
                 except Exception:
                     logger.exception("audit shutdown failed")
-                try:
-                    await drain_background_tasks(
-                        timeout=min(0.1 if cancellation is not None else 5, timeout)
-                    )
-                except asyncio.CancelledError as e:
-                    cancellation = e
-                except Exception:
-                    logger.exception("background drain failed")
                 try:
                     from machina.rag.embedder import close_shared_embedder
 
@@ -356,6 +367,13 @@ def _detect_providers() -> dict[str, Any]:
         elif selected == "ollama":
             key_ok = _ollama_reachable()
             reason = "" if key_ok else "Ollama daemon unreachable"
+        elif selected == "anthropic":
+            # First-class API-key vendor: anthropic has no PROVIDER_SPECS
+            # entry (it is a native transport, not an OpenAI-compatible
+            # direct provider), so it needs an explicit arm or the readiness
+            # ladder calls it an unknown provider (final-review P2-1).
+            key_ok = bool(config.get("anthropic_api_key"))
+            reason = "" if key_ok else "ANTHROPIC_API_KEY not set"
         elif selected in PROVIDER_SPECS:
             env_name = PROVIDER_SPECS[selected].api_key_env
             key_ok = bool(config.get(PROVIDER_SPECS[selected].config_key))

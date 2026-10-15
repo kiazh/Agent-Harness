@@ -55,8 +55,15 @@ def _sanitize_value(value: Any) -> Any:
             sanitized,
             flags=re.IGNORECASE,
         )
+        # Consume the password to the last ``@`` before a path/query/fragment
+        # boundary (mirrors ``_URL_USERINFO_RE``) so an embedded ``@`` is fully
+        # redacted: the old ``([^@]+)`` stopped at the first ``@`` and the
+        # later userinfo pass preserved the ``[REDACTED_DB_PASSWORD]`` marker,
+        # leaking the password tail (final-review F1). The username is
+        # optional (SEC-3) so a password-only DSN (``redis://:pw@host``) is
+        # redacted too.
         sanitized = re.sub(
-            r"(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://([^:]+):([^@]+)@",
+            r"(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://([^:]*):([^/\s?#]*)@",
             r"\1://\2:[REDACTED_DB_PASSWORD]@",
             sanitized,
         )
@@ -105,6 +112,13 @@ _URL_CREDENTIAL_PARAM_RE = re.compile(r"([?&#;])([^?&#;\s=]+)=([^?&#;\s]*)")
 #: Query/fragment parameter names whose values are credentials. Normalized
 #: (lowercase, non-alphanumeric stripped) before comparison, mirroring
 #: :func:`_is_sensitive_audit_key`.
+#:
+#: ``signature`` covers the presigned-URL forms (SEC-2): AWS
+#: ``X-Amz-Signature`` -> ``xamzsignature``, GCS ``X-Goog-Signature`` ->
+#: ``xgoogsignature``, and a plain ``signature``; ``X-Amz-Credential`` /
+#: ``X-Goog-Credential`` -> ``…credential`` land on the ``credential``
+#: suffix below. The bare ``sig`` (Azure SAS) is an *exact* name, not a
+#: suffix: a suffix match would wrongly catch benign ``resig``/``insig``.
 _CREDENTIAL_PARAM_SUFFIXES = (
     "apikey",
     "token",
@@ -115,8 +129,9 @@ _CREDENTIAL_PARAM_SUFFIXES = (
     "credential",
     "privatekey",
     "accesskey",
+    "signature",
 )
-_CREDENTIAL_PARAM_EXACT = frozenset({"authorization", "auth"})
+_CREDENTIAL_PARAM_EXACT = frozenset({"authorization", "auth", "sig"})
 
 
 def _is_credential_param(name: str) -> bool:
@@ -200,18 +215,22 @@ def audit_log(event_type: str, **kwargs) -> None:
             return {
                 key: metadata(item)
                 for key, item in value.items()
-                if key.lower() not in protected
-                and not key.lower().endswith(("_content", "_preview", "_payload"))
+                if str(key).lower() not in protected
+                and not str(key).lower().endswith(("_content", "_preview", "_payload"))
             }
         if isinstance(value, (list, tuple)):
             return [metadata(item) for item in value]
         return value
 
     sanitized_kwargs = _sanitize_value(metadata(kwargs))
+    # ``event`` / ``timestamp`` are reserved: a caller-supplied kwarg of the
+    # same name must never rewrite the audit record's identity (final-review
+    # S6/F3). Filter the reserved keys, then set the authoritative values.
+    reserved = {k: v for k, v in sanitized_kwargs.items() if k not in ("event", "timestamp")}
     entry = {
         "timestamp": time.time(),
         "event": event_type,
-        **sanitized_kwargs,
+        **reserved,
     }
     _audit_logger.info(json.dumps(entry, default=str))
     from machina.observability.audit import audit_persistence
