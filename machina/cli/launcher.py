@@ -7,6 +7,7 @@ to it over JSON-RPC on stdio.
 
 from __future__ import annotations
 
+import atexit
 import os
 import secrets
 import shutil
@@ -15,6 +16,7 @@ import sys
 from pathlib import Path
 
 from machina.cli import output
+from machina.core.firecrawl_lifecycle import start_if_enabled, stop_if_enabled
 
 __all__ = ["MIN_NODE_VERSION", "launch_ui", "ui_dir"]
 
@@ -98,7 +100,16 @@ def launch_ui(
     # from MACHINA_GATEWAY_TOKEN and includes it in the initialize call.
     gateway_token = secrets.token_hex(32)
     env = {**os.environ, "MACHINA_PYTHON": sys.executable, "MACHINA_GATEWAY_TOKEN": gateway_token}
+    # Config-gated Firecrawl/SearXNG stack lifecycle (off by default): the
+    # interactive session brings the local stack up in the background and the
+    # last live session stops containers + VM on exit. Fail-open by contract —
+    # nothing here may raise or block the UI (machina/core/firecrawl_lifecycle.py);
+    # atexit is the safety net behind the finally for non-returning exits.
+    atexit.register(stop_if_enabled)
+    start_if_enabled()
     try:
         return subprocess.call(args, env=env)
     except KeyboardInterrupt:
         return 130
+    finally:
+        stop_if_enabled()

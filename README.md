@@ -189,6 +189,13 @@ claims. Repeated URLs reuse the saved session snapshot. `web_search` remains
 available for discovery without fetching or saving
 pages.
 
+The interactive UI can also own the self-hosted stack's lifecycle: with
+`MACHINA_FIRECRAWL_AUTOSTART=true` it boots the Lima `docker` VM and runs
+`$MACHINA_FIRECRAWL_HOME/up.sh up` in the background on launch, and the last
+live session stops the containers and the VM on exit (the
+`MACHINA_FIRECRAWL_STOP_ON_EXIT` default). Failures are log-only, recorded in
+`~/.machina/logs/firecrawl-lifecycle.log`.
+
 ### Skills, delegation and installing more
 
 Skill routing uses explicit requests, trigger matches and task evidence to select
@@ -551,6 +558,9 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_PROMPT_CACHE_ENABLED` | Prompt-cache breakpoints pilot (Anthropic / OpenRouter-anthropic only; payloads are byte-identical when off) | `false`; awaiting live-provider validation |
 | `MACHINA_TURN_TIMEOUT` | Turn deadline in seconds | `300` |
 | `SEARXNG_URL` | SearXNG search endpoint, preferred when set (loopback self-hosts allowed, e.g. `http://localhost:8088`); blank or failing falls back to DuckDuckGo | blank |
+| `MACHINA_FIRECRAWL_AUTOSTART` | Start the self-hosted Firecrawl/SearXNG stack (Lima `docker` VM + `$MACHINA_FIRECRAWL_HOME/up.sh up`) in the background when the interactive UI opens | `false` (opt-in) |
+| `MACHINA_FIRECRAWL_STOP_ON_EXIT` | Stop the stack's containers and the Lima VM when the last live interactive session exits | `true` |
+| `MACHINA_FIRECRAWL_HOME` | Directory holding the `up.sh` launcher for the self-hosted Firecrawl stack | `~/firecrawl` |
 | `MACHINA_TERMINAL_SANDBOX` | Terminal backend setting | `disabled`; configure `local` or `docker` as appropriate |
 | `MACHINA_ENV_FILE` | Alternate secret/environment file | Default resolver uses the project environment file |
 | `MACHINA_UI_DIR` | TUI source directory override | Useful for backend wheel installs |
