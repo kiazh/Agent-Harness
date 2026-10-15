@@ -452,6 +452,11 @@ async def test_agent_mcp_list_hides_other_agents_servers(monkeypatch):
 # Live: Machina's own MCP server through the real tool path
 # ---------------------------------------------------------------------------
 
+#: Explicit live-round-trip budgets in seconds. The overall wall-clock cap
+#: sits above the per-step tool budgets; both are reported on a timeout so an
+#: environment overrun fails with the breakdown instead of skipping.
+_LIVE_BUDGETS = {"overall": 120, "connect": 30, "discovery": 30, "call": 30}
+
 
 async def test_live_self_connect_call_disconnect(monkeypatch, tmp_path):
     """mcp_connect -> tool discovery -> mcp_call machina_status -> disconnect.
@@ -507,7 +512,7 @@ async def test_live_self_connect_call_disconnect(monkeypatch, tmp_path):
         return await registry.execute(tool_name, **args)
 
     try:
-        async with asyncio.timeout(120):
+        async with asyncio.timeout(_LIVE_BUDGETS["overall"]):
             report = json.loads(
                 await invoke(
                     "mcp_connect",
@@ -515,9 +520,9 @@ async def test_live_self_connect_call_disconnect(monkeypatch, tmp_path):
                         "name": "machina-self",
                         "command": sys.executable,
                         "argv": ["-m", "machina.mcp_server"],
-                        "connect_timeout": 30,
-                        "discovery_timeout": 30,
-                        "call_timeout": 30,
+                        "connect_timeout": _LIVE_BUDGETS["connect"],
+                        "discovery_timeout": _LIVE_BUDGETS["discovery"],
+                        "call_timeout": _LIVE_BUDGETS["call"],
                     },
                 )
             )
@@ -548,8 +553,14 @@ async def test_live_self_connect_call_disconnect(monkeypatch, tmp_path):
             assert service.manager.connection("machina-self") is None
             remaining = json.loads(await invoke("mcp_list", {}))["servers"]
             assert not any(server["id"] == "machina-self" for server in remaining)
-    except TimeoutError:
-        pytest.skip("live MCP round trip exceeded 120s in this environment")
+    except TimeoutError as exc:
+        pytest.fail(
+            "live MCP round trip exceeded its budget in this environment "
+            f"(overall={_LIVE_BUDGETS['overall']}s, connect={_LIVE_BUDGETS['connect']}s, "
+            f"discovery={_LIVE_BUDGETS['discovery']}s, call={_LIVE_BUDGETS['call']}s): "
+            f"{exc!r}",
+            pytrace=False,
+        )
     finally:
         set_approval_handler(None)
         clear_execution_context()

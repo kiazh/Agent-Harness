@@ -785,9 +785,11 @@ class TestContextEvictionInterrupted:
         monkeypatch.setattr(ctx_mod, "db", database)
         manager = ContextManager()
 
-        # Should not raise — falls back to individual
+        # 12 chunks with the newest 10 preserved leave exactly 2 evictable;
+        # the batch archive call fails once and both survive via the
+        # individual-retry fallback.
         evicted = await manager.evict_old_chunks(session_id, max_chunks=10)
-        assert evicted >= 0  # Should have evicted some via individual retry
+        assert evicted == 2
 
     async def test_eviction_with_delete_failure_does_not_lose_chunks(self, monkeypatch):
         """When archive succeeds but delete fails, chunk should remain (not lost)."""

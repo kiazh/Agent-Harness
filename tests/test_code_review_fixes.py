@@ -179,7 +179,10 @@ class TestEvictionLogic:
             result = await context_manager.evict_old_chunks(
                 session_id, max_tokens=500, max_chunks=None
             )
-            assert result > 0
+            # 12 chunks x 100 tokens; the newest-10 floor caps the evictable
+            # set at two rows, so two are evicted even though freeing 700
+            # tokens is requested.
+            assert result == 2
 
     @pytest.mark.asyncio
     async def test_evict_old_chunks_over_chunk_limit(self, context_manager):
@@ -209,7 +212,8 @@ class TestEvictionLogic:
             result = await context_manager.evict_old_chunks(
                 session_id, max_tokens=None, max_chunks=5
             )
-            assert result > 0
+            # 15 chunks, newest 10 preserved -> 5 evictable, all evicted.
+            assert result == 5
 
     @pytest.mark.asyncio
     async def test_evict_old_chunks_preserves_recent(self, context_manager):

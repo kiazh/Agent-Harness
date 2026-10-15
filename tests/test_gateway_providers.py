@@ -74,7 +74,7 @@ async def test_models_list_chatgpt_returns_live_catalog(sandbox, monkeypatch):
     assert sol["contextWindow"] == 500_000
     assert sol["maxContextWindow"] == 872_000
     luna = out["models"][1]
-    assert "ultra" not in luna["advertisedEfforts"] or True  # luna never advertises ultra
+    assert "ultra" not in luna["advertisedEfforts"]  # luna never advertises ultra
 
 
 async def test_models_list_chatgpt_falls_back_honestly(sandbox, monkeypatch):

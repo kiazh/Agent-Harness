@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,13 +10,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-# Set a test API key before importing the app
-os.environ["MACHINA_API_KEY"] = "test-key-123"
-
 from machina.api.app import PromptRequest, create_app
 from machina.core.models import AgentResponse, Session, StreamEvent
 
 TEST_API_KEY = "test-key-123"
+
+
+@pytest.fixture(autouse=True)
+def _api_key(monkeypatch):
+    """Configure the API key per test; never leak it past the test."""
+    monkeypatch.setenv("MACHINA_API_KEY", TEST_API_KEY)
 
 
 def make_session(**kwargs) -> Session:

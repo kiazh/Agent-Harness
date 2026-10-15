@@ -2,12 +2,13 @@
 
 import os
 import time
+from pathlib import Path
 
 import pytest
 
 from machina.repomap import ContentHashCache, EvidenceMap, build_repomap
 
-REPO_ROOT = "/Users/shadow/machina"
+REPO_ROOT = str(Path(__file__).resolve().parents[1])
 
 
 @pytest.fixture

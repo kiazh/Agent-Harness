@@ -701,19 +701,19 @@ class TestMemoryRetriever:
             content="Python is great",
             category="fact",
         )
-        # search() returns list[MemoryEntry] for keyword search
-        mock_store.search = AsyncMock(return_value=[entry])
+        mock_store._row_to_entry = lambda row: entry
         retriever.store = mock_store
 
-        # Patch db for keyword search
+        # Patch db for keyword search; the returned row flows through the
+        # real _keyword_search seam.
         mock_db = AsyncMock()
         from tests.support.database import attach_connection
 
         attach_connection(mock_db)
-        mock_db.fetch = AsyncMock(return_value=[])
+        mock_db.fetch = AsyncMock(return_value=[{"id": entry.id, "content": entry.content}])
         with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("Python")
-        assert isinstance(results, list)
+        assert [(rm.memory.content, rm.source) for rm in results] == [("Python is great", "sparse")]
 
     async def test_retrieve_by_embedding(self, retriever, mock_store):
         """Test retrieving memories by embedding."""
@@ -744,7 +744,7 @@ class TestMemoryRetriever:
         mock_db.fetch = AsyncMock(return_value=[])
         with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("nonexistent")
-        assert isinstance(results, list)
+        assert results == []
 
     async def test_retrieve_with_agent_filter(self, retriever, mock_store):
         """Test retrieving with agent filter."""
@@ -755,17 +755,24 @@ class TestMemoryRetriever:
             content="Test",
             category="fact",
         )
-        mock_store.search = AsyncMock(return_value=[entry])
+        mock_store._row_to_entry = lambda row: entry
         retriever.store = mock_store
 
         mock_db = AsyncMock()
         from tests.support.database import attach_connection
 
         attach_connection(mock_db)
-        mock_db.fetch = AsyncMock(return_value=[])
+        seen_params: list[tuple] = []
+
+        async def fake_fetch(_query, *params):
+            seen_params.append(params)
+            return [{"id": entry.id, "content": entry.content}]
+
+        mock_db.fetch = fake_fetch
         with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test", agent_id="harness")
-        assert isinstance(results, list)
+        assert [rm.memory.content for rm in results] == ["Test"]
+        assert seen_params and seen_params[0][0] == "harness"
 
     async def test_retrieve_with_category_filter(self, retriever, mock_store):
         """Test retrieving with category filter."""
@@ -776,17 +783,24 @@ class TestMemoryRetriever:
             content="Test",
             category="preference",
         )
-        mock_store.search = AsyncMock(return_value=[entry])
+        mock_store._row_to_entry = lambda row: entry
         retriever.store = mock_store
 
         mock_db = AsyncMock()
         from tests.support.database import attach_connection
 
         attach_connection(mock_db)
-        mock_db.fetch = AsyncMock(return_value=[])
+        seen_params: list[tuple] = []
+
+        async def fake_fetch(_query, *params):
+            seen_params.append(params)
+            return [{"id": entry.id, "content": entry.content}]
+
+        mock_db.fetch = fake_fetch
         with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test", category="preference")
-        assert isinstance(results, list)
+        assert [rm.memory.content for rm in results] == ["Test"]
+        assert seen_params and seen_params[0][0] == "preference"
 
     async def test_retrieve_updates_access(self, retriever, mock_store):
         """Test that retrieval updates access stats."""
@@ -797,19 +811,17 @@ class TestMemoryRetriever:
             content="Test",
             category="fact",
         )
-        mock_store.search = AsyncMock(return_value=[entry])
-        mock_store.update_access = AsyncMock()
+        mock_store._row_to_entry = lambda row: entry
         retriever.store = mock_store
 
         mock_db = AsyncMock()
         from tests.support.database import attach_connection
 
         attach_connection(mock_db)
-        mock_db.fetch = AsyncMock(return_value=[])
+        mock_db.fetch = AsyncMock(return_value=[{"id": entry.id, "content": entry.content}])
         with patch("machina.memory.retriever.db", mock_db):
             await retriever.retrieve("test")
-        # update_access may or may not be called depending on implementation
-        assert isinstance(mock_store.update_access, AsyncMock)
+        mock_store.batch_update_access.assert_awaited_once_with([entry.id])
 
     async def test_retrieve_hybrid(self, retriever, mock_store):
         """Test hybrid retrieval (text + embedding)."""
@@ -827,21 +839,24 @@ class TestMemoryRetriever:
             content="Embedding match",
             category="fact",
         )
-        mock_store.search = AsyncMock(return_value=[entry1])
         mock_store.search_by_embedding = AsyncMock(return_value=[(entry2, 0.9)])
+        mock_store._row_to_entry = lambda row: entry1
         retriever.store = mock_store
 
         mock_db = AsyncMock()
         from tests.support.database import attach_connection
 
         attach_connection(mock_db)
-        mock_db.fetch = AsyncMock(return_value=[])
+        mock_db.fetch = AsyncMock(return_value=[{"id": entry1.id, "content": entry1.content}])
         with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve(
                 "test",
                 query_embedding=[0.1] * 1536,
             )
-        assert isinstance(results, list)
+        assert [(rm.memory.content, rm.source) for rm in results] == [
+            ("Embedding match", "dense"),
+            ("Text match", "sparse"),
+        ]
 
 
 def test_persona_enabled_fallback_records_failure(monkeypatch):
@@ -935,8 +950,7 @@ class TestMemoryConsolidator:
             "The user prefers Python programming",
             agent_id="test",
         )
-        # Results may be empty if importance < 0.2 or other filtering
-        assert isinstance(results, list)
+        assert [(m.content, m.category) for m in results] == [("User likes Python", "preference")]
 
     async def test_consolidate_from_text_no_llm(self, consolidator, mock_store, monkeypatch):
         """Test consolidating without LLM returns empty and reports the boundary."""
@@ -967,7 +981,7 @@ class TestMemoryConsolidator:
 
         results = await consolidator.consolidate_from_text("test")
         # Invalid JSON should return empty list
-        assert isinstance(results, list)
+        assert results == []
         assert any("JSONDecodeError" in (record.exc_text or "") for record in caplog.records)
 
     async def test_consolidate_from_text_empty_response(self, consolidator, mock_store):
@@ -985,7 +999,7 @@ class TestMemoryConsolidator:
 
         results = await consolidator.consolidate_from_text("test")
         # Empty JSON array should return empty list
-        assert isinstance(results, list)
+        assert results == []
 
     async def test_consolidate_session_no_chunks(self, consolidator, mock_store):
         """Test consolidating session with no chunks."""

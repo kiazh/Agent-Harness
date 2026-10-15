@@ -14,6 +14,10 @@ import pytest
 @pytest.fixture
 async def live_db():
     """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
+    import os
+
+    if not os.environ.get("MACHINA_TEST_DATABASE_URL"):
+        pytest.skip("MACHINA_TEST_DATABASE_URL not set")
     from machina.db.connection import db
 
     await db.connect()

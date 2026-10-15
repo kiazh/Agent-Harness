@@ -88,7 +88,7 @@ def test_compaction_loop_guard_state_key():
 def test_reranker_passthrough_labeled():
     from machina.rag.reranker import IdentityReranker
 
-    assert "passthrough" in IdentityReranker.__doc__.lower() or True
+    assert IdentityReranker.backend == "passthrough"
     from machina.services import status_summary  # noqa: F401
 
 

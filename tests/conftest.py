@@ -33,6 +33,25 @@ def pytest_collection_modifyitems(items):
             item.add_marker(pytest.mark.db)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def gateway_scheduler_disabled():
+    """Gateways never auto-start a background scheduler in the suite.
+
+    The flag used to be set as a side effect of constructing ``Harness`` in
+    ``tests/test_gateway.py`` and leaked into every later test (and any
+    subprocess inheriting the environment). The suite owns it explicitly and
+    restores the process environment afterwards.
+    """
+    name = "MACHINA_GATEWAY_NO_SCHEDULER"
+    previous = os.environ.get(name)
+    os.environ[name] = "1"
+    yield
+    if previous is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = previous
+
+
 @pytest.fixture(autouse=True)
 def isolate_config_secrets(monkeypatch):
     """Isolate developer credentials across all supported secret sources.
