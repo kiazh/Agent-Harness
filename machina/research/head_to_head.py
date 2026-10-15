@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Same-model head-to-head agent-harness runner: OpenCode vs Machina.
 
-Runs ONE task in a fresh copy of ``--task-dir`` per harness, grades it with
-pytest plus a test-file hash check, and reports machine-readable metrics.
+Runs ONE task in a fresh copy of ``--task-dir`` per harness, grades it with a
+hermetic pytest run plus a whole-fixture integrity hash, and reports
+machine-readable metrics.
 
 Design notes
 ------------
@@ -15,6 +16,13 @@ Design notes
   working copy so the workspace root resolves to that directory.
 * Every harness gets a pristine copy of the task dir, so runs never share
   state and the fixture on disk stays untouched.
+* Grading is fail-closed. The pytest run is pinned to a pristine config
+  (``-c``), loads no conftests (``--noconftest``), ignores ``addopts`` and the
+  cache provider, so agent-written pytest config cannot alter collection. The
+  whole fixture copy is hashed before/after, except the derived agent edit
+  surface (:func:`editable_paths`) and volatile caches/git metadata; anything
+  else the agent touches - including new files - fails the integrity check. A
+  run only scores ``success`` with parsed ``failed == 0`` and ≥1 passed.
 * Secrets are never printed: only session ids, counts, and timings.
 
 Usage
@@ -56,6 +64,15 @@ HERMETIC_OPENCODE_CONFIG = {
 
 # Artifacts that never count as "the harness changed the tests".
 _IGNORED_PARTS = {"__pycache__", ".pytest_cache"}
+# Adds git metadata for the integrity hash only: ordinary `git status` calls
+# refresh `.git/index`, which would otherwise look like an agent edit.
+_HASH_IGNORED_PARTS = _IGNORED_PARTS | {".git"}
+# Files the grader itself writes into a run copy; never part of the diff.
+_GRADER_ARTIFACTS = frozenset({"opencode.json"})
+# Pristine config the graded pytest run is pinned to (passed via ``-c``).
+GRADING_PYTEST_INI = ".h2h_pytest.ini"
+# Names that can change pytest collection; never part of the edit surface.
+_PYTEST_CONFIG_NAMES = frozenset({"pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"})
 
 _MACHINA_CREATE_SCRIPT = """
 import asyncio, json, sys
@@ -202,8 +219,14 @@ def save_log(log_path: Path, raw: dict) -> None:
     )
 
 
-def hash_tree(root: Path) -> dict[str, str]:
-    """sha256 of every source file under ``root`` (pycache/pytest caches ignored)."""
+def hash_tree(root: Path, excluded: frozenset[str] | set[str] = frozenset()) -> dict[str, str]:
+    """sha256 of every file under ``root``.
+
+    ``excluded`` holds fixture-relative paths the agent may edit (see
+    :func:`editable_paths`); everything else participates in the before/after
+    integrity diff, including files the agent creates. Byte-code, pytest
+    caches, and ``.git`` metadata never count as content.
+    """
     digests: dict[str, str] = {}
     if not root.exists():
         return digests
@@ -211,10 +234,67 @@ def hash_tree(root: Path) -> dict[str, str]:
         if not path.is_file():
             continue
         rel = path.relative_to(root)
-        if any(part in _IGNORED_PARTS for part in rel.parts) or path.suffix == ".pyc":
+        if any(part in _HASH_IGNORED_PARTS for part in rel.parts) or path.suffix == ".pyc":
             continue
-        digests[str(rel)] = hashlib.sha256(path.read_bytes()).hexdigest()
+        key = rel.as_posix()
+        if key in excluded:
+            continue
+        digests[key] = hashlib.sha256(path.read_bytes()).hexdigest()
     return digests
+
+
+def editable_paths(task_dir: Path, test_path: str) -> set[str]:
+    """Fixture-relative paths the agent may change without failing the check.
+
+    Task fixtures carry no edit-surface manifest, so the allowlist is derived
+    from the pristine fixture copy: every file that is NOT test infrastructure
+    is editable, i.e. the fixture's source files. Protected (never editable):
+    the graded test path itself, everything under the test path's top-level
+    directory when the path has one (a ``tests/`` tree is fully off-limits),
+    and every ``conftest.py``, pytest config file
+    (``pytest.ini``/``pyproject.toml``/``tox.ini``/``setup.cfg``) and
+    ``test_*.py`` / ``*_test.py`` module. Agent-created files are outside the
+    allowlist by construction, so the integrity check fails closed on
+    additions. Paths are relative to the fixture root, posix-spelled.
+    """
+    test_file = Path(os.path.normpath(test_path))
+    test_top_dir = Path(test_file.parts[0]) if len(test_file.parts) > 1 else None
+    editable: set[str] = set()
+    if not task_dir.exists():
+        return editable
+    for path in sorted(task_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(task_dir)
+        if any(part in _HASH_IGNORED_PARTS for part in rel.parts) or path.suffix == ".pyc":
+            continue
+        if rel == test_file:
+            continue
+        if test_top_dir is not None and test_top_dir in rel.parents:
+            continue
+        name = rel.name
+        if name == "conftest.py" or name in _PYTEST_CONFIG_NAMES:
+            continue
+        if (name.startswith("test_") and name.endswith(".py")) or name.endswith("_test.py"):
+            continue
+        editable.add(rel.as_posix())
+    return editable
+
+
+def write_grading_config(run_dir: Path) -> Path:
+    """Write the pristine pytest config the graded run is pinned to.
+
+    It is written into the run copy before the before-hashes, so any later
+    agent edit to it is visible to the integrity diff; :func:`grade` passes it
+    via ``-c`` so neither an agent-written config nor pytest's own discovery
+    can change which tests are collected.
+    """
+    config_path = run_dir / GRADING_PYTEST_INI
+    config_path.write_text(
+        "# Written by machina/research/head_to_head.py; graded runs are pinned here.\n[pytest]\n",
+        encoding="utf-8",
+    )
+    return config_path
 
 
 def git_capture(repo: Path) -> dict:
@@ -433,10 +513,27 @@ _PYTEST_COUNT_RE = re.compile(r"(\d+) (passed|failed|error|errors|skipped)")
 
 
 def grade(run_dir: Path, venv_python: Path, test_path: str, timeout: float = 120.0) -> dict:
+    env = child_env()
+    # Hermetic against runner-level injection too: only the pinned config and
+    # the command line below may shape collection.
+    for key in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS"):
+        env.pop(key, None)
     result = run_cmd(
-        [str(venv_python), "-m", "pytest", test_path, "-q"],
+        [
+            str(venv_python),
+            "-m",
+            "pytest",
+            test_path,
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--override-ini=addopts=",
+            "--noconftest",
+            "-c",
+            str(run_dir / GRADING_PYTEST_INI),
+        ],
         cwd=run_dir,
-        env=child_env(),
+        env=env,
         timeout=timeout,
     )
     text = result["stdout"] + "\n" + result["stderr"]
@@ -479,9 +576,11 @@ def run_one(harness: str, args: argparse.Namespace, task_dir: Path, venv_python:
         ignore=shutil.ignore_patterns(*_IGNORED_PARTS),
     )
 
-    tests_dir = (run_dir / args.test_path).parent
-    hashes_before = hash_tree(tests_dir)
-    test_key = Path(args.test_path).name
+    edit_surface = editable_paths(task_dir, args.test_path)
+    write_grading_config(run_dir)
+    hash_excluded = edit_surface | _GRADER_ARTIFACTS
+    hashes_before = hash_tree(run_dir, hash_excluded)
+    test_key = Path(args.test_path).as_posix()
     title = f"h2h:{task_dir.name}:{harness}"
 
     result: dict = {"harness": harness, "run_dir": str(run_dir)}
@@ -583,12 +682,13 @@ def run_one(harness: str, args: argparse.Namespace, task_dir: Path, venv_python:
     result["task_repo"] = git_capture(run_dir)
 
     grade_result = grade(run_dir, venv_python, args.test_path)
-    hashes_after = hash_tree(tests_dir)
+    hashes_after = hash_tree(run_dir, hash_excluded)
     unchanged = hashes_before == hashes_after
     result["tests_passed"] = grade_result["passed"]
     result["tests_failed"] = grade_result["failed"] + grade_result["errors"]
     result["grade_exit_code"] = grade_result["exit_code"]
     result["pytest_summary"] = grade_result["summary"]
+    result["editable_paths"] = sorted(edit_surface)
     result["test_file_sha256_before"] = hashes_before.get(test_key)
     result["test_file_sha256_after"] = hashes_after.get(test_key)
     result["test_files_unchanged"] = unchanged
@@ -605,6 +705,7 @@ def run_one(harness: str, args: argparse.Namespace, task_dir: Path, venv_python:
     result["success"] = bool(
         grade_result["exit_code"] == 0
         and grade_result["passed"] > 0
+        and result["tests_failed"] == 0
         and unchanged
         and not result.get("timed_out")
     )
