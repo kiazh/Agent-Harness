@@ -53,6 +53,27 @@ def _redact_or_failed(text: object) -> str:
         return REDACTION_FAILED
 
 
+def _redact_source(source: object) -> str:
+    """Redact a document source for storage and audit emission (R5-Nb).
+
+    ``_redact_or_failed`` covers token-shaped and DB-URL secrets via the
+    shared ``redact_secrets``, but it is blind to URI userinfo passwords
+    (``scheme://user:password@``) and to credential query/fragment values of
+    any length (``?api_key=short1``). The shared
+    :func:`~machina.core.provider.audit.redact_url_credentials` closes that
+    remainder, so source metadata persisted in ``context_chunks`` and emitted
+    to the audit log carries zero credentials. One authoritative
+    implementation is reused by every source path — never the raw regexes.
+    Fail closed: any exception from either stage yields
+    :data:`REDACTION_FAILED`, never the raw source.
+    """
+    try:
+        return redact_url_credentials(_redact_or_failed(source))
+    except Exception as e:
+        record_failure("pipeline._redact_source", e)
+        return REDACTION_FAILED
+
+
 def _redact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     """Apply structured redaction to metadata values (AH-AUDIT-012).
 
@@ -229,10 +250,10 @@ class RAGPipeline:
         audit_log(
             "rag_index_start",
             session_id=str(session_id),
-            # R5-N (finding 18): redact URI credentials before emission so
-            # neither the log line nor the persisted audit row carries a
-            # userinfo password or credential query/fragment value.
-            source=redact_url_credentials(doc.source),
+            # R5-Nb (finding 18 remainder): the same shared source redactor
+            # used for storage, so neither the log line nor the persisted
+            # audit row carries a userinfo password or credential query value.
+            source=_redact_source(doc.source),
             doc_type=doc.doc_type,
         )
 
@@ -280,7 +301,7 @@ class RAGPipeline:
         # leaves a half-deleted document.
         stored_chunks: list[ContextChunk] = []
         records = []
-        doc_source = _redact_or_failed(doc.source)
+        doc_source = _redact_source(doc.source)
         for chunk, embedding in zip(chunks, embeddings, strict=True):
             # AH-AUDIT-012/035: caller metadata applies FIRST so reserved
             # embedding/source fields cannot be overwritten by malicious or
@@ -289,7 +310,7 @@ class RAGPipeline:
             chunk_meta = {
                 **_redact_metadata(metadata),
                 **_redact_metadata(chunk.metadata),
-                "source": _redact_or_failed(doc.source),
+                "source": doc_source,
                 "doc_type": doc.doc_type,
                 "chunk_index": chunk.index,
                 "embedding_model": str(embed_model_name),
@@ -302,7 +323,7 @@ class RAGPipeline:
                 "metadata": chunk_meta,
                 # AH-AUDIT-012: stored payload source follows the same
                 # redaction policy as chunk text and metadata.
-                "source": _redact_or_failed(doc.source),
+                "source": doc_source,
             }
             payload_msgpack = payload_to_msgpack(payload)
             embedding_str = embedding_to_str(embedding) if embedding else None
@@ -315,7 +336,7 @@ class RAGPipeline:
                     chunk.token_count,
                     embedding_str,
                     search_text,
-                    _redact_or_failed(doc.source),
+                    doc_source,
                 )
             )
 
@@ -392,8 +413,8 @@ class RAGPipeline:
         audit_log(
             "rag_index_complete",
             session_id=str(session_id),
-            # R5-N (finding 18): same pre-emission redaction as rag_index_start.
-            source=redact_url_credentials(doc.source),
+            # R5-Nb: same shared source redactor as storage and rag_index_start.
+            source=_redact_source(doc.source),
             chunks_stored=len(stored_chunks),
         )
 
