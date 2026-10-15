@@ -15,9 +15,11 @@ from typing import Any
 from machina.core.provider import audit_log
 from machina.core.serialization import embedding_to_str, str_to_embedding
 from machina.db.lazy import LazyDb, parse_command_count
+from machina.memory.embeddings import embedding_space_id
 from machina.memory.identity import MemoryProvenance, identity_gate
 from machina.memory.models import MemoryEntry
 from machina.memory.redaction import SecretRedactor
+from machina.observability.diagnostics import record_failure
 from machina.security.secrets import get_secret
 
 __all__ = ["MemoryStore", "memory_store"]
@@ -25,6 +27,18 @@ __all__ = ["MemoryStore", "memory_store"]
 logger = logging.getLogger(__name__)
 
 db = LazyDb()
+
+# H08: additive runtime migration for existing databases. ``schema.sql`` never
+# runs on an already-initialized database, and machina/db/connection.py
+# (``initialize_runtime_schema``) is owned by another lane, so this store
+# applies the same idempotent DDL lazily before the first embedding-backed
+# operation (tag on write / space filter on read). Keep in sync with the
+# memories section of schema.sql; the M1 report specifies the matching
+# connection.py addition for the boot-time migration path.
+_MEMORY_EMBEDDING_SPACE_MIGRATION = """
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_space TEXT;
+CREATE INDEX IF NOT EXISTS idx_memories_embedding_space ON memories(embedding_space);
+"""
 
 
 def _approval_gate():
@@ -47,6 +61,35 @@ class MemoryStore:
 
     def __init__(self) -> None:
         self._redactor = SecretRedactor()
+        # H08: None until the additive embedding-space migration is resolved;
+        # True = column available, False = DDL unavailable (pre-H08 shapes).
+        self._embedding_space_ready: bool | None = None
+
+    async def _ensure_embedding_space(self, executor: Any, *, durable: bool) -> bool:
+        """Apply the H08 additive migration once; report column availability.
+
+        ``durable`` marks DDL applied over the base pool handle (autocommit),
+        so a later rollback of a caller-owned transaction cannot invalidate
+        it. The DDL is idempotent and safe to race across processes. A failed
+        DDL never raises: the store degrades to the pre-H08 shapes (untagged
+        writes, no query filter) instead of failing memory operations.
+        """
+        if self._embedding_space_ready is not None:
+            return self._embedding_space_ready
+        try:
+            await executor.execute(_MEMORY_EMBEDDING_SPACE_MIGRATION)
+        except Exception as e:
+            record_failure("memory_store.embedding_space_migration", e)
+            logger.warning(
+                "memory embedding-space migration unavailable; keeping pre-H08 vector behavior: %s",
+                e,
+            )
+            if durable:
+                self._embedding_space_ready = False
+            return False
+        if durable:
+            self._embedding_space_ready = True
+        return True
 
     async def add(
         self,
@@ -56,6 +99,7 @@ class MemoryStore:
         category: str,
         importance: float = 0.5,
         embedding: list[float] | None = None,
+        embedding_space: str | None = None,
         explicitly_important: bool = False,
         base_strength: float = 1.0,
         connection: Any | None = None,
@@ -78,6 +122,12 @@ class MemoryStore:
         The IdentityGate validates the memory against the agent's belief
         model before storage. If validation fails, the memory is still
         stored but flagged as quarantined.
+
+        H08: a vector write also persists the embedding-space identifier of
+        the embedder that produced it (``embedding_space`` override, else the
+        shared embedder's current space). Dense reads only compare rows from
+        the same space; rows written before this column existed stay usable
+        through the documented ``embedding_space IS NULL`` fallback.
         """
         if not bypass_approval:
             gate = _approval_gate()
@@ -142,21 +192,26 @@ class MemoryStore:
         quarantined = not validation.is_valid
 
         embedding_str = None
+        space_id = None
         if embedding is not None:
             embedding_str = embedding_to_str(embedding)
+            space_id = embedding_space if embedding_space is not None else embedding_space_id()
+            if space_id is not None:
+                space_executor = connection if connection is not None else db
+                if not await self._ensure_embedding_space(
+                    space_executor, durable=connection is None
+                ):
+                    # Legacy database where the additive DDL cannot run: keep
+                    # the pre-H08 write shape rather than fail the write.
+                    space_id = None
 
         async def insert(executor: Any) -> Any:
-            row = await executor.fetchrow(
-                """
-            INSERT INTO memories (
-                id, session_id, agent_id, content, category, importance,
-                embedding, explicitly_important, base_strength, quarantined
+            columns = (
+                "id, session_id, agent_id, content, category, importance, "
+                "embedding, explicitly_important, base_strength, quarantined"
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING id, session_id, agent_id, content, category, importance,
-                      created_at, last_accessed, access_count, embedding,
-                      explicitly_important, base_strength, quarantined
-            """,
+            values = "$1, $2, $3, $4, $5, $6, $7, $8, $9, $10"
+            params: list[Any] = [
                 memory_id,
                 session_id,
                 agent_id,
@@ -167,6 +222,20 @@ class MemoryStore:
                 explicitly_important,
                 base_strength,
                 quarantined,
+            ]
+            if space_id is not None:
+                columns += ", embedding_space"
+                values += ", $11"
+                params.append(space_id)
+            row = await executor.fetchrow(
+                f"""
+            INSERT INTO memories ({columns})
+            VALUES ({values})
+            RETURNING id, session_id, agent_id, content, category, importance,
+                      created_at, last_accessed, access_count, embedding,
+                      explicitly_important, base_strength, quarantined
+            """,  # nosec B608 # Fixed column/placeholder fragments; values are bound parameters.
+                *params,
             )
             if provenance is not None:
                 try:
@@ -296,13 +365,27 @@ class MemoryStore:
         category: str | None = None,
         limit: int = 5,
         include_quarantined: bool = False,
+        embedding_space: str | None = None,
     ) -> list[tuple[MemoryEntry, float]]:
         """Search memories by embedding similarity (cosine distance).
 
         Returns list of (MemoryEntry, similarity_score) tuples, sorted by
         similarity descending.
+
+        H08: only rows from the same embedding space are comparable. Rows
+        written by another backend/model are excluded at the SQL level (their
+        stored ``embedding_space`` differs from the query's); rows written
+        before the column existed (``NULL``) stay candidates through the
+        documented compatibility fallback and are upgraded by re-embedding.
+        When no space is resolvable (no embedder configured), the pre-H08
+        unfiltered behavior is kept.
         """
         embedding_str = embedding_to_str(embedding)
+
+        space_id = embedding_space if embedding_space is not None else embedding_space_id()
+        if space_id is not None and not await self._ensure_embedding_space(db, durable=True):
+            # Additive DDL unavailable on this database: keep pre-H08 reads.
+            space_id = None
 
         conditions = ["embedding IS NOT NULL"]
         if not include_quarantined:
@@ -318,6 +401,11 @@ class MemoryStore:
         if category is not None:
             conditions.append(f"category = ${param_idx}")
             params.append(category)
+            param_idx += 1
+
+        if space_id is not None:
+            conditions.append(f"(embedding_space = ${param_idx} OR embedding_space IS NULL)")
+            params.append(space_id)
             param_idx += 1
 
         where_clause = " AND ".join(conditions)

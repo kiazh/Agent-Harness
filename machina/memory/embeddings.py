@@ -12,6 +12,7 @@ reloading per call.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from machina.observability.diagnostics import record_failure
 
@@ -23,6 +24,52 @@ def _shared_embedder():
     from machina.rag.embedder import get_shared_embedder
 
     return get_shared_embedder()
+
+
+def _space_kind(embedder: Any) -> str:
+    """Backend label from the embedder class (``OnnxEmbedder`` -> ``onnx``)."""
+    name = type(embedder).__name__
+    if name.endswith("Embedder"):
+        name = name[: -len("Embedder")]
+    return name.lower() or "unknown"
+
+
+def embedding_space_id(embedder: Any | None = None) -> str | None:
+    """Stable identifier of the embedding space *embedder* produces (H08).
+
+    Stored memory vectors are only comparable when they come from the same
+    space: same backend kind, model, stored width, and — for API backends —
+    the same endpoint. The identifier is persisted next to a stored vector at
+    write time and used to filter compatible rows at query time, so switching
+    models or backends cannot silently rank vectors from two different spaces
+    against each other (same dimensions no longer implies compatibility).
+
+    Returns None when no embedder is resolvable (keyword-only operation); the
+    caller then keeps the pre-H08 behavior (no tag, no filter). Never raises.
+    """
+    if embedder is None:
+        try:
+            embedder = _shared_embedder()
+        except Exception as e:
+            logger.debug("embedding space unavailable: %s", e)
+            return None
+        if embedder is None:
+            return None
+    try:
+        kind = _space_kind(embedder)
+        model = str(getattr(embedder, "model_name", "") or "")
+        try:
+            dimensions = int(getattr(embedder, "dimensions", 0) or 0)
+        except (TypeError, ValueError):
+            dimensions = 0
+        endpoint = str(getattr(embedder, "_base_url", "") or "")
+    except Exception as e:
+        logger.debug("embedding space unresolvable: %s", e)
+        return None
+    space = f"{kind}:{model}:{dimensions}"
+    if endpoint:
+        space = f"{space}@{endpoint}"
+    return space
 
 
 async def embed_query(text: str) -> list[float] | None:

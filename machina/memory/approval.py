@@ -23,9 +23,11 @@ from machina.core.config import config
 from machina.core.provider import audit_log
 from machina.core.serialization import embedding_to_str, str_to_embedding
 from machina.db.lazy import LazyDb
+from machina.memory.embeddings import embedding_space_id
 from machina.memory.models import MemoryEntry
 from machina.memory.redaction import SecretRedactor
 from machina.memory.store import memory_store
+from machina.observability.diagnostics import record_failure
 
 __all__ = [
     "ApprovalStatus",
@@ -37,6 +39,16 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 db = LazyDb()
+
+# H08 follow-up: additive runtime migration for existing databases.
+# ``schema.sql`` never runs on an already-initialized database, so the gate
+# applies the same idempotent DDL lazily before the first embedding-backed
+# pending write/read. Keep in sync with the pending_memories section of
+# schema.sql; ``machina/db/connection.py`` is not the migration path for this
+# table (contrast H08's ``memories.embedding_space`` boot migration).
+_PENDING_EMBEDDING_SPACE_MIGRATION = """
+ALTER TABLE pending_memories ADD COLUMN IF NOT EXISTS embedding_space TEXT;
+"""
 
 
 class ApprovalStatus(StrEnum):
@@ -115,6 +127,37 @@ class MemoryApprovalGate:
     ) -> None:
         self.enabled = enabled
         self.redactor = redactor or SecretRedactor()
+        # H08 follow-up: None until the additive pending-space migration is
+        # resolved; True = column available, False = pre-migration shapes.
+        self._pending_embedding_space_ready: bool | None = None
+
+    async def _ensure_pending_embedding_space(self, executor: Any, *, durable: bool) -> bool:
+        """Apply the pending_memories space migration once; report availability.
+
+        Mirrors ``MemoryStore._ensure_embedding_space`` (H08): ``durable``
+        marks DDL applied over the base pool handle (autocommit), so a later
+        rollback of a caller-owned transaction cannot invalidate it. The DDL
+        is idempotent and safe to race across processes. A failed DDL never
+        raises: the gate degrades to the pre-migration shapes (submit stores
+        no space, approval follows the configured embedder).
+        """
+        if self._pending_embedding_space_ready is not None:
+            return self._pending_embedding_space_ready
+        try:
+            await executor.execute(_PENDING_EMBEDDING_SPACE_MIGRATION)
+        except Exception as e:
+            record_failure("memory_approval.embedding_space_migration", e)
+            logger.warning(
+                "pending_memories embedding-space migration unavailable; "
+                "keeping pre-migration approval behavior: %s",
+                e,
+            )
+            if durable:
+                self._pending_embedding_space_ready = False
+            return False
+        if durable:
+            self._pending_embedding_space_ready = True
+        return True
 
     def is_enabled(self) -> bool:
         """Effective gate state: explicit flag OR ``memory_approval_enabled``.
@@ -166,15 +209,22 @@ class MemoryApprovalGate:
         now = datetime.now(UTC)
         embedding_str = embedding_to_str(embedding) if embedding else None
 
-        await db.execute(
-            """
-            INSERT INTO pending_memories (
-                id, content, category, importance, agent_id, session_id,
-                redactions, status, created_at, explicitly_important,
-                base_strength, embedding
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            """,
+        # H08 follow-up: the pending row carries the space of the vector it
+        # was submitted with, so approval completes it under the ORIGINAL
+        # space even if the configured embedder changes while it is pending.
+        # No vector (or unavailable DDL) keeps the pre-migration INSERT shape.
+        space_id = embedding_space_id() if embedding else None
+        if space_id is not None and not await self._ensure_pending_embedding_space(
+            db, durable=True
+        ):
+            space_id = None
+
+        columns = (
+            "id, content, category, importance, agent_id, session_id, "
+            "redactions, status, created_at, explicitly_important, base_strength"
+        )
+        values = "$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11"
+        params: list[Any] = [
             pending_id,
             redacted_content,
             category,
@@ -186,7 +236,21 @@ class MemoryApprovalGate:
             now,
             explicitly_important,
             base_strength,
-            embedding_str,
+        ]
+        if space_id is not None:
+            # Space identity before the vector keeps the embedding the
+            # trailing bound parameter of the INSERT.
+            columns += ", embedding_space"
+            values += ", $12"
+            params.append(space_id)
+        columns += ", embedding"
+        values += f", ${len(params) + 1}"
+        params.append(embedding_str)
+
+        insert_sql = f"INSERT INTO pending_memories ({columns}) VALUES ({values})"
+        await db.execute(
+            insert_sql,  # nosec B608 # Fixed column/placeholder fragments; values are bound parameters.
+            *params,
         )
 
         pending = PendingMemory(
@@ -229,15 +293,20 @@ class MemoryApprovalGate:
 
         Returns the created MemoryEntry, or None if not found.
         """
+        # H08 follow-up: resolve the additive pending-space migration so the
+        # completion can inherit the submission space (degrade: pre-migration
+        # rows and databases follow the configured embedder, as before).
+        space_ready = await self._ensure_pending_embedding_space(db, durable=True)
+        space_column = ", embedding_space" if space_ready else ""
         # Lock the pending row and commit its memory in the same transaction.
         # A failed update or a concurrent approval cannot leave an orphan.
         async with db.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    """
+                    f"""
                     SELECT id, content, category, importance, agent_id, session_id,
                            redactions, status, created_at, explicitly_important,
-                           base_strength, embedding
+                           base_strength, embedding{space_column}
                     FROM pending_memories WHERE id = $1 FOR UPDATE
                     """,
                     pending_id,
@@ -253,6 +322,7 @@ class MemoryApprovalGate:
                     embedding=str_to_embedding(row["embedding"])
                     if row.get("embedding") is not None
                     else None,
+                    embedding_space=row.get("embedding_space"),
                     explicitly_important=row["explicitly_important"],
                     base_strength=row["base_strength"],
                     connection=conn,
@@ -366,17 +436,22 @@ class MemoryApprovalGate:
 
         Returns the count of approved memories.
         """
+        space_ready = await self._ensure_pending_embedding_space(db, durable=True)
         async with db.acquire() as conn:
             async with conn.transaction():
-                return await self._approve_all_locked(conn, agent_id)
+                return await self._approve_all_locked(conn, agent_id, space_ready=space_ready)
 
-    async def _approve_all_locked(self, conn: Any, agent_id: str | None) -> int:
+    async def _approve_all_locked(
+        self, conn: Any, agent_id: str | None, *, space_ready: bool
+    ) -> int:
         """Approve a locked batch; the caller owns the transaction."""
+        space_column = ", embedding_space" if space_ready else ""
         if agent_id:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT id, content, category, importance, agent_id, session_id,
-                       redactions, created_at, explicitly_important, base_strength, embedding
+                       redactions, created_at, explicitly_important, base_strength,
+                       embedding{space_column}
                 FROM pending_memories
                 WHERE status = $1 AND agent_id = $2
                 ORDER BY created_at ASC FOR UPDATE
@@ -386,9 +461,10 @@ class MemoryApprovalGate:
             )
         else:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT id, content, category, importance, agent_id, session_id,
-                       redactions, created_at, explicitly_important, base_strength, embedding
+                       redactions, created_at, explicitly_important, base_strength,
+                       embedding{space_column}
                 FROM pending_memories
                 WHERE status = $1
                 ORDER BY created_at ASC FOR UPDATE
@@ -412,6 +488,7 @@ class MemoryApprovalGate:
                 embedding=str_to_embedding(row["embedding"])
                 if row.get("embedding") is not None
                 else None,
+                embedding_space=row.get("embedding_space"),
                 explicitly_important=row["explicitly_important"],
                 base_strength=row["base_strength"],
                 connection=conn,

@@ -186,6 +186,11 @@ CREATE TABLE IF NOT EXISTS memories (
     base_strength FLOAT NOT NULL DEFAULT 1.0,
     access_count INT NOT NULL DEFAULT 0,
     embedding vector(1536),
+    -- H08: identifier of the embedding space (backend kind/model/width, and
+    -- endpoint for API backends) that produced ``embedding``. NULL marks rows
+    -- written before this column existed; dense retrieval treats NULL as a
+    -- compatible legacy vector (documented fallback) until re-embedded.
+    embedding_space TEXT,
     explicitly_important BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT now(),
     last_accessed TIMESTAMPTZ,
@@ -193,6 +198,13 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- H08: additive embedding-space identity for existing installations (same
+-- idempotent DDL is applied lazily by MemoryStore on initialized databases
+-- that predate the column). No backfill: pre-existing rows keep NULL and stay
+-- retrievable through the documented fallback until re-embedded.
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_space TEXT;
+CREATE INDEX IF NOT EXISTS idx_memories_embedding_space ON memories(embedding_space);
 
 -- Index for agent+category filtering
 CREATE INDEX IF NOT EXISTS idx_memories_agent_category ON memories(agent_id, category);
@@ -234,10 +246,21 @@ CREATE TABLE IF NOT EXISTS pending_memories (
     explicitly_important BOOLEAN NOT NULL DEFAULT FALSE,
     base_strength FLOAT NOT NULL DEFAULT 1.0,
     embedding vector(1536),
+    -- H08 follow-up: identifier of the embedding space (see memories.embedding_space)
+    -- that produced ``embedding`` at submission time. Approval completes the
+    -- vector under this ORIGINAL space even if the configured embedder changed
+    -- while the row was pending. NULL marks rows submitted before this column
+    -- existed; their completion follows the configured space (documented fallback).
+    embedding_space TEXT,
     created_at TIMESTAMPTZ DEFAULT now(),
     reviewed_at TIMESTAMPTZ,
     review_note TEXT
 );
+
+-- H08 follow-up: additive submission-space identity for existing installations
+-- (same idempotent DDL is applied lazily by MemoryApprovalGate on databases
+-- that predate the column).
+ALTER TABLE pending_memories ADD COLUMN IF NOT EXISTS embedding_space TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_pending_memories_status ON pending_memories(status);
 CREATE INDEX IF NOT EXISTS idx_pending_memories_agent ON pending_memories(agent_id);

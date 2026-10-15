@@ -33,6 +33,16 @@ CREATE INDEX IF NOT EXISTS idx_context_chunks_session_created_event
     ON context_chunks(session_id, created_at DESC, event_seq DESC NULLS LAST, id DESC);
 """
 
+# H08: additive runtime migration for existing databases. schema.sql never
+# runs on an already-initialized database, so this must be applied by
+# ``initialize_runtime_schema`` too. Keep in sync with the memories section of
+# schema.sql. Idempotent (IF NOT EXISTS); MemoryStore's lazy ensure remains as
+# defense-in-depth for databases that skip boot migrations.
+_MEMORY_EMBEDDING_SPACE_MIGRATION = """
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_space TEXT;
+CREATE INDEX IF NOT EXISTS idx_memories_embedding_space ON memories(embedding_space);
+"""
+
 
 class Database:
     """Manages asyncpg connection pool."""
@@ -245,6 +255,7 @@ class Database:
                 with open(os.path.join(os.path.dirname(__file__), name), encoding="utf-8") as f:
                     await conn.execute(f.read())
             await conn.execute(_CONTEXT_EVENT_ORDER_MIGRATION)
+            await conn.execute(_MEMORY_EMBEDDING_SPACE_MIGRATION)
 
     # Standalone growth-migration entry point; migration tests apply it, no production caller. Kept (R4-106).
     async def initialize_growth_schema(self) -> None:
