@@ -64,7 +64,17 @@ async def repo_stage(url: str) -> str:
     try:
         repo_dir, revision = await _run_worker_joined(clone)
         plan = await _run_worker_joined(lambda: repo_install.scan_repo(repo_dir, source, revision))
-        await _run_worker_joined(lambda: repo_install.write_staged_plan(plan, repo_dir))
+
+        def publish():
+            nonlocal clone_parent
+            try:
+                repo_install.write_staged_plan(plan, repo_dir)
+                return _stage_result(plan, source, revision)
+            finally:
+                shutil.rmtree(clone_parent)
+                clone_parent = None
+
+        result = await _run_worker_joined(publish, capture_result=True)
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
     except OSError:
@@ -73,6 +83,10 @@ async def repo_stage(url: str) -> str:
     finally:
         if clone_parent is not None:
             await _run_worker_joined(lambda: shutil.rmtree(clone_parent))
+    return result
+
+
+def _stage_result(plan, source, revision) -> str:
     summary = plan.summary()
     lines = [
         f"Staged {source.url} at {revision[:12]} (plan {plan.digest[:16]}...).",
@@ -134,16 +148,18 @@ async def repo_activate(digest: str) -> str:
     try:
         detail, staged = await asyncio.to_thread(repo_install.load_staged_plan, digest)
         skills_dir = skills_dir_for_install()
-        # The install is the publishing filesystem effect: join its worker so a
-        # cancelled activation cannot install skills after ownership releases.
-        installed = await _run_worker_joined(
-            lambda: repo_install.activate_plan(detail, staged, skills_dir)
+        return await _run_worker_joined(
+            lambda: _activate_result(detail, staged, skills_dir), capture_result=True
         )
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
     except OSError:
         logger.warning("repo activation I/O failed", exc_info=True)
         return "Error: activation failed (filesystem error)"
+
+
+def _activate_result(detail, staged, skills_dir) -> str:
+    installed = repo_install.activate_plan(detail, staged, skills_dir)
     if not installed:
         return "No skills to install from this plan. Nothing was changed."
     try:

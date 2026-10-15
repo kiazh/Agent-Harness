@@ -132,7 +132,12 @@ class ConnectorService:
         async with self._configuration_lock:
             result = await self._configure_locked(fields)
         # Credential-cache refresh never runs under the configuration lock (F06).
-        await self._refresh_auth_cache()
+        try:
+            await self._refresh_auth_cache()
+        except asyncio.CancelledError:
+            from machina.core.background_tasks import CompletedOnCancellation
+
+            raise CompletedOnCancellation(result) from None
         return result
 
     async def _configure_locked(self, fields: dict[str, Any], *, expected_revision: int | None = None) -> dict[str, Any]:
@@ -170,8 +175,18 @@ class ConnectorService:
         config = self.store.validate_input(fields)
         if self.registry.get(config.id) is not None:
             await self.manager.disconnect(config.id)
-        written = await self.store.configure_async(fields, expected_revision=expected_revision)
-        await self._refresh_locked()
+        from machina.core.background_tasks import CompletedOnCancellation
+
+        written = None
+        try:
+            written = await self.store.configure_async(fields, expected_revision=expected_revision)
+            await self._refresh_locked()
+        except CompletedOnCancellation as cancellation:
+            raise CompletedOnCancellation(cancellation.result.public_view()) from None
+        except asyncio.CancelledError:
+            if written is not None:
+                raise CompletedOnCancellation(written.public_view()) from None
+            raise
         return {**written.public_view(), **_state_only(self.manager.status(config.id))}
 
     async def remove(self, connector_id: str) -> bool:
@@ -180,7 +195,12 @@ class ConnectorService:
         async with self._configuration_lock:
             removed = await self._remove_locked(connector_id)
         # Credential-cache refresh never runs under the configuration lock (F06).
-        await self._refresh_auth_cache()
+        try:
+            await self._refresh_auth_cache()
+        except asyncio.CancelledError:
+            from machina.core.background_tasks import CompletedOnCancellation
+
+            raise CompletedOnCancellation(removed) from None
         return removed
 
     async def _remove_locked(self, connector_id: str, *, expected_revision: int | None = None) -> bool:
@@ -194,8 +214,16 @@ class ConnectorService:
                 except Exception as _boundary_error:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("connector_service.invalidate_oauth", _boundary_error)
-        removed = await self.store.remove_async(connector_id, expected_revision=expected_revision)
-        await self._refresh_locked()
+        from machina.core.background_tasks import CompletedOnCancellation
+
+        removed = None
+        try:
+            removed = await self.store.remove_async(connector_id, expected_revision=expected_revision)
+            await self._refresh_locked()
+        except asyncio.CancelledError:
+            if removed is not None:
+                raise CompletedOnCancellation(removed) from None
+            raise
         return removed
 
     async def list(self) -> list[dict[str, Any]]:

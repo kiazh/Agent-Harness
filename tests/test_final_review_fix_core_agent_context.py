@@ -365,3 +365,39 @@ async def test_cancelled_worker_write_keeps_completed_effect(sleep_tool, tmp_pat
         assert pending[0]["payload"]["result"].startswith("Successfully wrote")
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("pause_at", ["batch", "marker"])
+async def test_repeated_cancel_joins_final_flush_and_marker(monkeypatch, pause_at):
+    from machina.core.agent import context_manager
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    completed = []
+
+    async def batch(chunks):
+        if pause_at == "batch":
+            entered.set()
+            await release.wait()
+        completed.append("batch")
+
+    async def marker(**kwargs):
+        if pause_at == "marker":
+            entered.set()
+            await release.wait()
+        completed.append("marker")
+
+    monkeypatch.setattr(context_manager, "add_chunks_batch", batch)
+    monkeypatch.setattr(context_manager, "add_chunk", marker)
+    pending = [{"payload": {"result": "saved"}}]
+    task = asyncio.create_task(_StubAgent()._flush_pending_cancellation_safe(pending, uuid.uuid4()))
+    await entered.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert completed == ["batch", "marker"]
+    assert pending == []

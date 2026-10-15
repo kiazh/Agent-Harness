@@ -1477,13 +1477,17 @@ class BaseReActAgent:
         #6). Appends an explicit interruption marker instead of misrepresenting
         partial effects as complete.
         """
+        from machina.core.background_tasks import await_joined
+
+        await await_joined(
+            self._flush_pending_cancellation_joined(pending_chunks, session_id, note)
+        )
+
+    async def _flush_pending_cancellation_joined(self, pending_chunks, session_id, note) -> None:
         if pending_chunks:
             try:
-                # Shield so the flush itself is not cancelled mid-write. The
-                # flush clears the list on success; on failure it returns False
-                # and the list stays retained.
-                flushed = await asyncio.shield(
-                    asyncio.wait_for(self._flush_pending_chunks(pending_chunks), timeout=10.0)
+                flushed = await asyncio.wait_for(
+                    self._flush_pending_chunks(pending_chunks), timeout=10.0
                 )
                 if not flushed:
                     logger.warning(
@@ -1493,21 +1497,18 @@ class BaseReActAgent:
                     )
             except Exception as e:
                 logger.warning("Cancellation-safe flush failed: %s", e)
-        # Record the interruption explicitly (best-effort, bounded).
         try:
-            await asyncio.shield(
-                asyncio.wait_for(
-                    context_manager.add_chunk(
-                        session_id=session_id,
-                        agent_id=self.agent_id,
-                        chunk_type="assistant_message",
-                        payload={
-                            "content": f"[{note}] Turn interrupted; partial effects above are retained."
-                        },
-                        token_count=20,
-                    ),
-                    timeout=10.0,
-                )
+            await asyncio.wait_for(
+                context_manager.add_chunk(
+                    session_id=session_id,
+                    agent_id=self.agent_id,
+                    chunk_type="assistant_message",
+                    payload={
+                        "content": f"[{note}] Turn interrupted; partial effects above are retained."
+                    },
+                    token_count=20,
+                ),
+                timeout=10.0,
             )
         except Exception as e:
             logger.warning("Could not record interruption marker: %s", e)

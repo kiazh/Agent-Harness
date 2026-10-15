@@ -374,3 +374,41 @@ def test_store_rejects_superseded_compensation(tmp_path, remove):
         else:
             store.configure(fields, expected_revision=first.revision)
     assert store.load()[1][0] == newer
+
+
+@pytest.mark.parametrize("remove", [False, True])
+async def test_cancelled_store_mutation_preserves_completed_result(tmp_path, monkeypatch, remove):
+    from machina.core.background_tasks import CompletedOnCancellation
+
+    store = _store(tmp_path)
+    fields = {"id": "demo", "transport": "stdio", "command": "echo"}
+    store.configure(fields)
+    entered, release = threading.Event(), threading.Event()
+    method = "remove" if remove else "configure"
+    original = getattr(store, method)
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(store, method, gated)
+    operation = store.remove_async("demo") if remove else store.configure_async(fields)
+    task = asyncio.create_task(operation)
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(CompletedOnCancellation) as caught:
+            await task
+        configs = store.load()[1]
+        if remove:
+            assert caught.value.result is True
+            assert configs == []
+        else:
+            assert caught.value.result == configs[0]
+            assert configs[0].revision == 2
+    finally:
+        release.set()

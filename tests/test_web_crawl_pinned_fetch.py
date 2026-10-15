@@ -25,7 +25,7 @@ def crawl_session_stubs(monkeypatch):
     monkeypatch.setattr(
         crawl_module, "active_agent_scope", AsyncMock(return_value=("harness", sid))
     )
-    monkeypatch.setattr(crawl_module, "get_rag_pipeline", AsyncMock(return_value=pipeline))
+    monkeypatch.setattr(crawl_module, "acquire_rag_pipeline", AsyncMock(return_value=pipeline))
     monkeypatch.setattr(crawl_module.db, "fetchval", AsyncMock(return_value=False))
     return pipeline
 

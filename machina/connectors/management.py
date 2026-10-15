@@ -16,6 +16,7 @@ server is removed, a replaced server's prior fields are restored.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import shutil
@@ -268,12 +269,25 @@ async def add_and_connect(
         if existing is not None and not _owner_ok(existing, agent_id):
             raise ConnectorToolError("connector belongs to another agent")
         prior = _fields_of(existing) if existing is not None else None
-        written = await service._configure_locked(fields)
+        from machina.core.background_tasks import CompletedOnCancellation
+
+        try:
+            written = await service._configure_locked(fields)
+        except CompletedOnCancellation as cancellation:
+            raise CompletedOnCancellation({
+                "connected": False, "server": cancellation.result,
+                "store": "configuration saved; connection not attempted",
+            }) from None
         written_revision = int(written.get("revision", -1))
         try:
             tools = await service.connect_and_discover(
                 config.id, launch_config=launch_config, mode=mode
             )
+        except asyncio.CancelledError:
+            raise CompletedOnCancellation({
+                "server": config.id, "store": "configuration saved",
+                "connection": "interrupted",
+            }) from None
         except Exception as exc:
             compensated = await _compensate(service, config.id, prior, written_revision)
             return {
@@ -310,7 +324,14 @@ async def remove_server(
         if not _owner_ok(config, agent_id):
             raise ConnectorToolError("connector belongs to another agent")
         if remove:
-            await service._remove_locked(name)
-            return {"removed": True, "server": name}
+            from machina.core.background_tasks import CompletedOnCancellation
+
+            try:
+                removed = await service._remove_locked(name)
+            except CompletedOnCancellation as cancellation:
+                raise CompletedOnCancellation({
+                    "removed": cancellation.result, "server": name,
+                }) from None
+            return {"removed": removed, "server": name}
         disconnected = await service.manager.disconnect(name)
         return {"removed": False, "disconnected": bool(disconnected), "server": name}

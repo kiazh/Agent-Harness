@@ -106,11 +106,17 @@ class ConnectorStore:
 
     async def configure_async(self, fields: dict[str, Any], *, expected_revision: int | None = None) -> ConnectorConfig:
         """Persist a configuration without parking the event loop on the lock."""
-        return await await_joined(asyncio.to_thread(self.configure, fields, expected_revision=expected_revision))
+        return await await_joined(
+            asyncio.to_thread(self.configure, fields, expected_revision=expected_revision),
+            capture_result=True,
+        )
 
     async def remove_async(self, connector_id: str, *, expected_revision: int | None = None) -> bool:
         """Remove a configuration without parking the event loop on the lock."""
-        return await await_joined(asyncio.to_thread(self.remove, connector_id, expected_revision=expected_revision))
+        return await await_joined(
+            asyncio.to_thread(self.remove, connector_id, expected_revision=expected_revision),
+            capture_result=True,
+        )
 
     def load(self) -> tuple[int, list[ConnectorConfig]]:
         # Atomic replacement makes read-only loading safe without creating files.
