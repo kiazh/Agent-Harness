@@ -203,3 +203,17 @@ then verified and reconciled by the coordinator:
   cancel-then-join) - commits 61e7466, e88503c, db76a8f.
 - Final gates: backend **4950 passed / 1 skipped / 9 deselected**; UI
   **480 tests / 474 passed / 6 skipped / 0 failed** (logs alongside).
+
+
+Follow-up attempt (same night): a fresh run with `agent: claude` started, the
+rebase gate's ask-user bundle flag was approved (the 32-commit bundle is the
+intended deliverable), and the run then failed at the review step with the
+claude agent exiting before doing any work (`exit status 1`, no quota message
+surfaced). Branch state was `user_owned`/clean afterwards - the run changed
+nothing. Both supported agents (codex: quota until 07:26; claude: exit 1) are
+currently unavailable, so the pipeline's Test/Push/PR/CI stages cannot be
+re-driven tonight; the coordinator instead executed and recorded the equivalent
+verification: full backend (4950/1/9) and UI (480/474/6) gates green, lint and
+ratchets green, branch pushed to `round4-fixes`. Re-run `no-mistakes axi run`
+once an agent's quota resets to obtain the pipeline's own Test/Document/Push/PR
+stamps.
