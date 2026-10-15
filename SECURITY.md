@@ -40,9 +40,12 @@ require review. Terminal symlink arguments resolve against the workspace.
 Sensitive-path checks match actual credential locations/components rather
 than words in usernames, source filenames, or documentation titles.
 `sandbox` selects Docker for terminal execution; other tools still have their
-own boundaries. `full` permits explicitly granted host capabilities. Credential
-access, privilege escalation, security settings, and destructive system actions
-remain conflicting capabilities that require explicit review even in full mode.
+own boundaries. `full` issues an explicit session-scoped grant under which host
+operations proceed without further approval — including credential access,
+privilege escalation, security settings, and destructive system actions. Routing
+mode alone authorizes nothing; the grant is bound to that session and ends when
+the session leaves `full` mode or `/approvals revoke` runs. Grant `full` only
+to a session whose operator explicitly consents to no-approval host authority.
 Agent requests cannot grant themselves human authority or widen delegated
 authority inherited from a parent.
 

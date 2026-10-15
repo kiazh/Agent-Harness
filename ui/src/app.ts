@@ -290,15 +290,6 @@ export class App implements FeatureHost {
 				// Saved skin is best-effort; the default applies otherwise.
 			}
 			try {
-				const { mode } = await this.client.request<{ mode: string }>("mode.get", {}, 30_000);
-				if (typeof mode === "string") this.footer.mode = mode;
-				if (mode === "full") {
-					this.transcript.addNotice("FULL HOST mode active — ordinary host operations proceed; credentials/elevation/destructive ops still ask.", "warning");
-				}
-			} catch {
-				// Mode display is best-effort.
-			}
-			try {
 				// Guarantee the default profile exists (first-touch RL/growth/memory identity).
 				await this.client.request("profile.get", { userId: this.defaultProfile }, 30_000);
 			} catch {
@@ -316,6 +307,21 @@ export class App implements FeatureHost {
 					agent ? { agent } : {},
 				);
 				this.switchTo(session, []);
+			}
+			try {
+				// Session-scoped authority for the initial session (finding 8):
+				// resolve AFTER the session exists so the footer and the
+				// notice below reflect the governing session, never the
+				// global default. Later switches refresh via switchTo.
+				const { mode } = await this.request<{ mode: string }>(
+					"mode.get",
+					this.current ? { sessionId: this.current.id } : {},
+				);
+				if (mode === "full") {
+					this.transcript.addNotice("FULL HOST mode active for this session: host operations proceed without further approval, including credential access, elevation, and destructive system ops.", "warning");
+				}
+			} catch {
+				// Mode display is best-effort.
 			}
 		} catch (error) {
 			this.footer.status = "offline";
@@ -438,7 +444,20 @@ export class App implements FeatureHost {
 		this.family.reseed();
 		this.syncAgentCount();
 		this.refreshFamily();
+		// Finding 8: the footer must render the newly visible session's
+		// authority, never the previous session's (or the global default).
+		this.refreshSessionMode(session.id);
 		this.tui.requestRender();
+	}
+
+	/**
+	 * Re-query the gateway for a session's effective mode and mirror it
+	 * into the footer (via request, which syncs footer.mode on mode.get).
+	 * Best-effort: a failed refresh keeps the previous indicator rather
+	 * than blanking it, and never rejects into the switch path.
+	 */
+	private refreshSessionMode(sessionId: string): void {
+		void this.request<{ mode: string }>("mode.get", { sessionId }).catch(() => {});
 	}
 
 	updateSession(session: SessionInfo): void {
@@ -653,6 +672,7 @@ export class App implements FeatureHost {
 					title: options.title,
 					description: options.description,
 					placeholder: options.placeholder ?? "••••••••",
+					allowEmpty: options.allowEmpty,
 				});
 				form.onSubmit = close;
 				form.onCancel = () => close();

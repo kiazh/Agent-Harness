@@ -247,7 +247,7 @@ Offline policy-training and evaluation modules are research utilities, separate 
 
 ### Permissions and shell execution
 
-The default mode is `ask`; `workspace`, `sandbox` and `full` are also available. Routine permitted project operations proceed without repeated prompts. Sensitive actions, including credential access, elevation and destructive system operations, still require exact approval. Changing mode does not grant blanket sensitive consent.
+The default mode is `ask`; `workspace`, `sandbox` and `full` are also available. In `ask`/`workspace`, routine permitted project operations proceed without repeated prompts while risky actions ask. Activating `full` for a session issues an explicit session-scoped grant: host operations in that session then proceed without further approval, including credential access, privilege elevation, and destructive system operations. The grant covers that session only — it never changes the default for future sessions — and ends when the session leaves `full` mode or `/approvals revoke` runs.
 
 Shell syntax such as `&&`, `;` and pipes is supported through the shared shell parser. Approval classification examines the command stages; syntax alone is neither an unconditional refusal nor a bypass. Tools remain subject to path, backend and execution limits. Host execution is not an OS sandbox. Read [SECURITY.md](SECURITY.md) before using elevated modes, plugins or scheduled scripts.
 

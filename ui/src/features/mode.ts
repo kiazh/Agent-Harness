@@ -13,7 +13,15 @@ const MODE_HELP = [
 ].join("\n");
 
 async function refreshMode(host: FeatureHost): Promise<string> {
-	const { mode } = await host.request<ModeResult>("mode.get", {});
+	// Finding 8: status must resolve the ACTIVE session's authority, never
+	// the global default. Without the session ID the gateway answers
+	// mode.get with the process-global default (ask), so a full session
+	// would be reported as ask.
+	const session = host.session();
+	const { mode } = await host.request<ModeResult>(
+		"mode.get",
+		session ? { sessionId: session.id } : {},
+	);
 	return mode;
 }
 
@@ -54,7 +62,7 @@ export const modeCommand: Command = {
 		const result = await host.request<ModeResult>("mode.set", params);
 		host.print(
 			sub === "full"
-				? `FULL HOST active for this session. Sensitive actions (credentials, elevation, destructive system ops) still ask. /approvals revoke to leave.`
+				? `FULL HOST active for this session: host operations proceed without further approval, including credential access, elevation, and destructive system ops. This session only. /approvals revoke to leave.`
 				: `Mode: ${result.mode} (backend: ${result.backend})`,
 			sub === "full" ? "warning" : "success",
 		);

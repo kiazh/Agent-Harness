@@ -18,7 +18,7 @@ async def mode_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
     from machina.core.session_mode import get_session_mode, resolve_effective_mode
 
-    session_id = params.get("sessionId")
+    session_id = params.get("sessionId", params.get("session_id"))
     if session_id:
         effective = await resolve_effective_mode(str(session_id))
         return {
