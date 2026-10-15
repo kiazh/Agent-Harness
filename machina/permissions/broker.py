@@ -302,16 +302,29 @@ class PermissionBroker:
         an approved-but-unclaimed decision is claimed and executed exactly
         once here — never reported as "expired" against the record, and never
         left as a stale approved row a later retry could replay.
+        R4-066b: the resolve return is this worker's commit-time view, not
+        truth — a decision that becomes durable between the conditional
+        UPDATE and the report (another worker; a commit that landed after the
+        awaited cancel) must still win. The report is therefore derived from
+        a fresh durable read, never from the resolve return.
         R4-065: a genuine expiry is surfaced on the transport's decision
         channel (when one registered a sink) so the UI retires the card
-        without a decision.
+        without a decision; only an expiry this broker recorded itself is
+        notified.
         """
         resolved = await _store.resolve_decision(req.request_id, "expired", principal)
-        if resolved is not None:
-            _notify_resolution({**approval, "status": "expired"})
-            raise NeedsApproval({**approval, "status": "expired"}) from None
+        # F6: only the durable record may be reported as the verdict. Re-read
+        # the authority after the conditional expire; a decision that landed
+        # in the window above is honoured below (approved → claim/execute),
+        # never reported as an expiry the record does not carry.
         current = await _store.get_approval(req.request_id) or {}
         state = str(current.get("status") or "")
+        if state == "expired":
+            if resolved is not None:
+                # This broker recorded the expiry: surface it on the
+                # transport's decision channel (R4-065).
+                _notify_resolution({**approval, "status": "expired"})
+            raise NeedsApproval({**approval, "status": "expired"}) from None
         if state == "approved" and not current.get("consumed"):
             if current.get("digest") == req.digest and await _store.claim_execution(
                 req.request_id, digest=req.digest, session_id=req.session_id

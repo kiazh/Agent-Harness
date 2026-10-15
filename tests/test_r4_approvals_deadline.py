@@ -326,6 +326,99 @@ async def test_decide_at_deadline_invariant_never_mismatches_durable(
     print(f"[R4-066] jitter={jitter} timeout={timeout} allowed={allowed}")
 
 
+@needs_test_db
+async def test_deadline_report_derives_from_durable_record_not_resolve_return(
+    isolated_db, monkeypatch
+):
+    """R4-066b: FORCED interleave — the decision becomes durable in the window
+    between the expire's conditional UPDATE and the broker's report. The report
+    must come from the durable read: the approved row is claimed and executed
+    exactly once, never reported "expired", never left claimable/replayable.
+
+    Pre-fix (RED): the broker raised ``NeedsApproval(status="expired")`` from
+    the resolve return while the durable row read "approved".
+    """
+    from machina.core.config import config
+    from machina.permissions import broker as brokermod
+    from machina.permissions import store as st
+    from machina.permissions.broker import ApprovalDenied, NeedsApproval
+
+    timeout = 0.05
+    session = await _session(title="r4-approval-late-approve")
+    req = _req(session_id=str(session.id), content="late-approve")
+    monkeypatch.setattr(config, "approval_timeout", timeout)
+
+    hook = {"fired": False}
+    real_resolve = st.resolve_decision
+
+    async def expire_then_decision_lands(request_id, verdict, principal):
+        result = await real_resolve(request_id, verdict, principal)
+        if verdict == "expired" and result is not None:
+            # The commit that was already in flight when the expiry ran: it
+            # becomes durable after the conditional UPDATE, before the broker
+            # reports. A worker's local view cannot see this; a durable read
+            # of the authority can. Direct write because the store's public
+            # transitions are (correctly) conditional — this simulates the
+            # cross-worker commit landing in the window.
+            await isolated_db.execute(
+                "UPDATE permission_approvals SET status = 'approved' WHERE request_id = $1",
+                request_id,
+            )
+            hook["fired"] = True
+        return result
+
+    monkeypatch.setattr(st, "resolve_decision", expire_then_decision_lands)
+
+    async def stall(card):  # never resolves before the deadline
+        await asyncio.sleep(30)
+        return "approved"
+
+    brokermod.set_approval_handler(stall, principal="tui", turn_id="late-approve")
+    try:
+        try:
+            out = await brokermod.permission_broker.guard(req)
+        except NeedsApproval as pause:
+            pytest.fail(
+                f"R4-066b: reported {pause.approval.get('status')!r} while the durable row is 'approved'"
+            )
+        # The honoured decision is terminal: not claimable again, never replayable.
+        with pytest.raises(ApprovalDenied):
+            await brokermod.permission_broker.guard(req)
+    finally:
+        brokermod.set_approval_handler(None)
+    assert hook["fired"], "the forced late-commit window did not run"
+    assert out.approval_id == req.request_id
+    record = await st.get_approval(req.request_id)
+    assert record is not None and record["status"] == "claimed", record
+    assert record["consumed"] is True
+    assert await st.find_approved_unclaimed(str(session.id), req.digest) is None
+
+
+@needs_test_db
+async def test_get_approval_prefers_durable_truth_over_a_stale_mirror(isolated_db):
+    """R4-066b/F6: with the durable authority reachable, a mirrored status the
+    durable row does not carry is never surfaced and never authorizes an
+    execution — the conditional claim re-checks the durable row."""
+    from machina.permissions import store as st
+
+    session = await _session(title="r4-approval-mirror-truth")
+    req = _req(session_id=str(session.id), content="mirror-truth")
+    await st.create_approval(req, principal="tui")
+    assert await st.resolve_decision(req.request_id, "expired", principal="tui")
+
+    # A lost local race advanced the mirror to a status durable never had.
+    async with st._mem.lock:
+        st._mem.approvals[req.request_id]["status"] = "approved"
+
+    record = await st.get_approval(req.request_id)
+    assert record is not None and record["status"] == "expired", record
+    assert not await st.claim_execution(
+        req.request_id, digest=req.digest, session_id=str(session.id)
+    ), "a stale mirror must never authorize an execution"
+    async with st._mem.lock:
+        assert st._mem.approvals[req.request_id]["consumed"] is True
+
+
 # ─── R4-067: allowed-action audit context ──────────────────────────────────
 
 
