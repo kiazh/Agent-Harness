@@ -32,6 +32,8 @@ def _execution_workspace() -> Path:
 # Global RAG pipeline instance (lazy-initialized)
 _rag_pipeline: RAGPipeline | None = None
 _rag_pipeline_lock = asyncio.Lock()
+_pipeline_users: dict[int, int] = {}
+_retired_pipelines: dict[int, RAGPipeline] = {}
 # IDENTITY of the shared instance: (reranker selection identity,
 # resolved embedding selection identity, (keyword RRF weight, dense RRF
 # weight)). Rotation of any component — a different reranker
@@ -194,8 +196,36 @@ async def get_rag_pipeline() -> RAGPipeline:
                     current[2],
                 )
                 if previous is not None:
-                    await _close_pipeline_quietly(previous)
+                    if _pipeline_users.get(id(previous), 0):
+                        _retired_pipelines[id(previous)] = previous
+                    else:
+                        await _core_symbol("machina.core.background_tasks", "await_joined")(
+                            _close_pipeline_quietly(previous)
+                        )
     return _rag_pipeline
+
+
+async def acquire_rag_pipeline() -> RAGPipeline:
+    """Retain the shared generation until its consumer releases it."""
+    pipeline = await get_rag_pipeline()
+    key = id(pipeline)
+    _pipeline_users[key] = _pipeline_users.get(key, 0) + 1
+    return pipeline
+
+
+async def release_rag_pipeline(pipeline: RAGPipeline) -> None:
+    """Release a consumer and close an unused retired generation."""
+    key = id(pipeline)
+    users = _pipeline_users.get(key, 0)
+    if users > 1:
+        _pipeline_users[key] = users - 1
+    elif users == 1:
+        del _pipeline_users[key]
+        retired = _retired_pipelines.pop(key, None)
+        if retired is not None:
+            await _core_symbol("machina.core.background_tasks", "await_joined")(
+                _close_pipeline_quietly(retired)
+            )
 
 
 @registry.register(
@@ -242,7 +272,7 @@ async def index_document(
 
     # AH-019: resolve the owning agent and pass it explicitly so documents
     # are not mislabeled with the pipeline default ("harness").
-    pipeline = await get_rag_pipeline()
+    pipeline = await acquire_rag_pipeline()
 
     try:
         chunks = await pipeline.index_document(
@@ -267,6 +297,8 @@ async def index_document(
             error=str(e),
         )
         raise ToolError(f"Error indexing document: {e}") from e
+    finally:
+        await release_rag_pipeline(pipeline)
 
 
 @registry.register(
@@ -317,7 +349,7 @@ async def search_documents(
     if type(top_k) is not int or not 1 <= top_k <= 10:
         raise ValidationError("top_k must be an integer between 1 and 10")
 
-    pipeline = await get_rag_pipeline()
+    pipeline = await acquire_rag_pipeline()
 
     try:
         results = await pipeline.search(
@@ -366,6 +398,8 @@ async def search_documents(
             error=str(e),
         )
         raise ToolError(f"Error searching documents: {e}") from e
+    finally:
+        await release_rag_pipeline(pipeline)
 
 
 registry.declare_effects(

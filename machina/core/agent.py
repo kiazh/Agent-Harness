@@ -1030,29 +1030,49 @@ class BaseReActAgent:
                             item["elapsed_ms"] = (time.monotonic() - start) * 1000
                             return
                         try:
-                            result = await asyncio.wait_for(
-                                registry.execute(tool_name, **tool_args),
-                                timeout=tool_timeout,
+                            from machina.core.background_tasks import (
+                                CompletedOnCancellation,
+                                await_joined,
                             )
-                            if getattr(result, "outcome_unknown", False):
-                                item["_outcome_unknown"] = True
-                            from machina.tools.agents import DelegationToolResult
 
-                            if isinstance(result, DelegationToolResult):
-                                item["_needs_approvals"] = result.needs_approval
-                                item["_delegated_tokens"] = result.tokens_used
-                        except asyncio.CancelledError:
-                            # LP-01 lifecycle: a claimed approval must not hang
-                            # in 'claimed' when its execution is cancelled.
-                            _aid = item.get("_approval_id", "")
-                            if _aid:
+                            def save_result(completed):
+                                item["result"] = str(completed)
+                                item["_failed"] = bool(getattr(completed, "is_error", False)) or str(
+                                    completed
+                                ).startswith("Error:")
+                                item["elapsed_ms"] = (time.monotonic() - start) * 1000
+                                if getattr(completed, "outcome_unknown", False):
+                                    item["_outcome_unknown"] = True
+                                from machina.tools.agents import DelegationToolResult
+
+                                if isinstance(completed, DelegationToolResult):
+                                    item["_needs_approvals"] = completed.needs_approval
+                                    item["_delegated_tokens"] = completed.tokens_used
+
+                            async def execute():
                                 try:
-                                    await asyncio.shield(_broker.complete(_aid, "cancelled"))
-                                except Exception as _boundary_error:
-                                    # Optional fallback preserves the primary outcome; report no payload.
-                                    record_failure(
-                                        "agent._execute_tool_calls_stream", _boundary_error
-                                    )
+                                    completed = await registry.execute(tool_name, **tool_args)
+                                except CompletedOnCancellation as cancellation:
+                                    save_result(cancellation.result)
+                                    raise
+                                save_result(completed)
+                                return completed
+
+                            execution = asyncio.create_task(execute())
+                            result = await asyncio.wait_for(execution, timeout=tool_timeout)
+                        except asyncio.CancelledError:
+                            async def finish_execution():
+                                outcomes = await asyncio.gather(execution, return_exceptions=True)
+                                for error in outcomes:
+                                    if isinstance(error, Exception):
+                                        record_failure("agent.cancelled_execution", error)
+                                if "elapsed_ms" not in item:
+                                    _aid = item.get("_approval_id", "")
+                                    if _aid:
+                                        await _broker.complete(_aid, "cancelled")
+                                        item["_approval_done"] = True
+
+                            await await_joined(finish_execution())
                             raise
                     finally:
                         try:
@@ -1082,6 +1102,8 @@ class BaseReActAgent:
                 # tool failure that permits another provider call.
                 raise
             except Exception as e:
+                if isinstance(e, asyncio.TimeoutError) and "elapsed_ms" in item:
+                    return
                 if isinstance(e, asyncio.TimeoutError):
                     # R4-019: wait_for raises a message-less TimeoutError; type it.
                     e = f"tool '{tool_name}' timed out after {tool_timeout:g}s"
@@ -1191,11 +1213,22 @@ class BaseReActAgent:
                         t.cancel()
                 # Cancellation is complete only when children retire their
                 # claims, reservations, and owned providers.
-                await asyncio.gather(*tasks, return_exceptions=True)
-                if cancelled:
+                from machina.core.background_tasks import await_joined
+
+                async def finish_batch():
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    if cancelled:
+                        await self._finalize_completed_tools(
+                            planned, session_id, pending_chunks, tool_calls_made
+                        )
+
+                try:
+                    await await_joined(finish_batch())
+                except asyncio.CancelledError:
                     await self._finalize_completed_tools(
                         planned, session_id, pending_chunks, tool_calls_made
                     )
+                    raise
 
         # ── Phase D: metrics for denied + persistence in provider order ───
         # Provider message order must follow the original tool_calls order
@@ -1387,6 +1420,15 @@ class BaseReActAgent:
         cancellation, and is idempotent per item. Provider-message ordering is
         deliberately untouched (the aborted turn discards those messages).
         """
+        from machina.core.background_tasks import await_joined
+
+        await await_joined(
+            self._finalize_completed_tools_joined(planned, session_id, pending_chunks, tool_calls_made)
+        )
+
+    async def _finalize_completed_tools_joined(
+        self, planned, session_id, pending_chunks, tool_calls_made
+    ) -> None:
         for item in planned:
             if item["name"] is None or item.get("_denied") or item.get("_recorded"):
                 continue

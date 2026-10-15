@@ -506,7 +506,9 @@ def _atomic_write_file(file_path: Path, content: str, *, mode: int | None = None
                 pass
 
 
-async def _run_worker_joined(operation: Callable[[], str]) -> str:
+async def _run_worker_joined(
+    operation: Callable[[], str], *, capture_result: bool = False
+) -> str:
     """Run *operation* in a worker thread, joining it on cancellation.
 
     Cancelling the await of ``asyncio.to_thread`` stops the *await*, not the
@@ -521,7 +523,7 @@ async def _run_worker_joined(operation: Callable[[], str]) -> str:
     """
     from machina.core.background_tasks import await_joined
 
-    return await await_joined(asyncio.to_thread(operation))
+    return await await_joined(asyncio.to_thread(operation), capture_result=capture_result)
 
 
 # read_file paging bounds: the byte gate applies to the selected lines (not
@@ -876,7 +878,7 @@ async def write_file(path: str, content: str) -> str:
                 raise
             return f"Successfully wrote {len(content)} characters to {path}"
 
-        return await _run_worker_joined(_write)
+        return await _run_worker_joined(_write, capture_result=True)
     except Exception as e:
         raise ToolError(f"Error writing file: {e}") from e
 

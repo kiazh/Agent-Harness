@@ -850,3 +850,32 @@ def test_provenance_reports_repo_source(tmp_path, monkeypatch):
     assert _provenance_of(registry, skill) == "url:https://github.com/o/r"
     plain = SimpleNamespace(name="plain", source_type="local", file_path="/none/SKILL.md")
     assert _provenance_of(registry, plain) == "local"
+
+
+async def test_cancelled_stage_cleans_clone_acquired_by_worker(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+    from machina.tools import repo as repo_tools
+
+    entered, release = threading.Event(), threading.Event()
+    root = tmp_path / "machina-repo-stage-probe" / "repo"
+
+    def clone(source):
+        root.mkdir(parents=True)
+        entered.set()
+        assert release.wait(5)
+        return root, "revision"
+
+    monkeypatch.setattr(repo_install, "clone_repo", clone)
+    task = asyncio.create_task(repo_tools.repo_stage("https://github.com/o/r"))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not root.parent.exists()
+    finally:
+        release.set()

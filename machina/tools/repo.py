@@ -54,33 +54,25 @@ async def repo_stage(url: str) -> str:
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
     clone_parent = None
-    try:
-        # Clone and staged-plan publication are filesystem effects, so their
-        # workers are joined on cancellation (HELD-44 semantics via
-        # _run_worker_joined): a cancelled stage must not detach a worker that
-        # finishes writing after turn ownership is released. The scan read has
-        # no effects and stays on bare to_thread (same read/write split as
-        # tools/file.py).
-        repo_dir, revision = await _run_worker_joined(lambda: repo_install.clone_repo(source))
+
+    def clone():
+        nonlocal clone_parent
+        repo_dir, revision = repo_install.clone_repo(source)
         clone_parent = repo_dir.parent
-    except repo_install.RepoInstallError as exc:
-        return f"Error: {exc}"
-    except OSError:
-        logger.warning("repo staging clone failed", exc_info=True)
-        return "Error: staging failed (filesystem error)"
+        return repo_dir, revision
+
     try:
-        plan = await asyncio.to_thread(repo_install.scan_repo, repo_dir, source, revision)
+        repo_dir, revision = await _run_worker_joined(clone)
+        plan = await _run_worker_joined(lambda: repo_install.scan_repo(repo_dir, source, revision))
         await _run_worker_joined(lambda: repo_install.write_staged_plan(plan, repo_dir))
     except repo_install.RepoInstallError as exc:
         return f"Error: {exc}"
     except OSError:
-        logger.warning("repo staging write failed", exc_info=True)
+        logger.warning("repo staging failed", exc_info=True)
         return "Error: staging failed (filesystem error)"
     finally:
         if clone_parent is not None:
-            # Cleanup is also joined so the discarded clone is gone before
-            # cancellation is reported.
-            await _run_worker_joined(lambda: shutil.rmtree(clone_parent, ignore_errors=True))
+            await _run_worker_joined(lambda: shutil.rmtree(clone_parent))
     summary = plan.summary()
     lines = [
         f"Staged {source.url} at {revision[:12]} (plan {plan.digest[:16]}...).",

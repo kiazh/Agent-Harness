@@ -119,7 +119,15 @@ async def join_agent_background_tasks(
     return len(tasks)
 
 
-async def await_joined(operation):
+class CompletedOnCancellation(asyncio.CancelledError):
+    """Cancellation carrying the result of an operation that finished."""
+
+    def __init__(self, result):
+        super().__init__()
+        self.result = result
+
+
+async def await_joined(operation, *, capture_result: bool = False):
     """Finish an operation before propagating caller cancellation."""
     task = asyncio.ensure_future(operation)
     try:
@@ -134,4 +142,6 @@ async def await_joined(operation):
                 break
         if not task.cancelled() and task.exception() is not None:
             logger.warning("Joined operation failed during cancellation: %s", task.exception())
+        if capture_result and not task.cancelled() and task.exception() is None:
+            raise CompletedOnCancellation(task.result()) from None
         raise

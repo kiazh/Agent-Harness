@@ -282,3 +282,86 @@ def test_agent_response_derives_all_plural_pauses():
         tool_calls=[{"tool": "e", "needs_approvals": [], "needs_approval": p2}],
     )
     assert [p["request_id"] for p in fallback.needs_approval] == ["r2"]
+
+
+async def test_repeated_cancel_during_recording_finishes_entire_batch(monkeypatch):
+    from machina.permissions.broker import permission_broker
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    outcomes = []
+
+    async def complete(approval_id, outcome):
+        entered.set()
+        await release.wait()
+        outcomes.append((approval_id, outcome))
+
+    monkeypatch.setattr(permission_broker, "complete", complete)
+    agent = _StubAgent()
+    planned = [
+        {"name": "probe", "args": {}, "result": str(i), "elapsed_ms": 1,
+         "_approval_id": str(i)}
+        for i in range(2)
+    ]
+    pending, made = [], []
+    task = asyncio.create_task(agent._finalize_completed_tools(
+        planned, uuid.uuid4(), pending, made
+    ))
+    await entered.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(pending) == len(made) == 2
+    assert outcomes == [("0", "completed"), ("1", "completed")]
+    assert all(item["_recorded"] and item["_approval_done"] for item in planned)
+
+
+async def test_cancelled_worker_write_keeps_completed_effect(sleep_tool, tmp_path, monkeypatch):
+    import threading
+    import machina.tools.file as files
+    from machina.permissions.broker import permission_broker
+
+    entered, release = threading.Event(), threading.Event()
+    target = tmp_path / "completed.txt"
+    monkeypatch.setattr(files, "_BASE_DIR", tmp_path.resolve())
+    real_write = files._atomic_write_file_at
+
+    def gated_write(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return real_write(*args, **kwargs)
+
+    async def probe(**kwargs):
+        return await files.write_file("completed.txt", "saved")
+
+    async def guard(request):
+        return None
+
+    monkeypatch.setattr(files, "_atomic_write_file_at", gated_write)
+    monkeypatch.setattr(permission_broker, "guard", guard)
+    monkeypatch.setattr(registry._tools["sleep_probe"], "func", probe)
+    response = LLMResponse(content="", model="test", tool_calls=[_tool_call("sleep_probe", {}, 0)])
+    pending, made = [], []
+    agent = _StubAgent()
+
+    async def drive():
+        async for _ in agent._execute_tool_calls_stream(response, [], made, uuid.uuid4(), pending):
+            pass
+
+    task = asyncio.create_task(drive())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert target.read_text() == "saved"
+        assert len(made) == len(pending) == 1
+        assert pending[0]["payload"]["result"].startswith("Successfully wrote")
+    finally:
+        release.set()

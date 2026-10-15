@@ -209,3 +209,21 @@ def test_recursive_split_leading_separator_keeps_adjacency():
         # Overlap may reach backward (cur.start < prev.end) but never leave a
         # forward gap: the dropped separator is now carried by a chunk.
         assert cur.start <= prev.end, f"forward coverage gap: {prev.end} -> {cur.start}"
+
+
+async def test_replaced_pipeline_stays_open_until_all_consumers_release(monkeypatch):
+    import machina.tools.rag as rag_tools
+
+    _setup_config(monkeypatch, openai_api_key="key-ONE")
+    _stub_pipeline_embedder(monkeypatch)
+    _reset_shared_pipeline(monkeypatch)
+    first = await rag_tools.acquire_rag_pipeline()
+    assert await rag_tools.acquire_rag_pipeline() is first
+    old_embedder = first._embedder
+    _setup_config(monkeypatch, openai_api_key="key-TWO")
+    assert await rag_tools.get_rag_pipeline() is not first
+    old_embedder.close.assert_not_awaited()
+    await rag_tools.release_rag_pipeline(first)
+    old_embedder.close.assert_not_awaited()
+    await rag_tools.release_rag_pipeline(first)
+    old_embedder.close.assert_awaited_once()
