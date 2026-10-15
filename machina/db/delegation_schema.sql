@@ -31,6 +31,10 @@ ALTER TABLE agent_messages DROP CONSTRAINT IF EXISTS agent_messages_status_check
 ALTER TABLE agent_messages ADD CONSTRAINT agent_messages_status_check
     CHECK (status IN ('pending', 'complete', 'error', 'cancelled', 'waiting_approval'));
 
+-- R4-029: a post-run ledger failure closes the delegation row with NULL
+-- (= explicitly unknown) tokens instead of stranding it non-terminal.
+ALTER TABLE agent_messages ALTER COLUMN tokens_used DROP NOT NULL;
+
 -- Keep one attributed provider row; snapshot charged scopes so usage survives
 -- deleting any session and totals never count a wrapper reservation twice.
 ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS ancestor_session_ids UUID[] NOT NULL DEFAULT '{}';

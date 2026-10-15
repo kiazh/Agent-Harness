@@ -272,7 +272,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
     task TEXT NOT NULL,
     response TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete', 'error', 'cancelled')),
-    tokens_used INT NOT NULL DEFAULT 0,
+    tokens_used INT DEFAULT 0,                -- NULL = spend unknown, never zero (R4-029)
     created_at TIMESTAMPTZ DEFAULT now(),
     completed_at TIMESTAMPTZ
 );

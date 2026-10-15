@@ -117,6 +117,13 @@ async def test_success_keeps_known_usage_without_database(delegation, monkeypatc
 async def test_unavailable_production_accounting_never_reports_zero(
     delegation, monkeypatch, outcome
 ):
+    """R4-029: a failed ledger read closes the row with NULL (unknown) tokens.
+
+    The old contract left the delegation row non-terminal and recorded
+    nothing. The new contract records exactly one terminal ``error`` row
+    whose ``tokens`` is NULL — explicitly unknown, never a phantom zero —
+    and still raises the typed error so the parent stops spending.
+    """
     from machina.core.exceptions import DatabaseError
     from machina.core.usage import db, usage_store
 
@@ -134,7 +141,11 @@ async def test_unavailable_production_accounting_never_reports_zero(
 
     with pytest.raises(DatabaseError, match="delegation usage accounting unavailable"):
         await delegation.build(Child()).delegate("coder", "work")
-    assert delegation.recorded == []
+    assert len(delegation.recorded) == 1
+    row = delegation.recorded[-1]
+    assert row["status"] == "error"
+    assert row["tokens"] is None
+    assert "accounting unavailable" in row["response"]
 
 
 async def test_tool_timeout_returns_accounting_receipt(delegation, monkeypatch):
@@ -258,7 +269,13 @@ async def test_failed_child_spend_is_accounted_without_implicit_turn_cutoff(
 
     monkeypatch.setattr(agent, "_call_llm_with_retry", complete)
     monkeypatch.setattr(agent, "_stream_llm_with_retry", stream)
-    token = module.delegation_deadline.set(asyncio.get_running_loop().time() + 0.02)
+    # Only the timeout outcome needs a compressed deadline; a raising or
+    # ledger-failing child settles without the clock. A 20 ms window can expire
+    # before the child's first step under load (pre-existing flake: the fixture
+    # charge is never set, so the recorded spend is 0); 0.25 s keeps the timeout
+    # path fast with a wide margin for child startup.
+    deadline_after = 0.25 if outcome == "timeout" else 120.0
+    token = module.delegation_deadline.set(asyncio.get_running_loop().time() + deadline_after)
     try:
         expectation = (
             pytest.raises(DatabaseError, match="delegation usage accounting unavailable")
@@ -282,7 +299,95 @@ async def test_failed_child_spend_is_accounted_without_implicit_turn_cutoff(
     if outcome == "ledger_unavailable":
         assert len(calls) == 1
         assert delegation.charges[delegation.child.id] == 13
+        # R4-029: the failed ledger read still closes the row (unknown tokens)
+        # before the typed error stops the parent loop.
+        assert len(delegation.recorded) == 1
+        assert delegation.recorded[-1]["status"] == "error"
+        assert delegation.recorded[-1]["tokens"] is None
         return
     assert len(calls) == 2
     assert response.tokens_used == 15
     assert response.content == "continued"
+
+
+async def test_ledger_failure_closes_cancelled_row_with_unknown_tokens(delegation, monkeypatch):
+    """R4-029: cancellation plus a failed ledger read still closes the row."""
+    from machina.core.exceptions import DatabaseError
+    from machina.core.usage import db, usage_store
+
+    monkeypatch.setattr(db, "_pool", object())
+    monkeypatch.setattr(
+        usage_store, "summary", AsyncMock(side_effect=DatabaseError("ledger read failed"))
+    )
+    entered = asyncio.Event()
+
+    class Child:
+        async def run(self, session_id, *_args, **_kwargs):
+            delegation.charges[session_id] = 13
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(delegation.build(Child()).delegate("coder", "work"))
+    await asyncio.wait_for(entered.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(delegation.recorded) == 1
+    assert delegation.recorded[-1]["status"] == "cancelled"
+    assert delegation.recorded[-1]["tokens"] is None
+
+
+async def test_ledger_failure_closes_real_row_with_unknown_tokens(monkeypatch, db_pool):
+    """R4-029 E2E: the recovery write reaches the real schema.
+
+    The row is created by the production INSERT and closed by the production
+    UPDATE with NULL tokens after the injected ledger failure; it is read back
+    from Postgres to prove no row is left ``pending`` and no zero is recorded.
+    """
+    from machina.core import orchestrator as module
+    from machina.core.exceptions import DatabaseError
+    from machina.core.usage import usage_store
+
+    monkeypatch.setattr(module, "db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
+    monkeypatch.setattr(
+        usage_store, "summary", AsyncMock(side_effect=DatabaseError("ledger read failed"))
+    )
+    monkeypatch.setattr(
+        module.agent_registry, "get", AsyncMock(return_value=AgentDef(name="coder"))
+    )
+    monkeypatch.setattr(
+        module.session_manager,
+        "create",
+        AsyncMock(return_value=Session(id=uuid4(), agent_id="coder")),
+    )
+    monkeypatch.setattr(
+        "machina.core.session_mode.resolve_effective_mode", AsyncMock(return_value="ask")
+    )
+
+    class Child:
+        async def run(self, session_id, *_args, **_kwargs):
+            return AgentResponse(content="done", tokens_used=7)
+
+    orch = Orchestrator(agent_factory=lambda _: Child())
+    monkeypatch.setattr(orch, "_parent_context", AsyncMock(return_value=""))
+    captured = {}
+    real_start = orch._record_start
+
+    async def capture_start(*args, **kwargs):
+        message_id = await real_start(*args, **kwargs)
+        captured["id"] = message_id
+        return message_id
+
+    monkeypatch.setattr(orch, "_record_start", capture_start)
+
+    with pytest.raises(DatabaseError, match="delegation usage accounting unavailable"):
+        await orch.delegate("coder", "work")
+
+    row = await db_pool.fetchrow(
+        "SELECT status, tokens_used, response FROM agent_messages WHERE id = $1",
+        captured["id"],
+    )
+    assert row["status"] == "error"
+    assert row["tokens_used"] is None
+    assert "accounting unavailable" in row["response"]

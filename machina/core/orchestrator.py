@@ -21,6 +21,7 @@ from machina.core.assembler import PromptAssembler, get_token_count, truncate_to
 from machina.core.background_tasks import join_agent_background_tasks
 from machina.core.config import config
 from machina.core.context import context_manager
+from machina.core.exceptions import DelegationAccountingError
 from machina.core.session import session_manager
 from machina.db.connection import db
 from machina.observability.diagnostics import record_failure
@@ -341,6 +342,13 @@ class Orchestrator:
                 await self._record_end(
                     message_id, status="cancelled", response="cancelled", tokens=tokens
                 )
+            except DelegationAccountingError as accounting_error:
+                # R4-029: spend unknown — close the row with NULL tokens rather
+                # than strand it; the cancellation itself still propagates.
+                await self._close_row_with_unknown_spend(
+                    message_id, status="cancelled", response="cancelled"
+                )
+                record_failure("orchestrator.delegate", accounting_error)
             except Exception as accounting_error:
                 # Accounting failures must not swallow the parent's cancellation.
                 record_failure("orchestrator.delegate", accounting_error)
@@ -348,7 +356,15 @@ class Orchestrator:
         except Exception as e:
             logger.exception("Delegation to %s failed", agent_name)
             detail = "delegation timed out" if isinstance(e, TimeoutError) else str(e)
-            tokens = await self._charged_child_tokens(child.id, agent_name)
+            try:
+                tokens = await self._charged_child_tokens(child.id, agent_name)
+            except DelegationAccountingError as accounting_error:
+                # R4-029: spend unknown — close the row before re-raising so
+                # the parent stops spending without a stranded delegation.
+                await self._close_row_with_unknown_spend(
+                    message_id, status="error", response=f"Error: {accounting_error}"
+                )
+                raise
             await self._record_end(
                 message_id, status="error", response=f"{type(e).__name__}: {detail}", tokens=tokens
             )
@@ -384,7 +400,16 @@ class Orchestrator:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("orchestrator.delegate", _boundary_error)
 
-        tokens = await self._charged_child_tokens(child.id, agent_name, response.tokens_used)
+        try:
+            tokens = await self._charged_child_tokens(child.id, agent_name, response.tokens_used)
+        except DelegationAccountingError as accounting_error:
+            # R4-029: the child already ran; the spend cannot be read. Close
+            # the row with NULL tokens (explicitly unknown, never zero) and
+            # re-raise so the parent stops spending.
+            await self._close_row_with_unknown_spend(
+                message_id, status="error", response=f"Error: {accounting_error}"
+            )
+            raise
         pauses = getattr(response, "needs_approval", None)
         pauses = (
             [dict(pause) for pause in pauses if isinstance(pause, dict)]
@@ -402,14 +427,6 @@ class Orchestrator:
         if status == "complete" and expected_artifact_path is not None:
             _ok, _reason = self._check_expected_artifact(expected_artifact_path)
             if not _ok:
-                # S1 backtrack: one forced synthesize/write attempt via the
-                # existing helper (called, never reimplemented) before error.
-                try:
-                    from machina.core import progress as _progress
-
-                    _progress.should_write_first(0, True)
-                except Exception as _backtrack_error:
-                    record_failure("orchestrator.delegate.backtrack", _backtrack_error)
                 status = "error"
                 final_content = _reason
         await self._record_end(message_id, status=status, response=final_content, tokens=tokens)
@@ -440,7 +457,6 @@ class Orchestrator:
         Reading the ledger adds no wrapper charge. The returned response may
         already include descendants, so take the maximum rather than adding it.
         """
-        from machina.core.exceptions import DelegationAccountingError
         from machina.core.usage import db as usage_db
         from machina.core.usage import usage_store
 
@@ -455,6 +471,21 @@ class Orchestrator:
             # Explicitly DB-less runs have no durable ledger; retain any known
             # successful response usage supplied by the injected child agent.
             return known_tokens
+
+    async def _close_row_with_unknown_spend(
+        self, message_id: uuid.UUID, *, status: str, response: str
+    ) -> None:
+        """Terminal row when post-run child spend cannot be read (R4-029).
+
+        The child already ran, so the row must not stay non-terminal.
+        ``tokens_used`` is recorded as NULL — explicitly unknown, never zero.
+        A failed bookkeeping write is reported; the caller re-raises the typed
+        accounting error so the parent stops spending.
+        """
+        try:
+            await self._record_end(message_id, status=status, response=response, tokens=None)
+        except Exception as record_error:
+            record_failure("orchestrator.delegate.accounting_row", record_error)
 
     async def _parent_context(self, session_id: uuid.UUID) -> str:
         """Pass a bounded summary of recent parent activity to a child agent."""
@@ -548,7 +579,7 @@ class Orchestrator:
         return message_id
 
     async def _record_end(
-        self, message_id: uuid.UUID, *, status: str, response: str, tokens: int
+        self, message_id: uuid.UUID, *, status: str, response: str, tokens: int | None
     ) -> None:
         await db.execute(
             """

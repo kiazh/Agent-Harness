@@ -1,9 +1,9 @@
-"""S1 delegation output contracts + backtrack (RED phase).
+"""S1 delegation output contracts (honest artifact verification; R4-028).
 
 Falsifiable acceptance:
 - contract kwargs accepted by tool and forwarded to orchestrator
 - artifact present+non-empty -> complete
-- artifact missing -> error naming path + should_write_first called
+- artifact missing -> error naming path, no phantom "backtrack" claim
 - empty file -> error; directory -> error
 - path escape -> ToolError pre-launch (zero child work)
 - no-contract delegation unchanged
@@ -124,23 +124,27 @@ async def test_artifact_present_completes(delegation):
     assert delegation.recorded[-1]["status"] == "complete"
 
 
-async def test_artifact_missing_errors_and_backtracks(delegation, monkeypatch):
+async def test_artifact_missing_errors_honestly(delegation, monkeypatch):
+    """R4-028 (delete): missing artifact -> error, no phantom backtrack.
+
+    The deleted code called ``should_write_first(0, True)`` and discarded the
+    return, forcing no write at all while the comment claimed a "forced
+    synthesize/write attempt". This pins the real behavior: status "error",
+    the reason naming the path, a terminal error row, and no backtrack claim
+    (the helper must never be called again).
+    """
     import machina.core.progress as progress
 
-    called = []
-    real = progress.should_write_first
-
-    def _spy(evidence_count, explicit_ask):
-        called.append((evidence_count, explicit_ask))
-        return real(evidence_count, explicit_ask)
-
-    monkeypatch.setattr(progress, "should_write_first", _spy)
+    spy = MagicMock(return_value=True)
+    monkeypatch.setattr(progress, "should_write_first", spy)
     orch = delegation.build(_ok_child(delegation))
     result = await orch.delegate("coder", "work", expected_artifact_path="missing.md")
     assert result.status == "error"
     assert "missing.md" in result.response
-    assert called, "backtrack helper must be called on verification failure"
+    assert "backtrack" not in result.response.lower()
     assert delegation.recorded[-1]["status"] == "error"
+    assert "missing.md" in delegation.recorded[-1]["response"]
+    spy.assert_not_called()
 
 
 async def test_empty_file_errors(delegation, monkeypatch):
