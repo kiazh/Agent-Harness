@@ -78,6 +78,7 @@ export class OAuthProgress implements Component {
 		if (data === "c" || data === "C") {
 			this.cancelled = true;
 			this.callbacks.onCancel();
+			return;
 		}
 		if (matchesKey(data, Key.up)) this.scrollTop = Math.max(0, this.scrollTop - 1);
 		else if (matchesKey(data, Key.down)) this.scrollTop++;

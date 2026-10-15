@@ -78,6 +78,29 @@ test("new calm palettes keep text and selection accents readable", () => {
 	}
 });
 
+test("dim text tokens clear WCAG AA and stay below muted (default, mono)", () => {
+	const luminance = (hex: string): number => {
+		const [r, g, b] = hex.slice(1).match(/../g)!.map((pair) => {
+			const channel = Number.parseInt(pair, 16) / 255;
+			return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+		});
+		return r! * 0.2126 + g! * 0.7152 + b! * 0.0722;
+	};
+	const contrast = (a: string, b: string): number => {
+		const values = [luminance(a), luminance(b)].sort((x, y) => y - x);
+		return (values[0]! + 0.05) / (values[1]! + 0.05);
+	};
+	// `dim` carries essential footer/menu/thinking text, not decoration: it
+	// must clear the AA normal-text bound on its own surface while staying
+	// quieter than `muted` (review P3-2).
+	for (const name of ["default", "mono"]) {
+		const base = skinBase(name)!;
+		const dim = contrast(base.neutral, base.dim);
+		assert.ok(dim >= 4.5, `${name}.dim contrast ${dim.toFixed(2)}:1 is below 4.5:1`);
+		assert.ok(dim < contrast(base.neutral, base.muted), `${name}.dim must stay below muted`);
+	}
+});
+
 test("legacy theme facade still resolves", async () => {
 	const legacy = await import("../src/theme.ts");
 	assert.deepEqual([...legacy.SKIN_NAMES].sort(), [...SKIN_NAMES].sort());

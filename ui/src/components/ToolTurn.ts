@@ -74,16 +74,8 @@ export class ToolTurn implements Component {
 		this.outcome = outcome;
 	}
 
-	setOutcome(outcome: ToolOutcome): void {
-		this.outcome = outcome;
-	}
-
 	setMotionPaused(phase: "stopping" | "cleanup_pending"): void {
 		this.paused = phase;
-	}
-
-	getState(): ToolOutcome {
-		return this.outcome;
 	}
 
 	/** Re-resolve theme colors (render is lazy; nothing was baked). */

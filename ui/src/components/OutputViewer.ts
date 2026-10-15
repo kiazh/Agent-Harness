@@ -159,9 +159,14 @@ export class OutputViewer implements Component {
 			this.record.backendTruncated ? "server truncated" : "",
 			this.record.locallyTruncated ? "locally capped" : "",
 		].filter(Boolean).join(" · ");
+		// Untrusted provider tool name/id: sanitize like every other tool-name
+		// surface. Newlines are flattened because this header is one physical row
+		// (sanitizeDisplay preserves \n, which would otherwise break the sheet).
+		const name = sanitizeDisplay(this.record.name).replace(/\n/g, " ");
+		const toolId = sanitizeDisplay(this.record.toolId.slice(0, 8)).replace(/\n/g, " ");
 		return [
 			truncateToWidth(
-				`${theme.bold("Output")}: ${this.record.name} ${theme.dim(`(${this.record.toolId.slice(0, 8)})`)}`,
+				`${theme.bold("Output")}: ${name} ${theme.dim(`(${toolId})`)}`,
 				content,
 			),
 			truncateToWidth(

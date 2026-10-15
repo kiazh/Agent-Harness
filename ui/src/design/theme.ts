@@ -72,7 +72,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#eeeeee",
 			muted: "#808080",
-			dim: "#5f5f5f",
+			dim: "#7c7c7c",
 			accent: "#fab283",
 			secondary: "#9d7cd8",
 			success: "#7fd88f",
@@ -344,7 +344,7 @@ const SKINS: Record<string, SkinDef> = {
 		base: {
 			text: "#e8e8e8",
 			muted: "#a0a0a0",
-			dim: "#6e6e6e",
+			dim: "#808080",
 			accent: "#ffffff",
 			secondary: "#c0c0c0",
 			success: "#d0d0d0",
