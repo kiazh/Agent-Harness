@@ -15,10 +15,12 @@ concurrency:
 
 # Supply-chain pinning (R4-095): every action is pinned to a commit SHA and
 # every base image to tag@digest; the trailing comment keeps the human-facing
-# version visible. Dependabot (github-actions + docker ecosystems,
-# .github/dependabot.yml) opens PRs that bump these SHAs/digests — do not
-# rewrite them back to moving tags. The SHA/tag mapping was resolved from the
-# GitHub API on 2026-10-14 and is recorded in
+# version visible. Dependabot (github-actions ecosystem, .github/dependabot.yml)
+# opens PRs that bump these action SHAs; it does not touch the `services:` image
+# digests below (its docker ecosystem scans only Dockerfile-named files), so
+# bump those by hand — they are deliberate. Do not rewrite any pin back to a
+# moving tag. The SHA/tag mapping was resolved from the GitHub API on
+# 2026-10-14 and is recorded in
 # docs/verification/proofs/codebase_review_round4_2026-10-14/R4-095_infra.md.
 jobs:
   lint-and-test:

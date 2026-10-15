@@ -1,9 +1,12 @@
 # INFRA-n5 (infra audit), updated by R4-095: scheduled dependency-surface
-# review. The workflows pin every action by commit SHA and every base image by
-# tag@digest; Dependabot opens the PRs that bump those SHAs/digests (for
-# github-actions and docker it rewrites the pinned reference and refreshes the
-# trailing `# vX.Y.Z` comment — keep both halves). Each PR still flows through
-# the full CI, which now also gates `uv lock --check` before merge.
+# review. The workflows pin actions by commit SHA and the `Dockerfile` /
+# `Dockerfile.sandbox` files pin base images by tag@digest; Dependabot's
+# github-actions + docker ecosystems open the PRs that bump those references and
+# refresh the trailing `# vX.Y.Z` comment — keep both halves. The docker
+# ecosystem scans only Dockerfile-named files, so it does not cover base-image
+# refs in workflows, docker-compose.yml or shell variables; those are bumped by
+# hand. Each PR still flows through the full CI, which also gates
+# `uv lock --check` before merge.
 version: 2
 updates:
   - package-ecosystem: github-actions

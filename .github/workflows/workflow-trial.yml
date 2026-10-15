@@ -35,7 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        # Pinned by tag@digest (R4-095); Dependabot's docker ecosystem bumps it.
+        # Pinned by tag@digest (R4-095); digest bumps are manual/deliberate
+        # (Dependabot does not manage `services:` image refs).
         image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
         env:
           POSTGRES_USER: postgres

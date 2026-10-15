@@ -17,8 +17,8 @@ Do not expose a gateway, database, or Docker socket to untrusted clients.
 | Tool → external web | DNS/IP validation at every redirect; connect to the validated address with correct Host/TLS identity. Aggregate deadlines and byte/header bounds apply to extraction. | `test_web_extract_pinned_fetch.py`, `test_deep_fetch_deadline.py` |
 | Workers → PostgreSQL | Conditional owner-token claims, database clock, lease renewal, token-matched release/finish. Unknown ownership blocks effects and mutations. | `test_multi_worker_fencing.py`, `test_rest_ownership_loss.py`, `test_claim_failure_boundary.py` |
 | Runtime → providers | Provider receives prompts and its own credentials. Owned clients close with bounded observation; failure metrics and sanitized diagnostics remain visible. | `test_provider_close_visibility.py`, `test_usage.py` |
-| Runtime → diagnostics | Audit payload filtering, known credential/pattern redaction, exception class/location without raw error payload. Metrics labels contain operation names. | `test_observability_payload_boundary.py`, `test_observability_payload_boundary.py` |
-| Runtime → Docker | Sandbox requests require Docker; unavailable Docker refuses execution. No automatic host fallback. Container isolation depends on daemon, image, mount, and network policy. | `test_terminal_safety.py`, `test_terminal_safety.py` |
+| Runtime → diagnostics | Audit payload filtering, known credential/pattern redaction, exception class/location without raw error payload. Metrics labels contain operation names. | `test_observability_payload_boundary.py` |
+| Runtime → Docker | Sandbox requests require Docker; unavailable Docker refuses execution. No automatic host fallback. Container isolation depends on daemon, image, mount, and network policy. | `test_terminal_safety.py` |
 | Runtime → plugin | In-process Python plugin shares host privileges. Install only trusted code; tool declarations cannot isolate malicious plugin code. | Trust limitation; no plugin isolation claim. |
 
 ## Modes and privileged operations
