@@ -1,0 +1,26 @@
+$ machina harnesses run codex 'Reply with exactly the word PONG and nothing else.' --timeout 120
+$ /Users/shadow/.local/bin/codex exec 'Reply with exactly the word PONG and 
+nothing else.'
+PONG
+Reading additional input from stdin...
+OpenAI Codex v0.162.1
+--------
+workdir: /Users/shadow/machina
+model: gpt-6.1-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: low
+reasoning summaries: none
+session id: 01a14035-e25e-7862-a2df-e68c75b4ef6b
+--------
+user
+Reply with exactly the word PONG and nothing else.
+codex
+PONG
+hook: Stop
+hook: Stop Completed
+tokens used
+11,995
+codex exited 0
+EXIT=0

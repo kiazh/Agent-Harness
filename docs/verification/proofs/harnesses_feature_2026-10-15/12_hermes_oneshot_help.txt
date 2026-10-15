@@ -1,0 +1,49 @@
+$ hermes --version
+Hermes Agent v0.21.6+386.g5ba559c (2026.9.24) · stable · local 5ba559c9e4b1
+Install directory: /Users/shadow/.hermes/hermes-agent
+Install method: git
+Python: 3.14.7
+OpenAI SDK: 2.24.0
+Update available — run 'hermes update'
+
+$ hermes --help (headless -z/--oneshot)
+usage: hermes [-h] [--version] [-z PROMPT] [--usage-file PATH] [-m MODEL]
+              [--provider PROVIDER] [--reasoning LEVEL] [-t TOOLSETS]
+              [--resume SESSION] [--no-restore-cwd] [--in DIR]
+              [--continue [SESSION_NAME]] [--worktree] [--accept-hooks]
+              [--skills SKILLS] [--yolo] [--pass-session-id]
+              [--ignore-user-config] [--ignore-rules] [--safe-mode] [--tui]
+              [--native] [--cli] [--dev]
+              <command> ...
+
+Hermes Agent - AI assistant with tool-calling capabilities
+
+positional arguments:
+  <command>             Command to run
+    chat                Interactive chat with the agent
+    model               Select default model and provider
+    moa                 Configure Mixture of Agents provider/model slots
+    fallback            Manage fallback providers (tried when the primary
+                        model fails)
+    worktree            Audit and reclaim accumulated git worktrees and merged
+                        branches
+    browser             Real-profile browsing helpers (close a browser locking
+                        its profile)
+    secrets             Manage external secret sources (Bitwarden, 1Password)
+    egress              Manage the iron-proxy egress credential-injection
+                        firewall
+    migrate             Migrate configuration for retired models or deprecated
+                        settings
+    codex-runtime       Manage the optional codex app-server runtime (migrate
+                        MCP config)
+    gateway             Messaging gateway management
+    proxy               Local OpenAI-compatible proxy to OAuth providers
+    lsp                 Language Server Protocol management
+    setup               Interactive setup wizard
+    whatsapp            Set up WhatsApp integration
+    whatsapp-cloud      Set up WhatsApp Business Cloud API integration
+    slack               Slack integration helpers (manifest generation, etc.)
+    send                Send a message to a configured platform (scripts, cron
+                        jobs, CI).
+    logout              Clear authentication for an inference provider
+    auth                Manage pooled provider credentials

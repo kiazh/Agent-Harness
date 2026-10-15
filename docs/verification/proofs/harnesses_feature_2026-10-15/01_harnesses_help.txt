@@ -1,0 +1,23 @@
+$ machina harnesses --help
+                                                                                
+ Usage: machina harnesses [OPTIONS] COMMAND [ARGS]...                           
+                                                                                
+ Detect external agent harnesses (OpenCode, Codex, Hermes), register or remove  
+ Machina's MCP server for them, and delegate a task with `run`.                 
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ status   Show which harnesses are installed, running, registered, and        │
+│          enabled.                                                            │
+│ enable   Register Machina's MCP server for a harness (idempotent).           │
+│ disable  Remove Machina's MCP server registration (manual where              │
+│          unsupported).                                                       │
+│ setup    Detect harnesses and register Machina's MCP server (best-effort).   │
+│ run      Delegate a task to an installed harness headlessly and print the    │
+│          result.                                                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+EXIT=0

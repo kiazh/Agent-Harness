@@ -1,0 +1,5 @@
+$ ruff check <changed files>
+All checks passed!
+
+$ ruff format --check <changed files>
+10 files already formatted

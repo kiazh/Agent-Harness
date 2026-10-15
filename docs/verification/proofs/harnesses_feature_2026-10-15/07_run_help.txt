@@ -1,0 +1,16 @@
+$ machina harnesses run --help
+                                                                                
+ Usage: machina harnesses run [OPTIONS] {platform} {prompt}                     
+                                                                                
+ Delegate a task to an installed harness headlessly and print the result.       
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    platform      <str>  Platform: opencode | codex | hermes [required]     │
+│ *    prompt        <str>  Task/prompt to delegate to the harness [required]  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --timeout        <float>  Seconds before the run is killed (process tree)    │
+│                           [default: 300.0]                                   │
+│ --help                    Show this message and exit.                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

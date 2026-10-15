@@ -1,0 +1,3 @@
+$ .venv/bin/python -m pytest tests/test_installer_env.py -q -k 'interop or install_sh'
+...........                                                              [100%]
+11 passed, 31 deselected in 2.62s

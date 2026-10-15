@@ -1,0 +1,3 @@
+$ machina --help | sed -n '/Commands/,/version/p'
+│ harnesses            Detect external agent harnesses (OpenCode, Codex,       │
+│ interop              Detect external agent harnesses (OpenCode, Codex,       │

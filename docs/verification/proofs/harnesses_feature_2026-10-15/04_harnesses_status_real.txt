@@ -1,0 +1,17 @@
+$ machina harnesses status
+                          External agent harnesses (3)                          
+┏━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━┳━━━━━━━━┳━━━━━┓
+┃ Pla… ┃ Inst… ┃ Version                                  ┃ Ru… ┃ Regis… ┃ En… ┃
+┡━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━╇━━━━━━━━╇━━━━━┩
+│ Ope… │ yes   │ opencode v2.0.26                         │ no  │ proje… │ yes │
+│ Cod… │ yes   │ codex-cli 0.162.1                        │ yes │ global │ yes │
+│ Her… │ yes   │ Hermes Agent v0.21.6+386.g5ba559c (2026… │ yes │ no     │ no  │
+└──────┴───────┴──────────────────────────────────────────┴─────┴────────┴─────┘
+Machina MCP server: /Users/shadow/machina/.venv/bin/python3 -m 
+machina.mcp_server
+· OpenCode: registered (project scope).
+· Codex: registered (global scope).
+· Hermes: not registered — `machina harnesses enable hermes` (user config).
+Enable other harnesses with `machina harnesses enable <platform>`; delegate with
+`machina harnesses run <platform> "<prompt>"`; see `machina harnesses --help`.
+EXIT=0

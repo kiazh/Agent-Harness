@@ -1,0 +1,19 @@
+✔ /harnesses opens the picker with a state summary per harness (1.25475ms)
+✔ /harnesses Status shows version, registration, scope and the state file (0.17975ms)
+✔ /harnesses Register confirms, then calls interop.enable (0.18675ms)
+✔ /harnesses Register cancel sends no RPC (0.088834ms)
+✔ /harnesses Unregister confirms, then calls interop.disable and surfaces failures honestly (0.139708ms)
+✔ /harnesses Run a task prompts, warns, calls interop.run and renders bounded output (0.343875ms)
+✔ /harnesses Run a task cancel (or empty prompt) never calls interop.run (0.140417ms)
+✔ /harnesses hides the run action and shows the hint when unsupported (0.084084ms)
+✔ /harnesses <harness> jumps straight to the actions menu (0.094916ms)
+✔ /harnesses rejects an unknown harness without opening a menu (0.107916ms)
+✔ /harnesses is registered as a slash command (0.061125ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 173.650875

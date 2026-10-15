@@ -1,0 +1,4 @@
+$ .venv/bin/python -m pytest tests/test_interop.py tests/test_fm7_cli.py tests/test_final_review_cli_config_setup.py tests/test_r4_093_cli_cluster.py -q
+........................................................................ [ 68%]
+.................................                                        [100%]
+105 passed in 2.49s

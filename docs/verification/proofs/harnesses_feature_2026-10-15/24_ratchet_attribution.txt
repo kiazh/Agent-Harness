@@ -1,0 +1,12 @@
+Deferred (function-level) import census delta vs HEAD, per changed machina file:
+
+  machina/interop.py                            head=  2 cur=  2 delta=+0
+  machina/cli/interop.py                        head=  0 cur=  0 delta=+0
+  machina/cli/__init__.py                       head= 47 cur= 47 delta=+0
+  machina/core/self_knowledge.py                head=  0 cur=  0 delta=+0
+  machina/tools/harness.py                      head=  6 cur=  6 delta=+0
+  machina/gateway/features/interop.py           head=  0 cur=  4 delta=+4
+  machina/gateway/features/__init__.py          head=  0 cur=  0 delta=+0
+
+Guard cap=713; measured census=717; growth = +4 from machina/gateway/features/interop.py (H2 lane, not this lane).
+This lane's files contribute +0.

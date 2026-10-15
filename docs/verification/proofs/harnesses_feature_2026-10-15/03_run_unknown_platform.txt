@@ -1,0 +1,4 @@
+$ machina harnesses run not-a-platform 'x'
+Cannot run on not-a-platform: unknown platform 'not-a-platform'; run-capable: 
+opencode, codex, hermes (see `machina harnesses status`)
+EXIT=2
