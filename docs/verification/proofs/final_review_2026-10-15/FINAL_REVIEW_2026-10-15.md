@@ -16,7 +16,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 
 | ID | Sev | Finding | Status |
 |---|---|---|---|
-| F01 | P1c | Dir-fd write chain: ancestor swap between containment check and lstat/open | LANE (file) |
+| F01 | P1c | Dir-fd write chain: ancestor swap between containment check and lstat/open | FIXED 56f8ad3 |
 | F02 | P1 | Cancelling a tool batch loses records of already-completed effects | LANE (core) |
 | F03 | P2 | Failed connector rollback clobbers a newer concurrent config | LANE (connectors) |
 | F04 | P2 | Agent mcp_connect can launch a stdio connector in sandbox mode | LANE (connectors) |
@@ -28,7 +28,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | F10 | P2 | setup --force merges instead of replacing .env | FIXED 8864af1 |
 | F11 | P2 | LoCoMo title-only baseline structurally scores zero | FIXED fa13f27 |
 | F12 | P2 | Delegation bookkeeping failure leaks child/provider | FIXED 4714e5e |
-| F13 | P2 | FIFO in resolve_path hangs the event loop | LANE (file) |
+| F13 | P2 | FIFO in resolve_path hangs the event loop | FIXED 56f8ad3 |
 | F14 | P3L | Bounded subprocess stdin can block before supervision | LANE (misc) |
 
 ## B. Security
@@ -90,10 +90,10 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 
 | ID | Sev | Finding | Status |
 |---|---|---|---|
-| T1 | P1c | (see F01) | LANE (file) |
-| T2 | P2 | (see F13) | LANE (file) |
-| T3 | P2 | `read_file` reads to EOF for small pages (regression) | LANE (file) |
-| T4 | P2 | `_atomic_write_file` duplicates `_atomic_write_file_at` | LANE (file) |
+| T1 | P1c | (see F01) | FIXED 56f8ad3 |
+| T2 | P2 | (see F13) | FIXED 56f8ad3 |
+| T3 | P2 | `read_file` reads to EOF for small pages (regression) | FIXED 56f8ad3 |
+| T4 | P2 | `_atomic_write_file` duplicates `_atomic_write_file_at` | FIXED 56f8ad3 |
 | T5 | P3 | Skill-install writes still detach via bare to_thread | BATCH-3 |
 | T6 | P3 | `_fsync_dir_best_effort` duplicates env_file's helper | DEFERRED (hoist with atomic-write consolidation) |
 
