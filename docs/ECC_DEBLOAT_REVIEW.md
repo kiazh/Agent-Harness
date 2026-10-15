@@ -47,7 +47,7 @@ One local process measured default registry construction/load at **24.29 ms**. T
 
 Reducing inactive images and upstream tests should reduce download/build/install size and manifest overhead. It should **not** be described as an equivalent reduction in model latency or prompt tokens: those files are already lazy. The existing 1,200-token initial budget remains the important prompt constraint. More relevant ranking and fewer unnecessary instruction reads are the next model-cost opportunities.
 
-Registry loading also reported that local `cost-optimization` and `prompt-engineering` skills were skipped with `ValueError`. Diagnose these separately; do not weaken skill validation merely to load them. This review did not establish their failure causes.
+Registry loading also reported that local `cost-optimization` and `prompt-engineering` skills were skipped with `ValueError`. Diagnose these separately; do not weaken skill validation merely to load them. **Resolved 2026-10-15 (`5bee364`):** the cause was the literal phrase "system prompt" matching the injection scanner's `system\s+prompt` pattern; both playbooks were reworded to "system instructions" and load again (76 skills, 0 skips). The scanner was not weakened.
 
 ## Concrete recommended cleanup
 

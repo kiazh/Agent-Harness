@@ -116,7 +116,7 @@ Status legend: `FIXED <commit>` · `DEFERRED`
 | ID | Sev | Finding | Status |
 |---|---|---|---|
 | U1 | P3 | OutputViewer renders name/toolId unsanitized | FIXED 39376d0 |
-| U2 | P3 | `dim` token below WCAG AA for essential text | FIXED 39376d0 + 9ec0bce (all 29 skins, dim>=4.5) |
+| U2 | P3 | `dim` token below WCAG AA for essential text | FIXED 39376d0 + 9ec0bce (all 29 skins at the time, dim>=4.5; 41 skins after 9098f12) |
 | U3 | Q | Dead exports (windowAroundCursor/setOutcome/getState) | FIXED 39376d0 |
 | U4 | Q | OAuthProgress missing return; agents.ts shadow | FIXED 39376d0 |
 | U5 | Q | White-box test pins (state/mode tests) | DEFERRED (not behavior bugs) |

@@ -6,6 +6,22 @@ Scope: added **13 new first-party skills** to Machina's own catalog
 (`skills/<name>/SKILL.md` only). No `skills/ecc/**`, no `machina/bundled_agents/**`,
 no `machina/core`, `ui/`, or gateway files were touched.
 
+> **Post-review correction (2026-10-15, after `5bee364` and the adversarial
+> review in `SKILLS_adversarial_review.md`).** The "skipped" statements in the
+> Notes below describe the tree at `5ebec10` only: both `cost-optimization` and
+> `prompt-engineering` were restored in `5bee364` by rewording the literal
+> phrase "system prompt" (scanner untouched). HEAD loads **76 skills — 34
+> first-party + 42 ECC — with 0 skips**; `logs/skill_load_check.log` (74/32)
+> is the pre-fix snapshot. Telemetry correction: `skills/telemetry.json` is
+> untracked/gitignored runtime state, so the `git diff` check was vacuous and
+> fresh suite runs mutate its counters — no sync is required (the wheel
+> excludes it; `check_release_artifacts` passes). "No commits were made" — the
+> lane shipped as `5ebec10`, the fix as `5bee364`. The 13 files also introduce
+> a `## Pitfalls` section (deliberate, accepted style extension). Post-review
+> ground-truth corrections were applied to three pre-existing skills
+> (`skills-system` matching/templates lines, `prompt-engineering` templates
+> line, `cost-optimization` usage line — review N5).
+
 ## Added skills
 
 All names are the directory name and the frontmatter `name`; every file has a
