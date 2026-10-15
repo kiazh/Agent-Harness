@@ -422,15 +422,16 @@ class TestEmbedderOutage:
             await embedder.embed_batch(["text1", "text2"])
 
     async def test_embed_with_malformed_response_missing_data_key(self):
-        """Embedder should handle missing 'data' key gracefully (returns empty list)."""
+        """A 200 without 'data' is a provider failure, not an empty result (R4-021)."""
+        from machina.core.exceptions import ProviderError
+
         embedder = self._make_embedder()
         mock_response = MagicMock()
         mock_response.json.return_value = {"model": "text-embedding-3-small"}  # no data
         mock_response.raise_for_status = MagicMock()
         embedder._client.post = AsyncMock(return_value=mock_response)
-        # data.get("data", []) returns [] — no crash, returns empty list
-        result = await embedder._embed_uncached(["test"])
-        assert result == []
+        with pytest.raises(ProviderError, match="usable vector"):
+            await embedder._embed_uncached(["test"])
 
     async def test_embed_with_data_missing_index_field(self):
         """Embedder should raise when embedding data item is missing 'index' field."""

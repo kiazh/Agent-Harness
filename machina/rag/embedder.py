@@ -166,7 +166,9 @@ class OpenAIEmbedder(Embedder):
                 return list(self._cache[cache_key])
 
         result = await self._embed_uncached([text])
-        embedding = result[0] if result else [0.0] * self.dimensions
+        # _embed_uncached refuses a response without exactly one vector for a
+        # non-empty input, so this can no longer fall back to zeros (R4-021).
+        embedding = result[0]
 
         # Cache the result
         with self._cache_lock:
@@ -261,8 +263,26 @@ class OpenAIEmbedder(Embedder):
             logger.error("Embedding API call failed: %s", e)
             raise
 
+        # A 200 response with no usable vectors is a provider failure, not an
+        # empty result: the single-text path otherwise fabricated a zero
+        # vector, cached it, and memory returned it as a successful embedding,
+        # silently poisoning dense retrieval (R4-021). The batch path's strict
+        # zip already refuses short batches; this fails both paths before
+        # anything is cached.
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list) or len(items) != len(texts):
+            error = _core_symbol("machina.core.exceptions", "ProviderError")(
+                f"Embedding API response has "
+                f"{len(items) if isinstance(items, list) else 0} usable "
+                f"vector(s) for {len(texts)} input(s)"
+            )
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_error", model=self._model, error=str(error)
+            )
+            logger.error("Embedding API response unusable: %s", error)
+            raise error
+
         # Sort by index to maintain order — validate index field
-        items = data.get("data", [])
         for item in items:
             if "index" not in item:
                 raise ValueError("Embedding API response missing 'index' field")

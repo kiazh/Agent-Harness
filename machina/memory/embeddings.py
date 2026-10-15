@@ -37,11 +37,22 @@ async def embed_query(text: str) -> list[float] | None:
     if embedder is None:
         return None
     try:
-        return await embedder.embed(text[:2000])
+        vector = await embedder.embed(text[:2000])
     except Exception as e:
         logger.debug("embedding failed, keyword fallback: %s", e)
         record_failure("embeddings.embed_query", e)
         return None
+    if not any(vector):
+        # Defense in depth (R4-021): a well-formed all-zero vector has no
+        # cosine direction and would silently poison dense retrieval, so
+        # treat it as an unavailable embedding. (Genuine empty/whitespace
+        # inputs already returned None above; the batch path keeps the
+        # documented empty-string -> zero-vector mapping.)
+        error = ValueError("embedding provider returned an all-zero vector")
+        logger.debug("embedding unusable, keyword fallback: %s", error)
+        record_failure("embeddings.embed_query", error)
+        return None
+    return vector
 
 
 async def embed_texts(texts: list[str]) -> list[list[float]] | None:
