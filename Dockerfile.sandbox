@@ -12,7 +12,7 @@
 #
 # Base image pinned by tag@digest (R4-095); Dependabot's docker ecosystem
 # bumps it. Do not replace with a moving tag.
-FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 
 WORKDIR /build
 COPY pyproject.toml README.md ./
