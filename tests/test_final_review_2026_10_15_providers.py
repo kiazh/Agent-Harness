@@ -86,6 +86,125 @@ def test_embedded_at_generic_scheme_still_redacts():
 
 
 # ---------------------------------------------------------------------------
+# SEC-2 — presigned-URL signature credentials must be redacted
+# ---------------------------------------------------------------------------
+
+AZURE_SAS = (
+    "https://acct.blob.core.windows.net/c/doc"
+    "?sv=2024-11-04&se=2030-01-01T00%3A00%3A00Z&sp=r&sig=abc123%2B%2F%3D"
+)
+
+AWS_PRESIGNED = (
+    "https://bucket.s3.amazonaws.com/key"
+    "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+    "&X-Amz-Credential=AKIAEXAMPLE%2F20261015%2Fus-east-1%2Fs3%2Faws4_request"
+    "&X-Amz-Date=20261015T000000Z"
+    "&X-Amz-Expires=3600"
+    "&X-Amz-SignedHeaders=host"
+    "&X-Amz-Signature=deadbeefcafef00d"
+)
+
+
+def test_azure_sas_sig_param_redacted_neighbors_intact():
+    from machina.core.provider.audit import _sanitize_value
+
+    out = _sanitize_value(AZURE_SAS)
+    assert "abc123%2B%2F%3D" not in out
+    assert "sig=[REDACTED_CREDENTIAL]" in out
+    assert "se=2030-01-01T00%3A00%3A00Z" in out
+    assert "sp=r" in out
+
+
+def test_aws_sigv4_signature_and_credential_redacted():
+    from machina.core.provider.audit import _sanitize_value
+
+    out = _sanitize_value(AWS_PRESIGNED)
+    assert "deadbeefcafef00d" not in out
+    assert "AKIAEXAMPLE" not in out
+    assert "X-Amz-Signature=[REDACTED_CREDENTIAL]" in out
+    assert "X-Amz-Credential=[REDACTED_CREDENTIAL]" in out
+    # Non-secret SigV4 bookkeeping survives for debuggability.
+    assert "X-Amz-Date=20261015T000000Z" in out
+    assert "X-Amz-Expires=3600" in out
+    assert "X-Amz-SignedHeaders=host" in out
+
+
+def test_gcs_x_goog_signature_redacted():
+    from machina.core.provider.audit import redact_url_credentials
+
+    src = (
+        "https://storage.googleapis.com/b/o"
+        "?X-Goog-Algorithm=GOOG4&X-Goog-Signature=abcdef123456&X-Goog-Expires=3600"
+    )
+    out = redact_url_credentials(src)
+    assert "abcdef123456" not in out
+    assert "X-Goog-Signature=[REDACTED_CREDENTIAL]" in out
+    assert "X-Goog-Expires=3600" in out
+
+
+def test_signature_like_benign_params_stay_intact():
+    from machina.core.provider.audit import redact_url_credentials
+
+    for src in (
+        "https://example.invalid/api?signal=green&design=flat",
+        "https://example.invalid/api?resig=1&insig=2&assigned=3",
+        "https://example.invalid/api?X-Amz-Date=20261015T000000Z&X-Amz-Expires=3600",
+        "https://example.invalid/api?X-Amz-SignedHeaders=host&X-Amz-Algorithm=AWS4-HMAC-SHA256",
+    ):
+        assert redact_url_credentials(src) == src, src
+
+
+def test_is_credential_param_precise_sig_rules():
+    from machina.core.provider.audit import _is_credential_param
+
+    assert _is_credential_param("sig")
+    assert _is_credential_param("X-Amz-Signature")
+    assert _is_credential_param("X-Amz-Credential")
+    assert _is_credential_param("X-Goog-Signature")
+    assert not _is_credential_param("signal")
+    assert not _is_credential_param("design")
+    assert not _is_credential_param("resig")
+    assert not _is_credential_param("insig")
+    assert not _is_credential_param("assigned")
+
+
+# ---------------------------------------------------------------------------
+# SEC-3 — password-only userinfo must be redacted
+# ---------------------------------------------------------------------------
+
+
+def test_password_only_db_userinfo_redacted():
+    from machina.core.provider.audit import _sanitize_value
+
+    out = _sanitize_value("redis://:s3cr3t@host:6379/0")
+    assert "s3cr3t" not in out
+    assert out == "redis://:[REDACTED_DB_PASSWORD]@host:6379/0"
+
+    out = _sanitize_value("postgresql://:hunter2x@db.internal:5432/app")
+    assert "hunter2x" not in out
+    assert out == "postgresql://:[REDACTED_DB_PASSWORD]@db.internal:5432/app"
+
+
+def test_password_only_generic_userinfo_redacted():
+    from machina.core.provider.audit import redact_url_credentials
+
+    out = redact_url_credentials("https://:p@ssw0rd@example.invalid/doc")
+    assert "p@ssw0rd" not in out
+    assert out == "https://:[REDACTED_URL_PASSWORD]@example.invalid/doc"
+
+
+def test_password_only_controls_stay_intact():
+    from machina.core.provider.audit import redact_url_credentials
+
+    for src in (
+        "https://bob@example.invalid/plain",  # bare user, no password
+        "https://example.com:8443/path",  # port, no userinfo
+        "postgres://user@localhost:5432/db",  # bare DB user
+    ):
+        assert redact_url_credentials(src) == src, src
+
+
+# ---------------------------------------------------------------------------
 # F2 — audit metadata tolerates non-string nested dict keys
 # ---------------------------------------------------------------------------
 

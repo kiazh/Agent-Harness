@@ -102,8 +102,9 @@ def _sanitize_value(value: Any) -> Any:
 #: ``scheme://user:password@`` — password allows embedded ``@`` (greedy to the
 #: last ``@`` before a path/query/fragment boundary); ``/``, whitespace, ``?``
 #: and ``#`` still terminate so ports (``host:8080/…``) and IPv6 literals
-#: never match.
-_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://[^/\s?#@]+):([^/\s?#]*)@")
+#: never match. The username is optional (SEC-3): a password-only userinfo
+#: (``https://:pw@host``, ``redis://:pw@host``) is still a credential.
+_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://[^/\s?#@]*):([^/\s?#]*)@")
 
 #: ``?name=value`` / ``&name=value`` / ``#name=value`` — value stops at the
 #: next delimiter or whitespace so surrounding parameters survive verbatim.
@@ -131,7 +132,22 @@ _CREDENTIAL_PARAM_SUFFIXES = (
     "accesskey",
     "signature",
 )
-_CREDENTIAL_PARAM_EXACT = frozenset({"authorization", "auth", "sig"})
+_CREDENTIAL_PARAM_EXACT = frozenset(
+    {
+        "authorization",
+        "auth",
+        # Azure SAS signature (exact — a ``sig`` *suffix* would wrongly catch
+        # benign ``resig``/``insig``).
+        "sig",
+        # AWS SigV4 / GCS presigned-URL forms, normalized. Subsumed by the
+        # ``signature``/``credential`` suffixes today; pinned explicitly so
+        # the intent survives future suffix-list edits (SEC-2).
+        "amzsignature",
+        "amzcredential",
+        "googsignature",
+        "googcredential",
+    }
+)
 
 
 def _is_credential_param(name: str) -> bool:
