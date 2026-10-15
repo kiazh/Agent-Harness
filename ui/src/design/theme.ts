@@ -1,4 +1,4 @@
-// Machina skins: dark theme palettes ported from Codex's theme set,
+// Machina skins: light and dark palettes, including Codex-derived skins,
 // plus house skins. Foreground tokens (text through info) follow Codex's
 // values; card backgrounds and borders are derived from each theme's
 // background + ink with mixColors, the way Codex derives subtle surface
@@ -727,6 +727,198 @@ const SKINS: Record<string, SkinDef> = {
 			neutral: "#1a0b2e",
 		},
 	},
+	"matcha": {
+		description: "Matcha · forest ink, moss selections and plum details (light)",
+		art: ["  ┌──────┐", "  │ MATCHA│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#f0f3e5",
+			text: "#26382b",
+			muted: "#50604e",
+			dim: "#596951",
+			accent: "#426b35",
+			secondary: "#785373",
+			success: "#326545",
+			warning: "#865709",
+			error: "#ac3544",
+			info: "#286577",
+		},
+	},
+	"porcelain": {
+		description: "Porcelain · cobalt actions on crisp ivory, copper details (light)",
+		art: ["  ┌──────┐", "  │ PORCEL│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#faf8f2",
+			text: "#232b38",
+			muted: "#535d6a",
+			dim: "#626976",
+			accent: "#254ea1",
+			secondary: "#945039",
+			success: "#256542",
+			warning: "#875600",
+			error: "#ac3042",
+			info: "#26667b",
+		},
+	},
+	"sakura": {
+		description: "Sakura · cherry ink, mulberry selections and jade details (light)",
+		art: ["  ┌──────┐", "  │ SAKURA│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#fff1f2",
+			text: "#3e2634",
+			muted: "#72515e",
+			dim: "#7c5a67",
+			accent: "#9a315b",
+			secondary: "#535d97",
+			success: "#28684c",
+			warning: "#875511",
+			error: "#af303b",
+			info: "#286b7b",
+		},
+	},
+	"sandstone": {
+		description: "Sandstone · burnt sienna, mineral blue and warm parchment (light)",
+		art: ["  ┌──────┐", "  │ SANDST│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#f8eddb",
+			text: "#392c24",
+			muted: "#685448",
+			dim: "#735f51",
+			accent: "#964221",
+			secondary: "#3d627f",
+			success: "#3c653b",
+			warning: "#82540d",
+			error: "#af3430",
+			info: "#2c6474",
+		},
+	},
+	"tidal": {
+		description: "Tidal · petrol ink, deep teal actions and coral details (light)",
+		art: ["  ┌──────┐", "  │ TIDAL │", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#edf7f5",
+			text: "#193c3b",
+			muted: "#426660",
+			dim: "#52716b",
+			accent: "#12665e",
+			secondary: "#9b4757",
+			success: "#2c6948",
+			warning: "#825811",
+			error: "#ad3745",
+			info: "#285f91",
+		},
+	},
+	"lilac": {
+		description: "Lilac · violet ink and iris selections on pale lavender (light)",
+		art: ["  ┌──────┐", "  │ LILAC │", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#f5f1ff",
+			text: "#332b49",
+			muted: "#615774",
+			dim: "#6c627d",
+			accent: "#65419a",
+			secondary: "#8d485d",
+			success: "#2b6b53",
+			warning: "#855511",
+			error: "#b1344a",
+			info: "#306482",
+		},
+	},
+	"marigold": {
+		description: "Marigold · golden paper, umber actions and indigo details (light)",
+		art: ["  ┌──────┐", "  │ MARIGO│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#fff4d6",
+			text: "#3c321b",
+			muted: "#695b3c",
+			dim: "#746343",
+			accent: "#825408",
+			secondary: "#4e5492",
+			success: "#426632",
+			warning: "#80500a",
+			error: "#af343a",
+			info: "#286477",
+		},
+	},
+	"nocturne": {
+		description: "Nocturne · moonlit mint selections and smoky violet (dark)",
+		art: ["  ┌──────┐", "  │ NOCTUR│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#111c24",
+			text: "#e3f0ee",
+			muted: "#a5bab8",
+			dim: "#8fa6a6",
+			accent: "#8de0cb",
+			secondary: "#c5a5ea",
+			success: "#97d6a0",
+			warning: "#e8c381",
+			error: "#ff9b9c",
+			info: "#96c8f0",
+		},
+	},
+	"espresso": {
+		description: "Espresso · crema selections, rosewood details and coffee ink (dark)",
+		art: ["  ┌──────┐", "  │ ESPRES│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#211916",
+			text: "#f4e8d7",
+			muted: "#c5b2a3",
+			dim: "#b09a8a",
+			accent: "#edba80",
+			secondary: "#d5a0b2",
+			success: "#a8cf95",
+			warning: "#efd088",
+			error: "#f79b8e",
+			info: "#94c6d2",
+		},
+	},
+	"velvet": {
+		description: "Velvet · jewel pink selections and champagne on aubergine (dark)",
+		art: ["  ┌──────┐", "  │ VELVET│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#26182d",
+			text: "#f5e7f4",
+			muted: "#c6adc8",
+			dim: "#b39ab8",
+			accent: "#f2a3cb",
+			secondary: "#d8c08d",
+			success: "#a3d5af",
+			warning: "#edca8b",
+			error: "#ff9caa",
+			info: "#9acddb",
+		},
+	},
+	"deep-sea": {
+		description: "Deep sea · bioluminescent cyan and coral on ocean ink (dark)",
+		art: ["  ┌──────┐", "  │ DEEP-S│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#0b202b",
+			text: "#def1f5",
+			muted: "#a1bec7",
+			dim: "#8baab7",
+			accent: "#76d8e5",
+			secondary: "#efa893",
+			success: "#9cd7b6",
+			warning: "#eaca8a",
+			error: "#ff9d9d",
+			info: "#9fbfff",
+		},
+	},
+	"copper": {
+		description: "Copper · oxidized teal selections and copper highlights (dark)",
+		art: ["  ┌──────┐", "  │ COPPER│", "  │      │", "  └──────┘"],
+		base: {
+			neutral: "#192321",
+			text: "#e5eee5",
+			muted: "#acbdb2",
+			dim: "#96ab9f",
+			accent: "#8fd2bd",
+			secondary: "#e5af87",
+			success: "#a8d39e",
+			warning: "#e6c783",
+			error: "#f7a09a",
+			info: "#a3c7df",
+		},
+	},
 };
 
 export const SKIN_NAMES: string[] = Object.keys(SKINS);
@@ -756,8 +948,8 @@ export function semanticPalette(name: string): SemanticPalette | undefined {
 	if (!def) return undefined;
 	return {
 		background: def.base.neutral,
-		surface: def.base.neutral,
-		raisedSurface: def.base.neutral,
+		surface: colorToHex(mixColors(parseColor(def.base.neutral), parseColor(def.base.text), 0.035)),
+		raisedSurface: colorToHex(mixColors(parseColor(def.base.neutral), parseColor(def.base.text), 0.065)),
 		border: def.base.dim,
 		text: def.base.text,
 		muted: def.base.muted,
@@ -811,6 +1003,12 @@ const skinColors: Record<string, Record<PaletteName, Color>> = Object.fromEntrie
 			toolOkBg: mixColors(neutral, parseColor(def.base.success), 0.13),
 			toolErrBg: mixColors(neutral, parseColor(def.base.error), 0.13),
 		};
+		// Keep readable roles legible on canvas, overlays and tinted cards.
+		// Accent hue is retained; adjust lightness only when contrast needs it.
+		const surfaces = [neutral, mixColors(neutral, text, 0.035), full.userBg, full.assistantBg, full.toolBg, full.toolOkBg, full.toolErrBg];
+		for (const role of ["text", "muted", "dim", "accent", "secondary", "success", "warning", "error", "info"] as const) {
+			full[role] = readableInk(full[role], surfaces);
+		}
 		if (name === "codex") {
 			full.border = parseColor(CODEX_SEMANTIC_START.border);
 			full.userBg = parseColor(CODEX_SEMANTIC_START.raisedSurface);
@@ -842,6 +1040,20 @@ function contrastRatio(first: Color, second: Color): number {
 	const b = relativeLuminance(second);
 	const [high, low] = a >= b ? [a, b] : [b, a];
 	return (high + 0.05) / (low + 0.05);
+}
+
+/** Preserve the intended hue while reaching AA on every supplied surface. */
+function readableInk(ink: Color, surfaces: Color[]): Color {
+	if (surfaces.every((surface) => contrastRatio(ink, surface) >= 4.5)) return ink;
+	const black = rgbColor(0, 0, 0);
+	const white = rgbColor(255, 255, 255);
+	const worst = (candidate: Color) => Math.min(...surfaces.map((surface) => contrastRatio(candidate, surface)));
+	const target = worst(black) >= worst(white) ? black : white;
+	for (let step = 1; step <= 100; step++) {
+		const candidate = mixColors(ink, target, step / 100);
+		if (worst(candidate) >= 4.5) return candidate;
+	}
+	return target;
 }
 
 /** Selected-row fill: the skin's accent; codex keeps its own selection fill. */
@@ -923,6 +1135,21 @@ export function repairFill(bg: PaletteName, filledLine: string): string {
 	return `${open}${repaired}${BG_CLOSE}`;
 }
 
+/** Paint a complete overlay row, including whitespace and nested ANSI resets.
+ * Ordinary text always has explicit ink; a terminal's own light/dark defaults
+ * must never decide whether a menu label or form value can be read.
+ */
+export function surfaceLine(line: string, width: number): string {
+	const palette = semanticPalette(currentSkin)!;
+	const ink = foregroundAnsi(colors().text, mode);
+	const fill = backgroundAnsi(parseColor(palette.surface), mode);
+	const padded = `${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
+	const body = padded.split(FULL_RESET).join(`${FULL_RESET}${ink}${fill}`)
+		.split("\x1b[39m").join(`\x1b[39m${ink}`)
+		.split(BG_CLOSE).join(`${BG_CLOSE}${fill}`);
+	return `${ink}${fill}${body}${FULL_RESET}`;
+}
+
 /** Keep draft ink explicit across the editor's reverse-video cursor reset. */
 export function styleComposerText(line: string): string {
 	const ink = foregroundAnsi(colors().text, mode);
@@ -936,7 +1163,7 @@ function stripBackground(line: string): string {
 
 /** True when a rendered line carries the selection background. */
 export function isSelectionRow(line: string): boolean {
-	return BG_OPEN.test(line);
+	return line.includes(backgroundAnsi(selectionColors().fill, mode));
 }
 
 /**

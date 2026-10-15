@@ -17,7 +17,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { ICONS } from "../design/icons.ts";
-import { theme } from "../theme.ts";
+import { surfaceLine, theme } from "../theme.ts";
 
 export interface TextFormOptions {
 	title: string;
@@ -121,7 +121,7 @@ export class TextForm implements Component {
 			...(this.example ? wrap(`Example: ${this.example}`) : []),
 		].slice(0, Math.max(0, height - 6 - errors.length));
 		const out = [
-			...(height - statusRows - errors.length >= 2 ? [truncateToWidth(theme.dim(this.title), content)] : []),
+			...(height - statusRows - errors.length >= 2 ? [truncateToWidth(theme.accentBold(this.title), content)] : []),
 			...guidance.map(theme.dim),
 		];
 		this.editor.focused = this.focused;
@@ -147,7 +147,7 @@ export class TextForm implements Component {
 		out.push(...errors.map((line) => truncateToWidth(theme.error(`✗ ${line}`), content)));
 		const hints = content >= 56 ? "enter save · shift+enter newline · ctrl+s save · esc cancel" : "enter save · ctrl+s save · esc cancel";
 		if (statusRows >= 1) out.push(truncateToWidth(theme.dim(hints), content));
-		return out;
+		return out.map((line) => surfaceLine(line, content));
 	}
 
 	invalidate(): void {
@@ -266,7 +266,7 @@ export class SecretForm implements Component {
 
 	render(width: number): string[] {
 		const content = Math.max(1, width);
-		const out = [truncateToWidth(theme.dim(this.title), content)];
+		const out = [truncateToWidth(theme.accentBold(this.title), content)];
 		if (this.description) out.push(truncateToWidth(theme.dim(this.description), content));
 		this.input.focused = this.focused;
 		out.push(...this.input.render(content));
@@ -278,7 +278,7 @@ export class SecretForm implements Component {
 					: "enter save · ctrl+s save · esc cancel"
 				: "enter save · ctrl+s save · esc cancel";
 		out.push(truncateToWidth(theme.dim(hints), content));
-		return out;
+		return out.map((line) => surfaceLine(line, content));
 	}
 
 	invalidate(): void {}

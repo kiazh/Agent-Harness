@@ -4,7 +4,7 @@
 
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
 import { sanitizeDisplay } from "../design/text.ts";
-import { theme } from "../theme.ts";
+import { surfaceLine, theme } from "../theme.ts";
 
 export interface OAuthProgressCallbacks {
 	onOpen(): void;
@@ -90,7 +90,7 @@ export class OAuthProgress implements Component {
 
 	render(width: number): string[] {
 		const content = Math.max(1, width);
-		const out = [truncateToWidth(theme.dim(this.title), content)];
+		const out = [truncateToWidth(theme.accentBold(this.title), content)];
 		out.push(truncateToWidth(this.status, content));
 		const hint = this.loginUrl
 			? `o open/retry${this.callbacks.onCopy ? " · y copy link" : ""} · c/esc cancel`
@@ -109,6 +109,6 @@ export class OAuthProgress implements Component {
 			out.push(...wrapped.slice(this.scrollTop, this.scrollTop + this.viewportRows));
 		}
 		out.push(...controls);
-		return out;
+		return out.map((line) => surfaceLine(line, content));
 	}
 }

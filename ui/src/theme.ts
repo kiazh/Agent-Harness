@@ -18,6 +18,7 @@ export {
 	semanticPalette,
 	setSkin,
 	styleComposerText,
+	surfaceLine,
 	skinArt,
 	skinBase,
 	skinDescription,

@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { LIMITS } from "../design/tokens.ts";
 import { sanitizeDisplay, truncateUtf8ByBytes } from "../design/text.ts";
-import { theme } from "../theme.ts";
+import { surfaceLine, theme } from "../theme.ts";
 
 export interface OutputRecord {
 	sessionId: string;
@@ -166,7 +166,7 @@ export class OutputViewer implements Component {
 		const toolId = sanitizeDisplay(this.record.toolId.slice(0, 8)).replace(/\n/g, " ");
 		return [
 			truncateToWidth(
-				`${theme.bold("Output")}: ${name} ${theme.dim(`(${toolId})`)}`,
+				`${theme.accentBold("Output")}: ${name} ${theme.dim(`(${toolId})`)}`,
 				content,
 			),
 			truncateToWidth(
@@ -175,7 +175,7 @@ export class OutputViewer implements Component {
 			),
 			...wrapped.slice(top, top + budget).map((line) => truncateToWidth(line, content)),
 			truncateToWidth(theme.dim("esc close · ↑↓ scroll · pgup/pgdn · home/end"), content),
-		].map((line) => truncateToWidth(line, total));
+		].map((line) => surfaceLine(truncateToWidth(line, total), total));
 	}
 
 	invalidate(): void {

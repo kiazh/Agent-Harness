@@ -1,6 +1,6 @@
 // Paint the app's alternate buffer using SGR backgrounds, never OSC palette
 // mutations. Empty rows and erase-to-end operations inherit the same colour.
-import { backgroundAnsi, getTerminalColorMode, parseColor, ProcessTerminal } from "@earendil-works/pi-tui";
+import { backgroundAnsi, foregroundAnsi, getTerminalColorMode, parseColor, ProcessTerminal } from "@earendil-works/pi-tui";
 import { getSkin, semanticPalette } from "./theme.ts";
 
 const ENTER = "\x1b[?1049h";
@@ -21,15 +21,22 @@ export class ThemeBackground {
 		}
 		const leave = data.indexOf(LEAVE);
 		const body = leave < 0 ? data : data.slice(0, leave);
-		const bg = backgroundAnsi(parseColor(semanticPalette(getSkin())!.background), getTerminalColorMode());
+		const palette = semanticPalette(getSkin())!;
+		const mode = getTerminalColorMode();
+		const bg = backgroundAnsi(parseColor(palette.background), mode);
+		const fg = foregroundAnsi(parseColor(palette.text), mode);
 		// Preserve panel/selection fills; restore the base only when a style
-		// explicitly resets all attributes or the background attribute.
+		// explicitly resets attributes. Restore default ink as well as the fill:
+		// plain menu/form text must not inherit the terminal profile foreground.
 		const styled = body.replace(SGR, (sequence, params: string) => {
 			const codes = params.split(";").map(Number);
 			let restore = false;
+			let restoreInk = false;
 			for (let i = 0; i < codes.length; i++) {
 				const code = codes[i];
 				if (code === 0 || code === 49) restore = true;
+				if (code === 0 || code === 39) restoreInk = true;
+				if (code === 38 || (code !== undefined && code >= 30 && code <= 37) || (code !== undefined && code >= 90 && code <= 97)) restoreInk = false;
 				if (code === 48 || (code !== undefined && code >= 40 && code <= 47) || (code !== undefined && code >= 100 && code <= 107)) restore = false;
 				// Zero-valued RGB channels and palette indices are colours,
 				// not reset codes. Skip extended-colour arguments as a unit.
@@ -38,7 +45,7 @@ export class ThemeBackground {
 					else if (codes[i + 1] === 5) i += 2;
 				}
 			}
-			return restore ? sequence + bg : sequence;
+			return sequence + (restoreInk ? fg : "") + (restore ? bg : "");
 		});
 		// Apple Terminal and other non-BCE terminals erase to their default
 		// colour rather than the active SGR background. Paint real cells;
@@ -46,7 +53,7 @@ export class ThemeBackground {
 		const fill = Number.isFinite(columns) && columns > 0
 			? `${bg}\x1b[2K\x1b7\r${" ".repeat(Math.floor(columns))}\x1b8`
 			: "\x1b[2K";
-		const painted = bg + styled.split("\x1b[2K").join(fill) + RESET;
+		const painted = fg + bg + styled.split("\x1b[2K").join(fill) + RESET;
 		if (leave < 0) return painted;
 		this.active = false;
 		return painted + data.slice(leave);

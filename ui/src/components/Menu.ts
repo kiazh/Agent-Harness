@@ -6,7 +6,7 @@
 import { Key, matchesKey, truncateToWidth, visibleWidth, type Component, type SelectItem, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { ICONS } from "../design/icons.ts";
 import { sanitizeDisplay } from "../design/text.ts";
-import { isSelectionRow, selectionBar, theme } from "../theme.ts";
+import { isSelectionRow, selectionBar, surfaceLine, theme } from "../theme.ts";
 
 export type { SelectItem };
 
@@ -168,10 +168,11 @@ export class Menu implements Component {
 		const label = `${this.multiSelect ? (this.checked.has(item.value) ? "[x] " : "[ ] ") : ""}${sanitizeDisplay(item.label ?? item.value)}`;
 		const head = item.value === selected
 			? `${ICONS.selectedMarker} ${label}`
-			: `  ${label}`;
+			: `  ${theme.text(label)}`;
 		// Descriptions yield at narrow widths; primary labels carry actions.
 		const room = Math.max(0, content - visibleWidth(head) - 2);
-		const tail = item.description && room > 4 ? `  ${truncateToWidth(sanitizeDisplay(item.description), room)}` : "";
+		const description = item.description && room > 4 ? truncateToWidth(sanitizeDisplay(item.description), room) : "";
+		const tail = description ? `  ${item.value === selected ? description : theme.muted(description)}` : "";
 		return { rows: `${head}${tail}`.split("\n"), section: false };
 	}
 
@@ -301,10 +302,10 @@ export class Menu implements Component {
 		// into physical rows so a payload cannot corrupt the viewport.
 		const titleRows = this.titleLines();
 		const out = titleRows
-			.map((line, index) => truncateToWidth(`${theme.dim(line)}${index === 0 ? ` ${count}` : ""}`, content));
+			.map((line, index) => truncateToWidth(`${theme.accentBold(line)}${index === 0 ? ` ${count}` : ""}`, content));
 		out.push(
 			this.filter
-				? truncateToWidth(`${theme.dim("Filter:")} ${this.filter}`, content)
+				? truncateToWidth(`${theme.secondary("Filter:")} ${theme.text(this.filter)}`, content)
 				: truncateToWidth(theme.dim("Type to filter"), content),
 		);
 		if (visible.length === 0) {
@@ -316,7 +317,7 @@ export class Menu implements Component {
 				const entry = this.itemRows(item, content, selected);
 				if (entry.section) {
 					for (const line of entry.rows) {
-						out.push(truncateToWidth(theme.dim(line), content));
+						out.push(truncateToWidth(theme.secondary(line), content));
 					}
 					continue;
 				}
@@ -329,7 +330,7 @@ export class Menu implements Component {
 			}
 		}
 		out.push(truncateToWidth(theme.dim(this.hint), content));
-		return out.map((line) => truncateToWidth(line, total));
+		return out.map((line) => surfaceLine(truncateToWidth(line, total), total));
 	}
 
 	invalidate(): void {}
