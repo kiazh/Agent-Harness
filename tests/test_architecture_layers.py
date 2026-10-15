@@ -157,7 +157,7 @@ _CORE_IMPORT_CEILINGS = {
 # machina/research/benchmark.py's architecture section (round-2 review N6:
 # the hand-mirrored literal drifted once already). Moves only with the delta
 # table documented inside test_deferred_import_count_ratchet.
-DEFERRED_IMPORT_CAP = 717
+DEFERRED_IMPORT_CAP = 721
 
 
 def test_module_level_core_imports_only_shrink():
@@ -284,7 +284,14 @@ def test_deferred_import_count_ratchet():
     #   harnesses feature (2026-10-15): +4 gateway/features/interop.py
     #   (lazy bindings to machina.interop for detect/enable/disable/
     #   run_task so the gateway module never imports the runner eagerly).
-    #   Census 717, cap 717.
+    #   holistic-review fix wave (2026-10-15): +4 net.
+    #     core/scheduler.py +3 (job/session ownership reconciliation helper),
+    #     core/turn_engine.py -1 (bounded source-close refactor),
+    #     services.py +1 (effective session-route helper for explicit
+    #     compression), memory/retriever.py +1 (shared
+    #     prepare_query_embedding seam). New modules +0 (firecrawl_lifecycle
+    #     imports at module level; streaming.py unchanged).
+    #   Census 721, cap 721.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
@@ -445,8 +452,15 @@ def test_deferred_import_count_ratchet():
 #     -7 core/provider/audit.py (254 -> 247): redundant signature entries
 #         removed (suffix rules already cover them).
 #     Package total 5002 -> 5003 by exactly this delta (-7 +4 +4).
+#   holistic-review fix wave (2026-10-15): +14 lines across two files:
+#     +2 core/agent.py (2267 -> 2269): configured temperature forwarded on
+#         the completion and streaming paths (H11).
+#     +12 core/provider/copilot.py (431 -> 443): HTTP-200 SSE error frames
+#         recognized before choices and raised as typed ProviderError while
+#         preserving partial-output accounting (H12).
+#     Provider package total 5003 -> 5015 by exactly this delta.
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
-    ("core/agent.py", 2267),
+    ("core/agent.py", 2269),
     ("core/compression.py", 999),
     ("core/provider/__init__.py", 53),
     ("core/provider/_log.py", 10),
@@ -465,7 +479,7 @@ GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/provider/chatgpt.py", 684),
     ("core/provider/factory.py", 138),
     ("core/provider/catalog.py", 553),
-    ("core/provider/copilot.py", 431),
+    ("core/provider/copilot.py", 443),
 )
 
 
@@ -490,7 +504,7 @@ def test_god_file_ceilings_only_fall(relative_path, ceiling):
 # 4780 = 5501 - 720 for the vendor-compliance removal (claude.py + gemini.py
 #        deleted) - 8 (factory.py branches/imports) - 2 (__init__.py exports)
 #        + 9 (specs.py: the Kimi Code spec + registry comment, same wave).
-_PROVIDER_PACKAGE_TOTAL_CEILING = 5003
+_PROVIDER_PACKAGE_TOTAL_CEILING = 5015
 
 
 def test_provider_package_total_only_falls():
