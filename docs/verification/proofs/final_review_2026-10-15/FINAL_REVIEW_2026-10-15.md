@@ -29,21 +29,21 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | F11 | P2 | LoCoMo title-only baseline structurally scores zero | FIXED fa13f27 |
 | F12 | P2 | Delegation bookkeeping failure leaks child/provider | FIXED 4714e5e |
 | F13 | P2 | FIFO in resolve_path hangs the event loop | FIXED 56f8ad3 |
-| F14 | P3L | Bounded subprocess stdin can block before supervision | LANE (misc) |
+| F14 | P3L | Bounded subprocess stdin can block before supervision | FIXED 5100624 |
 
 ## B. Security
 
 | ID | Sev | Finding | Status |
 |---|---|---|---|
 | S1 | P2 | `_check_ip_public` missed CGNAT (100.100.100.200 metadata) + ranges | FIXED 56c0222 |
-| S2 | P2 | MCP mode ceiling bypassed when `mode=None` (inherits operator mode) | LANE (misc) |
+| S2 | P2 | MCP mode ceiling bypassed when `mode=None` (inherits operator mode) | FIXED 5100624 |
 | S3 | P2 | Embedded-`@` DB URL leak + password-only userinfo (`:pw@`) | FIXED 0e933a8 + 9d57b99 |
 | S4 | P2 | REV `:N:path` git revspec bypasses the credential gate | FIXED e0590e0 |
 | S5 | P2 | `grep -id recurse` compact clusters bypass recursive-read review | FIXED e0590e0 |
 | S6 | P3 | `_sanitize_value` kwargs can override event/timestamp (spoofing) | FIXED 0e933a8 |
 | S7 | P3 | ChatGPT logout can fail to revoke behind a wedged refresh lock | DEFERRED (design: bounded wait + typed error; copilot uses fenced_logout; revisit) |
 | S8 | P3 | `parsed.port` raised bare ValueError | FIXED 56c0222 |
-| S9 | P3 | Skills temp write predictable name + symlink-following | LANE (misc) |
+| S9 | P3 | Skills temp write predictable name + symlink-following | FIXED 5100624 |
 | S10 | P3 | `device_flow_poll` unbounded slow_down sleep | FIXED bd886c1 |
 | S11 | P3 | `find_pending`/`find_approved_unclaimed` skip public_view | FIXED e0590e0 |
 | S12 | P3u | Credential params named bare `key`/`*_key` not redacted | DEFERRED (would over-redact benign `key=`; needs naming policy) |
@@ -108,7 +108,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | R4 | P3 | identity_eval reports 0.0 with no injected transitions | FIXED fa13f27 |
 | R5 | P2 | (see F11) | FIXED fa13f27 |
 | R6 | P3 | Skill enable/update bypass the install manifest (un-reinstallable) | DEFERRED (needs manifest-update design) |
-| R7 | P3 | Casefold collision desync for uppercase local skill names | LANE (misc addendum) |
+| R7 | P3 | Casefold collision desync for uppercase local skill names | FIXED 5100624 |
 | R8 | Qx | `_infer_schema` collapses compound types (latent) | DEFERRED (no live caller) |
 
 ## H. UI
@@ -125,8 +125,8 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 
 | ID | Sev | Finding | Status |
 |---|---|---|---|
-| I1 | P2 | e2e_gate blank `--db-url=` defeats the non-test-DB guard | LANE (misc) |
-| I2 | P3 | FEATURE_LEDGER: `minimal` is a distinct tier, not alias-normalized | LANE (misc) |
+| I1 | P2 | e2e_gate blank `--db-url=` defeats the non-test-DB guard | FIXED 5100624 |
+| I2 | P3 | FEATURE_LEDGER: `minimal` is a distinct tier, not alias-normalized | FIXED 5100624 |
 | I3 | P3 | Pinned-digest automation overclaimed (3 of 6 sites unmanaged) | FIXED 2918981 |
 | I4 | P3 | README/E2E_PROTOCOL document the pre-guard invocation | FIXED 2918981 |
 | I5 | Q | `is_test_database` substring heuristic (`latest`, `contest`) | FIXED (documented) 2918981 |
@@ -138,7 +138,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | ID | Sev | Finding | Status |
 |---|---|---|---|
 | A1 | P2 | URL-redaction primitive lives in provider/audit but is consumed by rag/observability (layering) | DEFERRED (documented; hoist to a leaf module when redaction layers consolidate) |
-| A2 | P2 | store_fence is not the single fence (providers + oauth_store variants) | PARTIAL: providers delegates (misc lane); oauth_store DEFERRED |
+| A2 | P2 | store_fence is not the single fence (providers + oauth_store variants) | PARTIAL: providers delegates 5100624; oauth_store DEFERRED |
 | A3 | P3 | AuditPersistence start/stop asymmetry; conftest pokes privates | BATCH-3 (add reset() API; use in conftest) |
 | A4 | P3 | Compaction keyset still `(created_at,id)` (documented residual) | DEFERRED (state boundary explicitly) |
 | A5 | P3 | Deferred-import census prose says 688, tree is 687 | DEFERRED (slack, not inflation) |
