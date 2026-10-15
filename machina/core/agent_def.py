@@ -43,7 +43,6 @@ class AgentDef:
     tools: list[str] = field(default_factory=list)  # empty = every registered tool
     model: str | None = None
     provider: str | None = None
-    max_iterations: int = 10
     source: str = "db"
     soul_spec: dict[str, Any] | None = None
 
@@ -55,7 +54,6 @@ class AgentDef:
             "tools": list(self.tools),
             "model": self.model,
             "provider": self.provider,
-            "maxIterations": self.max_iterations,
             "source": self.source,
         }
 
@@ -205,7 +203,6 @@ class AgentRegistry:
                     raise ValueError("expected a YAML mapping")
                 name = data.get("name", path.stem)
                 tools = data.get("tools", [])
-                iterations = data.get("max_iterations", 10)
                 if not isinstance(name, str) or not name.strip() or len(name) > 100:
                     raise ValueError("name must be a non-empty string of at most 100 characters")
                 for key in ("description", "system_prompt"):
@@ -213,18 +210,13 @@ class AgentRegistry:
                         raise ValueError(f"{key} must be a string")
                 if not isinstance(tools, list) or any(not isinstance(t, str) for t in tools):
                     raise ValueError("tools must be a list of strings")
-                if type(iterations) is not int or not 1 <= iterations <= 50:
-                    raise ValueError("max_iterations must be an integer from 1 to 50")
                 for key in ("model", "provider"):
                     if data.get(key) is not None and not isinstance(data[key], str):
                         raise ValueError(f"{key} must be a string")
                 if name in BUILTIN_AGENTS:
                     raise ValueError("cannot replace a built-in agent")
                 if "persona" in data:
-                    if any(
-                        key in data
-                        for key in ("tools", "model", "provider", "max_iterations", "system_prompt")
-                    ):
+                    if any(key in data for key in ("tools", "model", "provider", "system_prompt")):
                         raise ValueError(
                             "SoulSpec YAML must use workflow/config/persona instead of legacy fields"
                         )
@@ -240,7 +232,6 @@ class AgentRegistry:
                     tools=tools,
                     model=data.get("model"),
                     provider=data.get("provider"),
-                    max_iterations=iterations,
                     source="yaml",
                 )
             except (
@@ -270,7 +261,7 @@ class AgentRegistry:
     async def get(self, name: str) -> AgentDef | None:
         row = await db.fetchrow(
             """
-            SELECT name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec
+            SELECT name, description, system_prompt, tools, model, provider, source, soul_spec
             FROM agents WHERE name = $1
             """,
             name,
@@ -323,7 +314,7 @@ class AgentRegistry:
     async def list(self) -> list[AgentDef]:
         rows = await db.fetch(
             """
-            SELECT name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec
+            SELECT name, description, system_prompt, tools, model, provider, source, soul_spec
             FROM agents ORDER BY name
             """
         )
@@ -341,29 +332,28 @@ class AgentRegistry:
         self, agent: AgentDef, connection, *, identity_only: bool = False
     ) -> AgentDef:
         query = """
-            INSERT INTO agents (name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'db', $8::jsonb)
+            INSERT INTO agents (name, description, system_prompt, tools, model, provider, source, soul_spec)
+            VALUES ($1, $2, $3, $4, $5, $6, 'db', $7::jsonb)
             ON CONFLICT (name) DO UPDATE SET
                 description = EXCLUDED.description,
                 system_prompt = EXCLUDED.system_prompt,
                 tools = EXCLUDED.tools,
                 model = EXCLUDED.model,
                 provider = EXCLUDED.provider,
-                max_iterations = EXCLUDED.max_iterations,
                 soul_spec = COALESCE(EXCLUDED.soul_spec, agents.soul_spec),
                 updated_at = now()
-            RETURNING name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec
+            RETURNING name, description, system_prompt, tools, model, provider, source, soul_spec
             """
         if identity_only:
             query = """
-            INSERT INTO agents (name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'db', $8::jsonb)
+            INSERT INTO agents (name, description, system_prompt, tools, model, provider, source, soul_spec)
+            VALUES ($1, $2, $3, $4, $5, $6, 'db', $7::jsonb)
             ON CONFLICT (name) DO UPDATE SET
                 description = EXCLUDED.description,
                 system_prompt = EXCLUDED.system_prompt,
                 soul_spec = EXCLUDED.soul_spec,
                 updated_at = now()
-            RETURNING name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec
+            RETURNING name, description, system_prompt, tools, model, provider, source, soul_spec
             """
         row = await connection.fetchrow(
             query,
@@ -373,7 +363,6 @@ class AgentRegistry:
             json.dumps(agent.tools),
             agent.model,
             agent.provider,
-            agent.max_iterations,
             json.dumps(agent.soul_spec) if agent.soul_spec is not None else None,
         )
         return self._row_to_def(row)
@@ -395,7 +384,6 @@ class AgentRegistry:
             tools=list(tools or []),
             model=row["model"],
             provider=row["provider"],
-            max_iterations=row["max_iterations"],
             source=row["source"],
             soul_spec=json.loads(row["soul_spec"])
             if isinstance(row.get("soul_spec"), str)

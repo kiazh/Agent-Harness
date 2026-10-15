@@ -77,12 +77,12 @@ class TestRegistry:
     async def test_save_list_get_delete(self):
         name = f"tester-{uuid.uuid4().hex[:8]}"
         saved = await agent_registry.save(
-            AgentDef(name=name, description="a test agent", tools=["read_file"], max_iterations=4)
+            AgentDef(name=name, description="a test agent", tools=["read_file"])
         )
         assert saved.source == "db" and saved.tools == ["read_file"]
 
         fetched = await agent_registry.get(name)
-        assert fetched is not None and fetched.max_iterations == 4
+        assert fetched is not None and fetched.description == "a test agent"
 
         names = {a.name for a in await agent_registry.list()}
         assert name in names and {"harness", "researcher", "coder"} <= names

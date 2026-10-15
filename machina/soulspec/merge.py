@@ -180,9 +180,6 @@ class SoulSpecMerger:
         return SoulSpec.Config(
             model=override.model if override.model else base.model,
             provider=override.provider if override.provider else base.provider,
-            max_iterations=override.max_iterations
-            if override.max_iterations is not None
-            else base.max_iterations,
             context_budget=override.context_budget
             if override.context_budget is not None
             else base.context_budget,

@@ -106,9 +106,6 @@ DEFAULTS: dict[str, Any] = {
     "provider": "openrouter",
     # Legacy storage/config compatibility only; runtime uses model context capacity.
     "context_budget": 8000,
-    # Deprecated: the agent loop is unbounded (no iteration cap). Kept so
-    # existing config files and API payloads still validate; it is ignored.
-    "max_iterations": 10,
     "turn_timeout": 300,
     "verbose": True,
     "agent_id": "harness",
@@ -358,7 +355,6 @@ def _check_int_bounds(key: str, val: int) -> None:
         "approval_timeout": (1, 3600),
         "context_budget": (100, None),
         "max_tokens": (1, None),
-        "max_iterations": (1, 100),
         "rate_limit_calls_per_minute": (1, None),
         "usage_session_token_limit": (0, None),
         "usage_session_request_limit": (0, None),
@@ -401,7 +397,6 @@ class Config:
     model: str = "openrouter/free"
     provider: str = "openrouter"
     context_budget: int = 8000
-    max_iterations: int = 10
     turn_timeout: int = 300
     verbose: bool = True
     agent_id: str = "harness"

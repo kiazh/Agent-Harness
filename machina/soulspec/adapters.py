@@ -50,7 +50,6 @@ class MachinaAdapter:
         config = SoulSpec.Config(
             model=agent_def.model,
             provider=agent_def.provider,
-            max_iterations=agent_def.max_iterations,
             permissions=SoulSpec.Permissions(deny_all=True)
             if _NO_TOOLS_SENTINEL in agent_def.tools
             else None,
@@ -130,7 +129,6 @@ class ClaudeCodeAdapter:
             config_lines: list[str] = ["## Config"]
             if spec.config.model:
                 config_lines.append(f"- Model: {spec.config.model}")
-            config_lines.append(f"- Max iterations: {spec.config.max_iterations}")
             config_lines.append(f"- Context budget: {spec.config.context_budget}")
             sections.append("\n".join(config_lines))
 
@@ -202,7 +200,6 @@ class CodexAdapter:
             config_lines: list[str] = ["## Configuration"]
             if spec.config.model:
                 config_lines.append(f"- Model: `{spec.config.model}`")
-            config_lines.append(f"- Max iterations: {spec.config.max_iterations}")
             config_lines.append(f"- Context budget: {spec.config.context_budget}")
             if spec.config.permissions:
                 if spec.config.permissions.allowed_tools:

@@ -232,7 +232,7 @@ async def test_agent_lifecycle_and_tool_hooks(monkeypatch):
         agent_module.context_manager, "get_latest_images", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(agent_module.registry, "execute", AsyncMock(return_value="agents listed"))
-    agent = ReActAgent(provider=Provider(), max_iterations=2)
+    agent = ReActAgent(provider=Provider())
     agent.memory_retriever.retrieve = AsyncMock(return_value=[])
     plugin_registry.register(Recorder())
     try:

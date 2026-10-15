@@ -490,7 +490,6 @@ class TestAgents:
             "tools": [],
             "model": None,
             "provider": None,
-            "maxIterations": 10,
             "source": "builtin",
         }
 

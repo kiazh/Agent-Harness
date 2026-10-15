@@ -36,8 +36,6 @@ class TestSoulSpecConformance:
                 errors.append("persona.name must be non-empty when persona is present")
 
         if spec.config:
-            if spec.config.max_iterations is not None and spec.config.max_iterations < 1:
-                errors.append("config.max_iterations must be >= 1")
             if spec.config.context_budget is not None and spec.config.context_budget < 1:
                 errors.append("config.context_budget must be >= 1")
 
@@ -64,20 +62,17 @@ class TestSoulSpecConformance:
     def test_merge_semantics(self) -> None:
         """Test that merge works correctly."""
         # Scalar override
-        base = SoulSpec(
-            name="Base", version="1.0.0", config=SoulSpec.Config(model="gpt-4", max_iterations=5)
-        )
+        base = SoulSpec(name="Base", version="1.0.0", config=SoulSpec.Config(model="gpt-4"))
         override = SoulSpec(
             name="Override",
             version="2.0.0",
-            config=SoulSpec.Config(model="claude-3", max_iterations=15),
+            config=SoulSpec.Config(model="claude-3"),
         )
         merged = SoulSpecMerger.merge(base, override)
         assert merged.name == "Override"
         assert merged.version == "2.0.0"
         assert merged.config is not None
         assert merged.config.model == "claude-3"
-        assert merged.config.max_iterations == 15
 
         # List union
         base = SoulSpec(

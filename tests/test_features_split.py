@@ -141,7 +141,7 @@ def test_coerce_config_value_preserved():
     """coerce_config_value must still be accessible."""
     from machina.gateway.features import coerce_config_value
 
-    assert coerce_config_value("max_iterations", "7") == 7
+    assert coerce_config_value("turn_timeout", "7") == 7
     assert coerce_config_value("verbose", "off") is False
 
 

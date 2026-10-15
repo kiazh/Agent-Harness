@@ -71,7 +71,6 @@ async def import_persona(
     definition.tools = list(existing.tools)
     definition.model = existing.model
     definition.provider = existing.provider
-    definition.max_iterations = existing.max_iterations
     # Reconcile snapshot permissions with the actual definition, never treating
     # a persona import as an authority or provider-configuration grant.
     definition.soul_spec = MachinaAdapter.to_soulspec(definition).to_storage_dict()

@@ -254,8 +254,8 @@ async def test_job_claim_has_recovery_lease_and_named_agent_definition(monkeypat
     agent = await JobRunner()._build_agent("researcher")
     assert agent.allowed_tools == ["read_file"]
     assert agent.system_prompt == "Research only"
-    # The agent loop is unbounded: stored iteration caps are never enforced.
-    assert agent.max_iterations is None
+    # R4-025: iteration caps were removed; the agent loop is unbounded.
+    assert not hasattr(agent, "max_iterations")
 
 
 @pytest.mark.asyncio

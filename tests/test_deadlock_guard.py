@@ -33,7 +33,6 @@ class TestDeadlockGuard:
         mock_agent_def = MagicMock()
         mock_agent_def.model = None
         mock_agent_def.provider = None
-        mock_agent_def.max_iterations = 10
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
@@ -78,7 +77,6 @@ class TestDeadlockGuard:
         mock_agent_def = MagicMock()
         mock_agent_def.model = None
         mock_agent_def.provider = None
-        mock_agent_def.max_iterations = 10
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
@@ -125,7 +123,6 @@ class TestDeadlockGuard:
         mock_agent_def = MagicMock()
         mock_agent_def.model = None
         mock_agent_def.provider = None
-        mock_agent_def.max_iterations = 10
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
@@ -166,7 +163,6 @@ class TestDeadlockGuard:
         mock_agent_def = MagicMock()
         mock_agent_def.model = None
         mock_agent_def.provider = None
-        mock_agent_def.max_iterations = 10
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 

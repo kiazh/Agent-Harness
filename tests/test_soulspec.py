@@ -56,7 +56,6 @@ SAMPLE_YAML = textwrap.dedent("""\
           level: 2
     config:
       model: "anthropic/claude-3.5-sonnet"
-      max_iterations: 10
       context_budget: 8000
 """)
 
@@ -74,7 +73,6 @@ def sample_agent_def() -> AgentDef:
         system_prompt="You are Harness. General-purpose AI agent",
         tools=["read_file", "search_files"],
         model="anthropic/claude-3.5-sonnet",
-        max_iterations=10,
     )
 
 
@@ -108,7 +106,6 @@ class TestSoulSpecSchema:
         assert sample_spec.skills[0].progressive_disclosure_level == 2
         assert sample_spec.config is not None
         assert sample_spec.config.model == "anthropic/claude-3.5-sonnet"
-        assert sample_spec.config.max_iterations == 10
         assert sample_spec.config.context_budget == 8000
 
     def test_soulspec_to_yaml_roundtrip(self, sample_spec: SoulSpec) -> None:
@@ -154,7 +151,6 @@ class TestAgentDefConversion:
         assert agent.system_prompt == sample_spec.persona.system_prompt.strip()
         assert agent.tools == ["read_file", "search_files"]
         assert agent.model == "anthropic/claude-3.5-sonnet"
-        assert agent.max_iterations == 10
 
     def test_agent_def_to_soulspec(self, sample_agent_def: AgentDef) -> None:
         """AgentDef can be converted to SoulSpec."""
@@ -167,7 +163,6 @@ class TestAgentDefConversion:
         assert spec.persona.system_prompt == "You are Harness. General-purpose AI agent"
         assert spec.config is not None
         assert spec.config.model == "anthropic/claude-3.5-sonnet"
-        assert spec.config.max_iterations == 10
 
     def test_roundtrip_agent_def(self, sample_agent_def: AgentDef) -> None:
         """AgentDef → SoulSpec → AgentDef preserves key fields."""
@@ -176,7 +171,7 @@ class TestAgentDefConversion:
         assert agent.name == sample_agent_def.name
         assert agent.description == sample_agent_def.description
         assert agent.model == sample_agent_def.model
-        assert agent.max_iterations == sample_agent_def.max_iterations
+        assert agent.tools == sample_agent_def.tools
 
 
 # ─── Phase 5B: Merge Semantics ──────────────────────────────────────────────
@@ -188,19 +183,18 @@ class TestMergeSemantics:
         base = SoulSpec(
             name="Base",
             version="1.0.0",
-            config=SoulSpec.Config(model="gpt-4", max_iterations=5),
+            config=SoulSpec.Config(model="gpt-4"),
         )
         override = SoulSpec(
             name="Override",
             version="2.0.0",
-            config=SoulSpec.Config(model="claude-3", max_iterations=15),
+            config=SoulSpec.Config(model="claude-3"),
         )
         merged = SoulSpecMerger.merge(base, override)
         assert merged.name == "Override"
         assert merged.version == "2.0.0"
         assert merged.config is not None
         assert merged.config.model == "claude-3"
-        assert merged.config.max_iterations == 15
 
     def test_merge_list_union(self) -> None:
         """Lists: union with deduplication."""

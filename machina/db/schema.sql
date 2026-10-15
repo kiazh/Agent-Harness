@@ -257,11 +257,15 @@ CREATE TABLE IF NOT EXISTS agents (
     tools JSONB NOT NULL DEFAULT '[]',       -- allowed tool names ([] = all)
     model TEXT,
     provider TEXT,
-    max_iterations INT NOT NULL DEFAULT 10,
     source TEXT NOT NULL DEFAULT 'db',        -- 'db' or 'builtin'
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- R4-025: max_iterations was dead configuration (validated and stored, never
+-- enforced by either agent loop). Fresh installs never create the column;
+-- this drops it from pre-existing databases. Idempotent.
+ALTER TABLE IF EXISTS agents DROP COLUMN IF EXISTS max_iterations;
 
 -- Messages passed between agents during orchestration.
 CREATE TABLE IF NOT EXISTS agent_messages (

@@ -526,7 +526,6 @@ async def test_agent_binds_scope_for_rag_tools(monkeypatch):
         def __init__(self):
             self.agent_id = "harness"
             self.allowed_tools = None
-            self.max_iterations = 1
 
     # Without scope bound, the probe's own gate refuses to run.
     with pytest.raises(Exception, match="active agent session"):

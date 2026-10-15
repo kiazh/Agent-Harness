@@ -238,7 +238,6 @@ def test_restricted_definition_denies_at_execution():
             self.agent_id = "researcher"
             # Researcher definition: no write_file.
             self.allowed_tools = ["read_file"]
-            self.max_iterations = 1
 
     async def _go():
         from machina.core import context as context_module

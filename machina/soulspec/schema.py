@@ -309,7 +309,6 @@ class SoulSpec:
     @dataclass
     class Config:
         model: str | None = None
-        max_iterations: int | None = None
         context_budget: int | None = None
         permissions: SoulSpec.Permissions | None = None
         provider: str | None = None
@@ -572,7 +571,6 @@ class SoulSpec:
             config = cls.Config(
                 model=c.get("model"),
                 provider=c.get("provider"),
-                max_iterations=c.get("max_iterations", 10),
                 context_budget=c.get("context_budget", 8000),
                 permissions=permissions,
             )
@@ -642,7 +640,6 @@ class SoulSpec:
             c: dict[str, Any] = {
                 "model": self.config.model,
                 "provider": self.config.provider,
-                "max_iterations": self.config.max_iterations,
                 "context_budget": self.config.context_budget,
             }
             if self.config.permissions:
@@ -692,9 +689,6 @@ class SoulSpec:
             tools=tools,
             model=self.config.model if self.config else None,
             provider=self.config.provider if self.config else None,
-            max_iterations=self.config.max_iterations
-            if self.config and self.config.max_iterations is not None
-            else 10,
         )
 
     def render_prompt(self, *, can_learn: bool = False, rsi_choice: dict | None = None) -> str:

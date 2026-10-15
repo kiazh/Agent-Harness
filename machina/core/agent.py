@@ -273,7 +273,6 @@ class BaseReActAgent:
     def __init__(
         self,
         provider: LLMProvider | None = None,
-        max_iterations: int | None = None,
         agent_id: str = "harness",
         system_prompt: str | None = None,
         memory_retriever: MemoryRetriever | None = None,
@@ -284,9 +283,7 @@ class BaseReActAgent:
     ) -> None:
         self.provider = provider or get_provider()
         # Unbounded tool calls: the ReAct loop runs until the model stops
-        # calling tools (or context/usage budgets stop the turn). Kept only
-        # for backward compatibility with stored definitions / callers.
-        self.max_iterations = max_iterations
+        # calling tools (or context/usage budgets stop the turn).
         self.agent_id = agent_id
         self.system_prompt = system_prompt or SYSTEM_PROMPT
         from machina.soulspec.schema import SoulSpec
@@ -1325,11 +1322,23 @@ class BaseReActAgent:
             self._append_tool_messages(messages, response, tc, result_str[:message_limit])
 
     async def _flush_pending_chunks(self, pending_chunks: list[dict[str, Any]]) -> None:
-        """Insert all pending chunks in a single batch operation."""
+        """Insert all pending chunks in a single batch operation.
+
+        R4-025/PB-1: a failing context store must never fail the turn. Flush
+        errors are logged and the turn continues with its response; pending
+        chunks are retained so a later flush can retry them. Cancellation
+        still propagates to the caller.
+        """
         if pending_chunks:
-            result = context_manager.add_chunks_batch(pending_chunks)
-            if inspect.isawaitable(result):
-                await result
+            try:
+                result = context_manager.add_chunks_batch(pending_chunks)
+                if inspect.isawaitable(result):
+                    await result
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Context flush failed (%s); continuing turn", type(exc).__name__)
+                return
             pending_chunks.clear()
 
     async def _flush_pending_cancellation_safe(

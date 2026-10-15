@@ -169,7 +169,7 @@ class TestAgentWithRealTools:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(
                     mock_session.id,
                     f"Read the file {test_file}",
@@ -228,7 +228,7 @@ class TestAgentWithRealTools:
 
                 # Patch _BASE_DIR to allow writing to temp_dir
                 with patch("machina.tools.file._BASE_DIR", temp_dir):
-                    agent = ReActAgent(provider=provider, max_iterations=5)
+                    agent = ReActAgent(provider=provider)
                     response = await agent.run(
                         mock_session.id,
                         f"Write 'written by agent' to {test_file}",
@@ -277,7 +277,7 @@ class TestAgentWithRealTools:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(
                     mock_session.id,
                     f"List files in {temp_dir}",
@@ -319,7 +319,7 @@ class TestAgentWithRealTools:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(
                     mock_session.id,
                     "Run echo hello",
@@ -390,7 +390,7 @@ class TestAgentWithRealTools:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=10)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(
                     mock_session.id,
                     f"Write then read {test_file}",
@@ -429,7 +429,7 @@ class TestAgentWithMockedDB:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 await agent.run(mock_session.id, "test message", verbose=False)
 
                 # Should have stored user message and assistant response
@@ -457,7 +457,7 @@ class TestAgentWithMockedDB:
                     ]
                 )
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 await agent.run(mock_session.id, "test message", verbose=False)
 
                 mock_cm.get_recent_context.assert_called_once()
@@ -480,7 +480,7 @@ class TestAgentWithMockedDB:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 await agent.run(mock_session.id, "test message", verbose=False)
 
                 mock_sm.update_activity.assert_called_once_with(mock_session.id)
@@ -817,7 +817,7 @@ class TestFullFlowIntegration:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(
                     mock_session.id,
                     f"Read {test_file} and tell me what it says",
@@ -852,7 +852,7 @@ class TestFullFlowIntegration:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
 
                 # Turn 1
                 r1 = await agent.run(mock_session.id, "First message", verbose=False)
@@ -887,7 +887,7 @@ class TestFullFlowIntegration:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 events = []
                 async for event in agent.run_stream(mock_session.id, "test", verbose=False):
                     events.append(event)
@@ -1103,7 +1103,7 @@ class TestRealDatabase:
             )
 
             # Run agent
-            agent = ReActAgent(provider=provider, max_iterations=5)
+            agent = ReActAgent(provider=provider)
             response = await agent.run(session.id, "test message", verbose=False)
 
             assert response is not None

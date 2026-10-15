@@ -511,7 +511,6 @@ class TestOrchestratorTimeout:
         mock_agent_def = MagicMock()
         mock_agent_def.model = None
         mock_agent_def.provider = None
-        mock_agent_def.max_iterations = 10
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
@@ -565,7 +564,6 @@ class TestOrchestratorTimeout:
         mock_agent_def = MagicMock()
         mock_agent_def.model = None
         mock_agent_def.provider = None
-        mock_agent_def.max_iterations = 10
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
@@ -1358,7 +1356,7 @@ class TestAgentStreamInterruption:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 events = []
                 async for event in agent.run_stream(mock_session.id, "test", verbose=False):
                     events.append(event)
@@ -1402,7 +1400,7 @@ class TestAgentProviderEdgeCases:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None
@@ -1431,7 +1429,7 @@ class TestAgentProviderEdgeCases:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None
@@ -1466,7 +1464,7 @@ class TestAgentProviderEdgeCases:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None

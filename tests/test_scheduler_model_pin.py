@@ -42,7 +42,6 @@ async def test_job_pin_overrides_agent_definition_for_runner(monkeypatch):
         provider="ollama",
         system_prompt="Research",
         tools=["read_file"],
-        max_iterations=2,
     )
     monkeypatch.setattr(agent_registry, "get", AsyncMock(return_value=definition))
     selected = []

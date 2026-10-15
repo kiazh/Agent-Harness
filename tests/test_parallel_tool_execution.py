@@ -35,7 +35,6 @@ class _StubAgent(BaseReActAgent):
     def __init__(self) -> None:  # noqa: D107 - test double
         self.agent_id = "test-agent"
         self.allowed_tools = None
-        self.max_iterations = 1
 
 
 @pytest.fixture(autouse=True)

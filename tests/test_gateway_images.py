@@ -130,7 +130,7 @@ async def image_gateway(db_pool, monkeypatch):
     ):
         monkeypatch.setattr(config, name, False)
     provider = ImageFixtureProvider()
-    agent = ReActAgent(provider=provider, max_iterations=1, allowed_tools=[])
+    agent = ReActAgent(provider=provider, allowed_tools=[])
     harness = ImageGateway(agent)
     result = await harness.call(
         "session.create", {"title": "image pipeline", "model": provider.model}
@@ -241,7 +241,7 @@ async def test_followup_after_resume_keeps_recent_image_bytes(image_gateway):
     await harness.complete()
     await harness.call("session.resume", {"sessionId": sid})
     # A fresh gateway represents a resumed UI; no in-memory image side channel.
-    agent = ReActAgent(provider=provider, max_iterations=1, allowed_tools=[])
+    agent = ReActAgent(provider=provider, allowed_tools=[])
     resumed = ImageGateway(agent)
     try:
         response = await resumed.call(
@@ -322,7 +322,7 @@ async def test_followup_image_context_respects_budget_without_duplicating_text(i
     assert response["result"]["turnId"]
     assert (await harness.complete())["text"] == "A small image."
     before = len(provider.messages)
-    resumed = ImageGateway(ReActAgent(provider=provider, max_iterations=1, allowed_tools=[]))
+    resumed = ImageGateway(ReActAgent(provider=provider, allowed_tools=[]))
     try:
         followup = await resumed.call(
             "prompt.submit", {"sessionId": sid, "text": "What color is it?"}
@@ -370,7 +370,7 @@ async def test_followup_retains_image_after_tool_churn_and_compaction(image_gate
             session_id, [chunk.id for chunk in originals], []
         )
         assert await context_manager.get_chunks(session_id) == []
-    resumed = ImageGateway(ReActAgent(provider=provider, max_iterations=1, allowed_tools=[]))
+    resumed = ImageGateway(ReActAgent(provider=provider, allowed_tools=[]))
     try:
         await resumed.call("session.resume", {"sessionId": sid})
         result = await resumed.call(
@@ -722,7 +722,7 @@ async def test_legacy_fallback_seeds_cache_before_compaction(image_gateway, db_p
         )
         assert await context_manager.get_chunks(session_id) == []
         assert await context_manager.get_latest_images(session_id, "harness") == [png()]
-        resumed = ImageGateway(ReActAgent(provider=provider, max_iterations=1, allowed_tools=[]))
+        resumed = ImageGateway(ReActAgent(provider=provider, allowed_tools=[]))
         try:
             await resumed.call("session.resume", {"sessionId": sid})
             result = await resumed.call(

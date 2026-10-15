@@ -30,21 +30,6 @@ class TestMergeDefaultSentinels:
         assert merged.version == expected
 
     @pytest.mark.parametrize(
-        "max_iterations,expected",
-        [
-            pytest.param(10, 10, id="explicit-default-wins"),
-            pytest.param(None, 5, id="none-falls-back-to-base"),
-        ],
-    )
-    def test_merge_max_iterations_sentinel(self, max_iterations, expected) -> None:
-        """Explicit max_iterations wins; None falls back to the base value."""
-        base = SoulSpec(name="Base", config=SoulSpec.Config(max_iterations=5))
-        override = SoulSpec(name="Override", config=SoulSpec.Config(max_iterations=max_iterations))
-        merged = SoulSpecMerger.merge(base, override)
-        assert merged.config is not None
-        assert merged.config.max_iterations == expected
-
-    @pytest.mark.parametrize(
         "context_budget,expected",
         [
             pytest.param(8000, 8000, id="explicit-default-wins"),

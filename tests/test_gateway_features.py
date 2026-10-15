@@ -440,9 +440,12 @@ class TestConfigProfilesStatus:
         assert snapshot["config"]["openrouter_api_key"] in (True, False)
         assert "openrouter_api_key" in snapshot["secrets"]
 
-        monkeypatch.setattr(config, "max_iterations", config.max_iterations)
-        out = result(await h.call("config.set", {"key": "max_iterations", "value": "7"}))
-        assert out["value"] == 7 and config.get("max_iterations") == 7
+        monkeypatch.setattr(config, "turn_timeout", config.turn_timeout)
+        out = result(await h.call("config.set", {"key": "turn_timeout", "value": "7"}))
+        assert out["value"] == 7 and config.get("turn_timeout") == 7
+        # R4-025: max_iterations was removed; the surface rejects it.
+        removed = await h.call("config.set", {"key": "max_iterations", "value": "7"})
+        assert removed["error"]["code"] == INVALID_PARAMS
         flag = result(await h.call("config.set", {"key": "verbose", "value": "off"}))
         assert flag["value"] is False
 

@@ -71,7 +71,7 @@ class TestLLMChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None
@@ -123,7 +123,7 @@ class TestLLMChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 # Should not crash — should return an error or retry
@@ -145,7 +145,7 @@ class TestLLMChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 # Should return error response, not crash
@@ -167,7 +167,7 @@ class TestLLMChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None
@@ -195,7 +195,7 @@ class TestLLMChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 # Should not crash — should return a valid response
                 response = await agent.run(mock_session.id, "test", verbose=False)
                 assert response is not None
@@ -224,7 +224,7 @@ class TestLLMChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None
@@ -252,7 +252,7 @@ class TestLLMChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None
@@ -333,7 +333,7 @@ class TestToolChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("machina.core.agent.registry", test_registry):
-                    agent = ReActAgent(provider=provider, max_iterations=5)
+                    agent = ReActAgent(provider=provider)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
                     assert response is not None
@@ -384,7 +384,7 @@ class TestToolChaos:
                     # timeout *mechanism* deterministically, independent of the
                     # production default (which is sized for slow network tools).
                     with patch.dict("machina.core.agent._TOOL_TIMEOUTS", {"slow_tool": 0.5}):
-                        agent = ReActAgent(provider=provider, max_iterations=5)
+                        agent = ReActAgent(provider=provider)
 
                         # Agent should have its own timeout mechanism for tool execution
                         # The tool will sleep for 1000s, but the agent should timeout
@@ -447,7 +447,7 @@ class TestToolChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("machina.core.agent.registry", test_registry):
-                    agent = ReActAgent(provider=provider, max_iterations=5)
+                    agent = ReActAgent(provider=provider)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
                     assert response is not None
@@ -492,7 +492,7 @@ class TestToolChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("machina.core.agent.registry", test_registry):
-                    agent = ReActAgent(provider=provider, max_iterations=5)
+                    agent = ReActAgent(provider=provider)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
                     assert response is not None
@@ -538,7 +538,7 @@ class TestContextChaos:
                     ]
                 )
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None
@@ -572,7 +572,7 @@ class TestContextChaos:
                     ]
                 )
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None
@@ -585,7 +585,7 @@ class TestContextChaos:
         with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=None)
 
-            agent = ReActAgent(provider=provider, max_iterations=5)
+            agent = ReActAgent(provider=provider)
             with pytest.raises(ValueError, match="not found"):
                 await agent.run(uuid.uuid4(), "test")
 
@@ -598,7 +598,6 @@ class TestContextChaos:
 class TestDatabaseChaos:
     """Chaos tests for database failures."""
 
-    @pytest.mark.xfail(strict=True, reason="PB-1: agent.run lets flush DB errors escape instead of log-and-continue; fix owned by agent-chain lane")
     async def test_agent_handles_db_connection_drop(self, mock_session):
         """Agent should handle a database connection drop during context flush.
 
@@ -631,7 +630,7 @@ class TestDatabaseChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 # Agent should handle DB errors gracefully (log and continue)
                 response = await agent.run(mock_session.id, "test", verbose=False)
                 assert response is not None
@@ -663,7 +662,7 @@ class TestDatabaseChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 response = await asyncio.wait_for(
                     agent.run(mock_session.id, "test", verbose=False),
                     timeout=30,
@@ -672,7 +671,6 @@ class TestDatabaseChaos:
                 assert response.content == "test"
                 assert mock_cm.add_chunks_batch.await_count == 2
 
-    @pytest.mark.xfail(strict=True, reason="PB-1: agent.run lets flush DB errors escape instead of log-and-continue; fix owned by agent-chain lane")
     async def test_agent_handles_db_pool_exhaustion(self, mock_session):
         """Agent should handle a database pool exhaustion on every batch write."""
         provider = AsyncMock()
@@ -695,7 +693,7 @@ class TestDatabaseChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 # Agent should handle DB errors gracefully (log and continue)
                 response = await agent.run(mock_session.id, "test", verbose=False)
                 assert response is not None
@@ -732,7 +730,7 @@ class TestStreamingChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 events = []
                 async for event in agent.run_stream(mock_session.id, "test", verbose=False):
                     events.append(event)
@@ -770,7 +768,7 @@ class TestStreamingChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
                 events = []
                 async for event in agent.run_stream(mock_session.id, "test", verbose=False):
                     events.append(event)
@@ -809,7 +807,7 @@ class TestConcurrentChaos:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=provider, max_iterations=5)
+                agent = ReActAgent(provider=provider)
 
                 # Run multiple agents concurrently
                 results = await asyncio.gather(
@@ -858,7 +856,7 @@ class TestConcurrentChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("machina.core.agent.registry", test_registry):
-                    agent = ReActAgent(provider=provider, max_iterations=5)
+                    agent = ReActAgent(provider=provider)
 
                     # Run multiple agents concurrently
                     results = await asyncio.gather(
@@ -950,7 +948,7 @@ class TestRecoveryChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("machina.core.agent.registry", test_registry):
-                    agent = ReActAgent(provider=provider, max_iterations=10)
+                    agent = ReActAgent(provider=provider)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
                     assert response is not None

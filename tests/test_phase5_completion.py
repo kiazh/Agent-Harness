@@ -17,7 +17,7 @@ from machina.core.orchestrator import Orchestrator
 @pytest.mark.asyncio
 async def test_yaml_agents_load_and_database_takes_precedence(tmp_path, monkeypatch):
     (tmp_path / "reviewer.yaml").write_text(
-        "name: reviewer\ndescription: Review code\ntools: [read_file]\nmax_iterations: 4\n",
+        "name: reviewer\ndescription: Review code\ntools: [read_file]\n",
         encoding="utf-8",
     )
     (tmp_path / "invalid.yml").write_text("tools: wrong\n", encoding="utf-8")
@@ -30,7 +30,7 @@ async def test_yaml_agents_load_and_database_takes_precedence(tmp_path, monkeypa
     reviewer = await registry.get("reviewer")
     assert reviewer.source == "yaml"
     assert reviewer.tools == ["read_file"]
-    assert reviewer.max_iterations == 4
+    assert reviewer.description == "Review code"
     assert await registry.get("invalid") is None
     assert "reviewer" in {agent.name for agent in await registry.list()}
 
@@ -45,7 +45,6 @@ async def test_yaml_agents_load_and_database_takes_precedence(tmp_path, monkeypa
                 "tools": "[]",
                 "model": None,
                 "provider": None,
-                "max_iterations": 2,
                 "source": "db",
             }
         ),
