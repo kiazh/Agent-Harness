@@ -448,6 +448,11 @@ def public_view(rec: dict | None) -> dict | None:
     for key in ("display", "content_preview"):
         if isinstance(out.get(key), str):
             out[key] = _redact_public_text(out[key])
+    # R4-105b: the top-level ``target`` column is persisted raw (durable row
+    # stays intact for execution identity) so it must be redacted here at the
+    # view boundary, like proposal/display. Covers legacy rows and listings.
+    if isinstance(out.get("target"), str):
+        out["target"] = _redact_public_text(out["target"])
     return out
 
 
@@ -777,6 +782,15 @@ def _with_completeness(rec: dict | None) -> dict | None:
 
 
 async def get_approval(request_id: str) -> dict | None:
+    """Durable approval record through the redacted public view.
+
+    R4-105b behavior change: the returned mapping is the ``public_view`` of
+    the stored row — the top-level ``target`` column (persisted raw) is
+    redacted here at the view boundary. The durable row itself is untouched;
+    execution identity (digest/raw argv) still binds the exact action via
+    ``claim_execution``/``proposal_of``. Internal grant-scope derivation from
+    ``target`` therefore sees the redacted value (fail-closed direction).
+    """
     db = await _db()
     if db is not None:
         try:
@@ -784,7 +798,7 @@ async def get_approval(request_id: str) -> dict | None:
                 "SELECT * FROM permission_approvals WHERE request_id = $1", request_id
             )
             if row:
-                return _with_completeness(dict(row))
+                return public_view(_with_completeness(dict(row)))
         except Exception as error:
             logger.error("durable approval read failed (%s)", type(error).__name__)
             raise
@@ -792,7 +806,7 @@ async def get_approval(request_id: str) -> dict | None:
     async with _mem.lock:
         rec = _mem.approvals.get(request_id)
         mem_copy = dict(rec) if rec is not None else None
-    return _with_completeness(mem_copy)
+    return public_view(_with_completeness(mem_copy))
 
 
 async def find_pending(session_id: str, digest: str) -> dict | None:

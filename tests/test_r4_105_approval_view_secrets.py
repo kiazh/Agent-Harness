@@ -220,15 +220,6 @@ async def test_target_secret_is_redacted_in_live_card(approval_db):
     assert any("[REDACTED" in str(t) for t in card["targets"]), card["targets"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "R4-105: permissions/store.py persists the top-level target column raw "
-        "and public_view() does not redact it, so a secret embedded in targets "
-        "still reaches list_pending/get_approval (owner: permissions/store.py "
-        "lane). Flip this xfail with the store-side fix."
-    ),
-)
 @pytest.mark.asyncio
 async def test_target_secret_is_redacted_in_durable_record_and_listing(approval_db):
     """Durable record + listing must not expose a target-embedded secret."""
