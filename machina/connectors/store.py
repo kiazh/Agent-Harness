@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 from machina.connectors.models import ConfigError, ConnectorConfig
-from machina.core.background_tasks import await_joined
 
 _WINDOWS = os.name == "nt"
 if _WINDOWS:
@@ -108,6 +107,8 @@ class ConnectorStore:
         self, fields: dict[str, Any], *, expected_revision: int | None = None
     ) -> ConnectorConfig:
         """Persist a configuration without parking the event loop on the lock."""
+        from machina.core.background_tasks import await_joined
+
         return await await_joined(
             asyncio.to_thread(self.configure, fields, expected_revision=expected_revision),
             capture_result=True,
@@ -117,6 +118,8 @@ class ConnectorStore:
         self, connector_id: str, *, expected_revision: int | None = None
     ) -> bool:
         """Remove a configuration without parking the event loop on the lock."""
+        from machina.core.background_tasks import await_joined
+
         return await await_joined(
             asyncio.to_thread(self.remove, connector_id, expected_revision=expected_revision),
             capture_result=True,
