@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from machina.core.config import (
@@ -45,6 +46,7 @@ from machina.core.session import session_manager
 from machina.gateway.errors import INVALID_PARAMS, RpcError
 from machina.gateway.features._common import _bool, _str
 from machina.security import providers as store
+from machina.security.env_file import set_env_values
 
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
@@ -170,6 +172,33 @@ async def models_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     raise RpcError(INVALID_PARAMS, f"unknown provider: {provider}")
 
 
+_REASONING_EFFORT_ENV = "MACHINA_REASONING_EFFORT"
+
+
+def _sync_reasoning_effort_env(effort: str, *, persist: bool) -> None:
+    """Keep the ``MACHINA_REASONING_EFFORT`` shadow in step with an /effort write.
+
+    ``Config.get`` reads ``MACHINA_<KEY>`` (env / ``.env``) before the
+    in-memory attribute, and for ``reasoning_effort`` even an explicitly empty
+    value is an active "provider default" signal. Without this sync
+    ``/effort high`` reported success while calls kept the environment's value
+    (H23 holistic review). Mirror ``sync_execution_mode_env``: update the
+    process environment always, and ``.env`` for the durable path; a failed
+    ``.env`` write only warns (the in-process value already applies).
+    """
+    os.environ[_REASONING_EFFORT_ENV] = effort
+    if not persist:
+        return
+    try:
+        set_env_values({_REASONING_EFFORT_ENV: effort})
+    except (OSError, ValueError) as error:
+        logger.warning(
+            "reasoning_effort: .env sync failed for %s (%s)",
+            _REASONING_EFFORT_ENV,
+            type(error).__name__,
+        )
+
+
 async def models_set_effort(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Validate + apply a reasoning effort for the request session's route."""
     gw.require_db()
@@ -213,6 +242,10 @@ async def models_set_effort(gw: Gateway, params: dict[str, Any]) -> dict[str, An
         # canonical vocabulary); if that ever drifts, report a typed invalid
         # parameter instead of escaping as INTERNAL_ERROR.
         raise RpcError(INVALID_PARAMS, str(exc)) from None
+    # H23: config.get() prefers MACHINA_REASONING_EFFORT (even an explicitly
+    # empty value) over the in-memory write, so sync the shadow — the echo
+    # below must report the effective effort, never an overridden request.
+    _sync_reasoning_effort_env(normalized, persist=persist)
     return {
         "provider": provider,
         "model": model,

@@ -38,6 +38,14 @@ REASONING_EFFORTS: tuple[str, ...] = ("low", "medium", "high")
 REASONING_CATALOG_EFFORTS: tuple[str, ...] = ("minimal", "xhigh", "max")
 REASONING_UNSET_EFFORTS: tuple[str, ...] = ("", "none", "off", "default", "auto")
 
+# Single output-token ceiling shared with the provider transports. Every
+# provider validates ``max_tokens`` against it at request time
+# (machina.core.provider.transport._validate_params), so configuration accepts
+# exactly the same executable range — a saved value above it could never reach
+# the provider (H10 holistic review). Defined here because transport already
+# imports config; config never imports the provider stack.
+MAX_TOKENS = 32768
+
 # Secrets live in the environment (.env), never in config.yaml.
 SECRET_KEYS = frozenset(
     {
@@ -92,6 +100,7 @@ __all__ = [
     "SECRET_KEYS",
     "LEGACY_ENV_VARS",
     "DEFAULTS",
+    "MAX_TOKENS",
     "REASONING_EFFORTS",
     "REASONING_CATALOG_EFFORTS",
     "REASONING_UNSET_EFFORTS",
@@ -216,6 +225,14 @@ DEFAULTS: dict[str, Any] = {
     "cohere_api_key": "",
     "database_url": "",
     "searxng_url": "",
+    # Firecrawl/SearXNG stack lifecycle for the interactive UI (see
+    # core/firecrawl_lifecycle.py): opt-in autostart, stop-on-exit on by
+    # default so an enabled autostart cannot outlive the last live session.
+    # ``firecrawl_home`` holds the user's up.sh launcher for the Lima
+    # docker-VM stack; failures are log-only and never block the UI.
+    "firecrawl_autostart": False,
+    "firecrawl_stop_on_exit": True,
+    "firecrawl_home": "~/firecrawl",
     "machina_home": "",
     "tmpdir": "",
     "temp": "",
@@ -354,7 +371,7 @@ def _check_int_bounds(key: str, val: int) -> None:
         "turn_timeout": (1, 3600),
         "approval_timeout": (1, 3600),
         "context_budget": (100, None),
-        "max_tokens": (1, None),
+        "max_tokens": (1, MAX_TOKENS),
         # 0 disables throttling (AsyncTokenBucket.acquire short-circuits);
         # documented in rate_limit.py and pinned by test_f5_zero_rate.
         "rate_limit_calls_per_minute": (0, None),
@@ -461,6 +478,11 @@ class Config:
     cohere_api_key: str = field(default="", repr=False)
     database_url: str = field(default="", repr=False)
     searxng_url: str = ""
+    # Firecrawl/SearXNG stack lifecycle for the interactive UI (opt-in; see
+    # DEFAULTS for the contract).
+    firecrawl_autostart: bool = False
+    firecrawl_stop_on_exit: bool = True
+    firecrawl_home: str = "~/firecrawl"
     machina_home: str = ""
     tmpdir: str = ""
     temp: str = ""

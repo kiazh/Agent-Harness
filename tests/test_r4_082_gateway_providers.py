@@ -196,6 +196,47 @@ async def test_non_chatgpt_effort_policy_stays_typed(sandbox):
         assert "supported: low, medium, high" in str(excinfo.value), value
 
 
+# ─── models.setEffort vs environment precedence (H23) ────────────────────────
+
+
+async def test_set_effort_takes_effect_despite_an_env_shadow(sandbox, monkeypatch):
+    """H23: ``/effort`` must not echo success while MACHINA_REASONING_EFFORT wins."""
+    from machina.core.config import config
+
+    monkeypatch.setenv("MACHINA_REASONING_EFFORT", "high")
+    out = await feature.models_set_effort(_gw(provider="openai", model="gpt-4o"), {"effort": "low"})
+    assert out["effort"] == "low"
+    assert config.get("reasoning_effort") == "low"
+
+
+async def test_set_effort_off_takes_effect_despite_an_env_shadow(sandbox, monkeypatch):
+    """Clearing to provider default must also beat an explicit env value."""
+    from machina.core.config import config
+
+    monkeypatch.setenv("MACHINA_REASONING_EFFORT", "high")
+    out = await feature.models_set_effort(_gw(provider="openai", model="gpt-4o"), {"effort": "off"})
+    assert out["effort"] is None
+    assert config.get("reasoning_effort") == ""
+
+
+async def test_set_effort_persist_syncs_the_env_file(sandbox, monkeypatch):
+    """A persisted effort survives a restart: .env carries the same value."""
+    import importlib
+
+    from machina.security.env_file import read_env_values
+
+    config_module = importlib.import_module("machina.core.config")
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", sandbox / "config.yaml")
+    monkeypatch.setenv("MACHINA_REASONING_EFFORT", "high")
+
+    out = await feature.models_set_effort(
+        _gw(provider="openai", model="gpt-4o"), {"effort": "medium", "persist": True}
+    )
+    assert out["effort"] == "medium"
+    assert config_module.config.get("reasoning_effort") == "medium"
+    assert read_env_values()["MACHINA_REASONING_EFFORT"] == "medium"
+
+
 # ─── providers.remove: the fallback survives a restart ──────────────────────
 
 

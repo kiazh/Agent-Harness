@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from machina.core.config import config
+from machina.core.config import MAX_TOKENS, config
 from machina.core.exceptions import ProviderError, RateLimitError, ValidationError
 from machina.core.models import ToolDefinition
 from machina.core.provider._log import logger
@@ -236,11 +236,11 @@ def _validate_messages(messages: list[dict[str, str]]) -> None:
 
 
 def _validate_params(temperature: float, max_tokens: int) -> None:
-    """Validate LLM call parameters."""
+    """Validate LLM call parameters against the shared output ceiling."""
     if not (0.0 <= temperature <= 2.0):
         raise ValidationError(f"temperature must be between 0.0 and 2.0, got {temperature}")
-    if not (1 <= max_tokens <= 32768):
-        raise ValidationError(f"max_tokens must be between 1 and 32768, got {max_tokens}")
+    if not (1 <= max_tokens <= MAX_TOKENS):
+        raise ValidationError(f"max_tokens must be between 1 and {MAX_TOKENS}, got {max_tokens}")
 
 
 def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
