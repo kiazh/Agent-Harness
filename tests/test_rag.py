@@ -279,6 +279,77 @@ class MyClass:
         # Preamble survives under the alias too.
         assert "import os" in "".join(c.text for c in alias_chunks)
 
+    def test_split_code_attaches_decorators_to_their_definition(self):
+        """R4-088(b): decorators are part of the following definition chunk."""
+        code = (
+            "import os\n\n"
+            "@functools.cache\n"
+            "def alpha():\n"
+            "    return os.name\n\n"
+            "@app.route('/beta')\n"
+            "@requires_auth\n"
+            "def beta():\n"
+            "    return 2\n"
+        )
+        chunks = RecursiveCharacterTextSplitter().split_code(code, language="python")
+        alpha = [c for c in chunks if c.metadata.get("symbol") == "def alpha"]
+        beta = [c for c in chunks if c.metadata.get("symbol") == "def beta"]
+        assert len(alpha) == 1 and alpha[0].text.startswith("@functools.cache\ndef alpha")
+        assert len(beta) == 1
+        assert beta[0].text.startswith("@app.route('/beta')\n@requires_auth\ndef beta")
+        # No standalone decorator chunk carries the decorator as its symbol.
+        assert not any(str(c.metadata.get("symbol", "")).startswith("@") for c in chunks)
+
+    def test_split_code_single_decorated_definition_stays_whole(self):
+        """R4-088(b): one decorated definition is one chunk with metadata."""
+        code = "@deco\ndef only():\n    return 1\n"
+        chunks = RecursiveCharacterTextSplitter().split_code(code, language="python")
+        assert [c.metadata.get("symbol") for c in chunks] == ["def only"]
+        assert chunks[0].text == code.strip()
+
+    def test_split_code_single_plain_definition_keeps_symbol_metadata(self):
+        """R4-088(b): symbol splitting applies even to single-definition files."""
+        code = "def only():\n    return 1\n"
+        chunks = RecursiveCharacterTextSplitter().split_code(code, language="python")
+        assert [c.metadata.get("symbol") for c in chunks] == ["def only"]
+        assert chunks[0].text == code.strip()
+
+    def test_split_markdown_ignores_headings_inside_fences(self):
+        """R4-088(c): '#' lines inside a fence are content, never headings."""
+        text = (
+            "# Title\n\n"
+            "Intro line.\n\n"
+            "```python\n"
+            "# this is a comment inside a fence\n"
+            "## also not a heading\n"
+            "print('hi')\n"
+            "```\n\n"
+            "## Real heading\n\n"
+            "Body after the fence.\n"
+        )
+        chunks = RecursiveCharacterTextSplitter().split_markdown(text)
+        headings = {c.metadata.get("heading") for c in chunks}
+        assert "Title > Real heading" in headings
+        assert not any("comment inside a fence" in h for h in headings), headings
+        assert not any("also not a heading" in h for h in headings), headings
+        titled = "".join(c.text for c in chunks if c.metadata.get("heading") == "Title")
+        assert "```python" in titled and "print('hi')" in titled
+        assert "# this is a comment inside a fence" in titled
+
+    def test_split_markdown_tilde_fences_also_mask_headings(self):
+        """R4-088(c): '~~~' fences behave like backtick fences."""
+        text = "# Doc\n\n~~~\n# not a heading\n~~~\n\n## Section\n\nText.\n"
+        chunks = RecursiveCharacterTextSplitter().split_markdown(text)
+        headings = {c.metadata.get("heading") for c in chunks}
+        assert "Doc > Section" in headings
+        assert not any("not a heading" in h for h in headings), headings
+
+    def test_split_markdown_unclosed_fence_masks_to_eof(self):
+        """R4-088(c): an unclosed fence keeps later '#' lines as content."""
+        text = "# Start\n\n```\n# still code\n"
+        chunks = RecursiveCharacterTextSplitter().split_markdown(text)
+        assert [c.metadata.get("heading") for c in chunks] == ["Start"]
+
     def test_chunk_indices(self, chunker, sample_text):
         """Test that chunks have sequential indices."""
         chunks = chunker.split_text(sample_text)

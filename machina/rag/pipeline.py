@@ -315,9 +315,6 @@ class RAGPipeline:
                 )
             )
 
-        if not records:
-            return []
-
         insert_sql = """
             INSERT INTO context_chunks
                 (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
@@ -336,6 +333,7 @@ class RAGPipeline:
             [r[6] for r in records],  # search_text array
             [r[7] for r in records],  # document_source array
         )
+        delete_sql = "DELETE FROM context_chunks WHERE session_id = $1 AND document_source = $2"
 
         async def _replace_and_insert(executor: Any) -> Any:
             # Serialize replacements of the same (session, source) across
@@ -343,19 +341,19 @@ class RAGPipeline:
             # competing transaction cannot observe the others' uncommitted
             # INSERTs, so un-serialized DELETE+INSERT runs interleave and every
             # caller commits its own copy of the document. The transaction-
-            # scoped advisory lock is released on commit/rollback.
+            # scoped advisory lock is released on commit/rollback. An EMPTY
+            # replacement (R4-088) deletes the previous generation and inserts
+            # nothing — never an early return that leaves stale chunks behind.
             await executor.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                 f"rag_document_replace:{session_id}:{doc_source}",
             )
-            await executor.execute(
-                "DELETE FROM context_chunks WHERE session_id = $1 AND document_source = $2",
-                session_id,
-                doc_source,
-            )
+            await executor.execute(delete_sql, session_id, doc_source)
+            if not records:
+                return []
             return await executor.fetch(insert_sql, *insert_args)
 
-        rows: Any = None
+        rows: Any = []
         attempted = False
         acquire = getattr(db, "acquire", None)
         if callable(acquire):
@@ -381,7 +379,10 @@ class RAGPipeline:
                         rows = await _replace_and_insert(conn)
         if not attempted:
             # Test doubles without an acquire/transaction protocol.
-            rows = await db.fetch(insert_sql, *insert_args)
+            if records:
+                rows = await db.fetch(insert_sql, *insert_args)
+            else:
+                await db.execute(delete_sql, session_id, doc_source)
         stored_chunks = [self._row_to_chunk(r) for r in rows]
 
         audit_log(

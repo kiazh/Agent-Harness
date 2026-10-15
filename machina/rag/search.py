@@ -40,6 +40,16 @@ class SearchResult:
 DOCUMENT_TYPES: tuple[str, ...] = ("document",)
 
 
+class SearchUnavailableError(RuntimeError):
+    """Both retrieval branches failed; an empty answer would be a lie.
+
+    Raised instead of returning ``[]`` so callers (the search tool, the
+    evaluation harness) can render a retrieval outage distinctly from a
+    genuinely empty index (R4-088(d)). Inherits ``RuntimeError`` and stays
+    defined here so the rag package's core-import ratchet is untouched.
+    """
+
+
 class HybridSearch:
     """Hybrid search combining PostgreSQL full-text ranking and dense vector search.
 
@@ -101,14 +111,37 @@ class HybridSearch:
             dense_task, sparse_task, return_exceptions=True
         )
 
-        # Handle exceptions gracefully: use whichever branch survived, but
-        # mark the result set degraded (scores kept, fusion continues).
+        # Handle exceptions with intent: a single surviving branch keeps its
+        # evidence (marked degraded); when BOTH branches fail the answer is
+        # unknown, not empty — raising a typed error keeps a retrieval
+        # outage distinguishable from a genuinely empty index (R4-088(d)).
+        dense_failed = isinstance(dense_results, Exception)
+        sparse_failed = isinstance(sparse_results, Exception)
+        if dense_failed and sparse_failed:
+            logger.error(
+                "Both retrieval branches failed: dense=%s, keyword=%s",
+                type(dense_results).__name__,
+                type(sparse_results).__name__,
+            )
+            audit_log(
+                "rag_search_unavailable",
+                session_id=str(session_id),
+                query_text=query_text[:100],
+                dense_error=type(dense_results).__name__,
+                sparse_error=type(sparse_results).__name__,
+            )
+            raise SearchUnavailableError(
+                "both retrieval branches failed "
+                f"(dense: {type(dense_results).__name__}, "
+                f"keyword: {type(sparse_results).__name__}); "
+                "results are unavailable — this is not an empty index"
+            )
         degraded = False
-        if isinstance(dense_results, Exception):
+        if dense_failed:
             logger.error("Dense search failed: %s", dense_results)
             dense_results = []
             degraded = True
-        if isinstance(sparse_results, Exception):
+        if sparse_failed:
             logger.error("PostgreSQL FTS search failed: %s", sparse_results)
             sparse_results = []
             degraded = True

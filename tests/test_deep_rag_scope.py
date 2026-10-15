@@ -8,6 +8,7 @@ import pytest
 
 from machina.rag.embedder import Embedder
 from machina.rag.pipeline import RAGConfig, RAGPipeline
+from machina.rag.search import SearchUnavailableError
 
 DEFAULT_MODEL = "text-embedding-3-small"
 OTHER_MODEL = "text-embedding-ada-002"
@@ -230,6 +231,37 @@ async def test_invalid_query_dimension_is_rejected_before_dense_retrieval(rows):
     rows.add()
     with pytest.raises(ValueError, match="embedding dimension mismatch"):
         await pipeline(vector=[1.0]).search("shared query", rows.session_id, rerank=False)
+
+
+class _FailBranch:
+    """Failure injection at the SQL boundary for one or both retrieval branches."""
+
+    def __init__(self, inner, which):
+        self._inner = inner
+        self._which = which
+
+    async def fetch(self, query, *args):
+        if "embedding <=>" in query and self._which in ("dense", "both"):
+            raise RuntimeError("dense retrieval backend down")
+        if "ts_rank" in query and self._which in ("sparse", "both"):
+            raise RuntimeError("keyword retrieval backend down")
+        return await self._inner.fetch(query, *args)
+
+
+async def test_both_retrieval_branches_failing_raises_instead_of_empty(rows, monkeypatch):
+    """R4-088(d): dual branch failure is a typed error, not 'no matches'."""
+    rows.add()
+    monkeypatch.setattr("machina.rag.pipeline.db", _FailBranch(rows, "both"))
+    with pytest.raises(SearchUnavailableError, match="retrieval"):
+        await pipeline().search("shared query", rows.session_id, rerank=False)
+
+
+async def test_single_branch_failure_still_returns_degraded_evidence(rows, monkeypatch):
+    """One surviving branch keeps its evidence and marks it degraded."""
+    rows.add()
+    monkeypatch.setattr("machina.rag.pipeline.db", _FailBranch(rows, "dense"))
+    results = await pipeline().search("shared query", rows.session_id, rerank=False)
+    assert results and all(r.retrieval_degraded for r in results)
 
 
 @pytest.mark.parametrize("read", ["fresh", "cached"])

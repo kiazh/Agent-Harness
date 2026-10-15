@@ -1,6 +1,58 @@
 """Tests for chunker overlap behavior."""
 
+import subprocess
+import sys
+
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 from machina.rag.chunker import RecursiveCharacterTextSplitter
+
+
+def test_nonpositive_size_guard_never_hangs():
+    """R4-088(f): non-positive sizes raise a typed error instead of looping.
+
+    Runs in a subprocess so a regression fails this test instead of hanging
+    the suite forever.
+    """
+    code = (
+        "from machina.rag.chunker import RecursiveCharacterTextSplitter as S\n"
+        "for bad in (0, -1, -10):\n"
+        "    try:\n"
+        "        S._hard_split('abcdef', bad)\n"
+        "    except ValueError:\n"
+        "        pass\n"
+        "    else:\n"
+        "        raise SystemExit(3)\n"
+        "    try:\n"
+        "        S(chunk_size=4)._force_split('abcdef', bad, {})\n"
+        "    except ValueError:\n"
+        "        pass\n"
+        "    else:\n"
+        "        raise SystemExit(4)\n"
+        "try:\n"
+        "    S(chunk_size=0).split_text('ab')\n"
+        "except ValueError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise SystemExit(5)\n"
+        "print('guarded')\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    assert "guarded" in proc.stdout
+
+
+@settings(max_examples=80, deadline=None)
+@given(
+    text=st.text(alphabet=list("ab \n."), min_size=1, max_size=200),
+    max_chars=st.integers(min_value=1, max_value=40),
+)
+def test_hard_split_pieces_are_lossless_and_bounded(text, max_chars):
+    """R4-088(f): positive bounds split losslessly, every piece within bound."""
+    pieces = RecursiveCharacterTextSplitter._hard_split(text, max_chars)
+    assert "".join(pieces) == text
+    assert all(0 < len(piece) <= max_chars for piece in pieces)
 
 
 class TestApplyOverlap:

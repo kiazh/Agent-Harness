@@ -4,13 +4,14 @@ import time
 import uuid
 from unittest.mock import AsyncMock
 
+import asyncpg
 import httpx
 import pytest
 
 from machina.core.models import ContextChunk
-from machina.rag.pipeline import RAGPipeline
+from machina.rag.pipeline import RAGConfig, RAGPipeline
 from machina.rag.reranker import CohereReranker, IdentityReranker, RerankResult
-from machina.rag.search import SearchResult
+from machina.rag.search import SearchResult, SearchUnavailableError
 
 
 def candidates():
@@ -216,3 +217,78 @@ async def test_embedding_failure_is_degraded_and_survives_cache():
         output = await pipeline.search("query", sid, top_k=2)
         assert all(r.retrieval_mode == "keyword-only" and r.retrieval_degraded for r in output)
     embedder.embed.assert_awaited_once()
+
+
+class _FixedEmbedder:
+    """Deterministic 1536-dim embedder for real-DB retrieval E2E."""
+
+    model_name = "text-embedding-3-small"
+
+    async def embed(self, text):
+        return [1.0] + [0.0] * 1535
+
+    async def embed_batch(self, texts):
+        return [await self.embed(text) for text in texts]
+
+    @property
+    def dimensions(self):
+        return 1536
+
+
+class _FailRetrievalQueries:
+    """Injects a database outage at the two retrieval queries only."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def fetch(self, query, *args):
+        if "embedding <=>" in query or "ts_rank" in query:
+            raise asyncpg.PostgresError("simulated retrieval outage")
+        return await self._inner.fetch(query, *args)
+
+
+async def test_real_db_distinguishes_empty_index_from_dual_branch_failure(db_pool, monkeypatch):
+    """R4-088(d) E2E: a real session answers [] when empty and raises when both
+    retrieval branches are down — the two outcomes are distinguishable."""
+    from machina.rag import pipeline as pipeline_module
+
+    session_id = await db_pool.fetchval(
+        "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
+    )
+    monkeypatch.setattr(pipeline_module, "db", db_pool)
+    pipeline = RAGPipeline(
+        embedder=_FixedEmbedder(),
+        config=RAGConfig(enable_embeddings=True, enable_reranking=False),
+    )
+    try:
+        assert await pipeline.search("anything", session_id, rerank=False) == []
+        monkeypatch.setattr(pipeline_module, "db", _FailRetrievalQueries(db_pool))
+        with pytest.raises(SearchUnavailableError, match="retrieval"):
+            await pipeline.search("anything", session_id, rerank=False)
+    finally:
+        await db_pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
+
+
+async def test_search_tool_renders_unavailable_distinct_from_no_results(monkeypatch):
+    """R4-088(d): the tool renders retrieval failure loudly and keeps the
+    genuinely-empty answer for a genuine miss."""
+    from machina.core.exceptions import ToolError
+    from machina.tools import rag
+
+    sid = uuid.uuid4()
+    failing = AsyncMock()
+    failing.search.side_effect = SearchUnavailableError(
+        "both retrieval branches failed (dense, keyword); results unavailable"
+    )
+    monkeypatch.setattr(rag, "get_rag_pipeline", AsyncMock(return_value=failing))
+    monkeypatch.setattr(rag, "active_agent_scope", AsyncMock(return_value=("harness", sid)))
+    with pytest.raises(ToolError, match="unavailable"):
+        await rag.search_documents("query", str(sid))
+
+    empty = AsyncMock()
+    empty.search.return_value = []
+    monkeypatch.setattr(rag, "get_rag_pipeline", AsyncMock(return_value=empty))
+    assert await rag.search_documents("query", str(sid)) == "No results found for 'query'"

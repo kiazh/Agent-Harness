@@ -59,6 +59,44 @@ def test_cache_survives_to_disk(tiny_tree, tmp_path):
     c2.save()
 
 
+def test_lookup_rejects_stale_digest_even_when_stat_matches(tmp_path):
+    """R4-088(e): the stored sha256 is verified, not write-only."""
+    path = tmp_path / "m.py"
+    path.write_text("import os\n", encoding="utf-8")
+    cache = ContentHashCache()
+    cache.store(str(path), (1, ["os"], False))
+    assert cache.lookup(str(path)) == (1, ["os"], False)
+
+    st = os.stat(path)
+    path.write_text("import re\n", encoding="utf-8")
+    os.utime(path, (st.st_atime, st.st_mtime))
+    # Same mtime and size — only the digest can tell.
+    assert cache.lookup(str(path)) is None
+
+    cache.store(str(path), (1, ["re"], False))
+    assert cache.lookup(str(path)) == (1, ["re"], False)
+
+
+def test_rebuild_detects_mtime_preserving_rewrite(tiny_tree):
+    """R4-088(e): a same-stat rewrite cannot keep stale inventory data."""
+    target = tiny_tree / "pkg" / "a.py"
+    cache = ContentHashCache()
+    first = build_repomap(str(tiny_tree), cache=cache)
+    assert "os" in first.import_edges["pkg.a"]
+
+    original = target.read_text(encoding="utf-8")
+    rewritten = original.replace("import os", "import re")
+    assert len(rewritten) == len(original)
+    st = os.stat(target)
+    target.write_text(rewritten, encoding="utf-8")
+    os.utime(target, (st.st_atime, st.st_mtime))
+
+    second = build_repomap(str(tiny_tree), cache=cache)
+    assert second.files_scanned == 1
+    assert "re" in second.import_edges["pkg.a"]
+    assert "os" not in second.import_edges["pkg.a"]
+
+
 def test_evidence_map_ranges_and_zero_repeat_work(tmp_path):
     f = tmp_path / "doc.txt"
     f.write_text("\n".join(f"line{i}" for i in range(1, 11)))

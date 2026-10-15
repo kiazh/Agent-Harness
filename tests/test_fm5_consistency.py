@@ -321,6 +321,72 @@ async def test_reindex_same_document_source_keeps_single_copy(db_pool, monkeypat
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
 
 
+async def test_empty_reindex_deletes_previous_generation_only_for_its_source(db_pool, monkeypatch):
+    """R4-088(a): truncating a document to empty still replaces its generation.
+
+    An empty re-index previously returned before the delete, leaving the old
+    chunks searchable. The delete must run for the same (session, source)
+    while other sources and other sessions stay untouched (adversarial
+    boundary), and the warmed pipeline cache must not resurrect the deleted
+    generation.
+    """
+    monkeypatch.setattr("machina.rag.pipeline.db", db_pool)
+    session_id = await db_pool.fetchval(
+        "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
+    )
+    other_session = await db_pool.fetchval(
+        "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
+    )
+    source = f"truncated-{uuid.uuid4()}.txt"
+    kept_source = f"kept-{uuid.uuid4()}.txt"
+    pipeline = RAGPipeline(config=RAGConfig(enable_embeddings=False, enable_reranking=False))
+    try:
+        await pipeline.index_document(
+            Document(content=("alpha beta gamma delta. " * 40), source=source, doc_type="text"),
+            session_id,
+        )
+        await pipeline.index_document(
+            Document(content=("keep this generation " * 10), source=kept_source, doc_type="text"),
+            session_id,
+        )
+        # Same source string under another session: must never be collateral.
+        await pipeline.index_document(
+            Document(content=("other session content " * 10), source=source, doc_type="text"),
+            other_session,
+        )
+        found = await pipeline.search("alpha", session_id, rerank=False)
+        assert found, "precondition: the generation is searchable"
+        assert all(r.chunk.payload["metadata"]["source"] == source for r in found)
+
+        emptied = await pipeline.index_document(
+            Document(content="", source=source, doc_type="text"), session_id
+        )
+        assert emptied == []
+        count = await db_pool.fetchval(
+            "SELECT count(*) FROM context_chunks WHERE session_id = $1 AND document_source = $2",
+            session_id,
+            source,
+        )
+        assert count == 0, "empty re-index left the previous generation"
+        other_count = await db_pool.fetchval(
+            "SELECT count(*) FROM context_chunks WHERE session_id = $1 AND document_source = $2",
+            session_id,
+            kept_source,
+        )
+        assert other_count > 0, "unrelated source was deleted"
+        foreign_count = await db_pool.fetchval(
+            "SELECT count(*) FROM context_chunks WHERE session_id = $1 AND document_source = $2",
+            other_session,
+            source,
+        )
+        assert foreign_count > 0, "another session's same-named source was deleted"
+        assert await pipeline.search("alpha", session_id, rerank=False) == []
+    finally:
+        await db_pool.execute(
+            "DELETE FROM sessions WHERE id = ANY($1::uuid[])", [session_id, other_session]
+        )
+
+
 async def test_concurrent_reindex_of_one_source_keeps_single_copy(db_pool, monkeypatch):
     """8 concurrent replacements of one document leave exactly one generation.
 

@@ -35,7 +35,7 @@ class RepoMap:
     test_files: list[str] = field(default_factory=list)
     import_edges: dict[str, list[str]] = field(default_factory=dict)
     skipped_large: list[str] = field(default_factory=list)
-    files_scanned: int = 0  # files actually read this pass (cache hits read nothing)
+    files_scanned: int = 0  # files parsed this pass (cache hits re-hash, never parse)
 
 
 def _is_test(path_rel: str) -> bool:
@@ -79,7 +79,9 @@ def _local_module(root: str, rel: str) -> str:
 
 def build_repomap(root: str, cache: ContentHashCache | None = None) -> RepoMap:
     """Single bounded pass over ``root``. Repeat runs with the same cache object
-    (or same cache file) perform zero file reads: ``files_scanned == 0``."""
+    (or same cache file) perform zero parses of unchanged files:
+    ``files_scanned == 0``; ``lookup`` still re-hashes each cached file so a
+    same-stat rewrite cannot serve stale inventory data."""
     if cache is None:
         cache = ContentHashCache()
     assert isinstance(cache, ContentHashCache)

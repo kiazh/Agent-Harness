@@ -1,4 +1,4 @@
-"""Content-hash cache: repeat inventory runs do zero work."""
+"""Content-hash cache: repeat inventory runs skip parsing, never serve stale bytes."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ _PARSED = tuple  # (loc: int, imports: list[str], is_entry: bool)
 class ContentHashCache:
     """Maps absolute path -> (content sha256, parsed tuple).
 
-    ``lookup`` returns the parsed tuple on hash hit WITHOUT reading the file
-    body (it stats + hashes: one bounded read for hashing only... actually it
-    must read bytes to hash). To make "repeat = zero work" observable at the
-    file-content level, callers count ``files_scanned`` (content parses), and
-    the cache additionally memoizes by (path, mtime, size) so unchanged files
-    skip even the hash read. Hash is recomputed only when stat changes.
+    ``lookup`` returns the parsed tuple only after re-hashing the file's
+    current bytes and matching the stored sha256, so a rewrite that preserves
+    mtime and size (a same-stat write) is detected instead of serving stale
+    inventory data (R4-088). Only parsing is skipped — every lookup performs
+    one bounded read for hashing; a stat mismatch short-circuits before the
+    read. ``store`` re-stats and re-hashes the file it records.
     """
 
     def __init__(self, path: str | None = None) -> None:
@@ -34,13 +34,20 @@ class ContentHashCache:
         ent = self._entries.get(abs_path)
         if not ent:
             return None
+        expected = ent.get("sha256")
+        if not expected:
+            return None
         try:
             st = os.stat(abs_path)
+            if ent.get("mtime") != st.st_mtime or ent.get("size") != st.st_size:
+                return None  # stat changed -> caller re-reads + store() re-hashes
+            with open(abs_path, "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
         except OSError:
             return None
-        if ent.get("mtime") == st.st_mtime and ent.get("size") == st.st_size:
-            return (ent["loc"], list(ent["imports"]), bool(ent["entry"]))
-        return None  # stat changed -> caller re-reads + store() re-hashes
+        if digest != expected:
+            return None  # content changed under an unchanged stat
+        return (ent["loc"], list(ent["imports"]), bool(ent["entry"]))
 
     def store(self, abs_path: str, parsed: tuple) -> None:
         loc, imports, entry = parsed

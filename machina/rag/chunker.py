@@ -59,8 +59,8 @@ class RecursiveCharacterTextSplitter:
     # Markdown header pattern
     _MD_HEADER = re.compile(r"^(#{1,6}\s+.+)$", re.MULTILINE)
 
-    # Code block pattern (fenced)
-    _CODE_BLOCK = re.compile(r"```[\s\S]*?```")
+    # One fenced-code delimiter line (three or more backticks or tildes).
+    _FENCE = re.compile(r"^(`{3,}|~{3,})")
 
     def __init__(
         self,
@@ -126,7 +126,12 @@ class RecursiveCharacterTextSplitter:
         return result
 
     def split_markdown(self, text: str, metadata: dict[str, Any] | None = None) -> list[Chunk]:
-        """Split Markdown text on headers, preserving heading path in metadata."""
+        """Split Markdown text on headers, preserving heading path in metadata.
+
+        '#'-prefixed lines inside fenced code blocks (backticks or tildes,
+        closed or unclosed) are content, never headings (R4-088): the fence
+        tracker runs before the heading match.
+        """
         if not text:
             return []
 
@@ -135,12 +140,26 @@ class RecursiveCharacterTextSplitter:
         # Stack of (level, title) for nested heading paths.
         heading_stack: list[tuple[int, str]] = []
         current_text = ""
+        fence: str | None = None
 
         def _heading_path() -> str:
             return " > ".join(title for _, title in heading_stack)
 
         for line in text.split("\n"):
-            header_match = self._MD_HEADER.match(line)
+            stripped = line.lstrip()
+            fence_match = self._FENCE.match(stripped)
+            if fence_match:
+                marker = fence_match.group(1)
+                rest = stripped[len(marker) :].strip()
+                if fence is None:
+                    fence = marker
+                elif marker[0] == fence[0] and len(marker) >= len(fence) and not rest:
+                    # A closing fence repeats its opening marker without an
+                    # info string; anything else stays inside the block.
+                    fence = None
+                current_text += line + "\n"
+                continue
+            header_match = None if fence else self._MD_HEADER.match(line)
             if header_match:
                 # Save previous section
                 if current_text.strip():
@@ -184,7 +203,11 @@ class RecursiveCharacterTextSplitter:
         chunks: list[Chunk] = []
         language = normalize_language(language)
 
-        # Simple heuristic: split on function/class definitions
+        # Simple heuristic: split on function/class definitions. Decorator
+        # lines ('@...') are not symbols themselves: they attach to the
+        # definition that follows, so a decorated function forms ONE chunk
+        # including its decorators (R4-088) regardless of how many
+        # definitions the file holds.
         if language in ("python", "javascript", "typescript", "java", "go", "rust"):
             pattern = re.compile(
                 r"^(\s*(?:async\s+def\s+\w+|def\s+\w+|class\s+\w+|function\s+\w+|func\s+\w+|pub fn\s+\w+|pub async fn\s+\w+|async fn\s+\w+|@[A-Za-z_][\w.]*.*))",
@@ -192,11 +215,31 @@ class RecursiveCharacterTextSplitter:
             )
             matches = list(pattern.finditer(text))
 
-            if len(matches) > 1:
+            # Group each decorator run with the definition it decorates. The
+            # chunk starts at the first decorator; the symbol is the
+            # definition's signature.
+            definitions: list[tuple[int, str]] = []
+            pending_decorator: int | None = None
+            for match in matches:
+                symbol = match.group(1).strip()
+                if symbol.startswith("@"):
+                    if pending_decorator is None:
+                        pending_decorator = match.start()
+                    continue
+                start = pending_decorator if pending_decorator is not None else match.start()
+                pending_decorator = None
+                definitions.append((start, symbol))
+            if pending_decorator is not None:
+                # Trailing decorator without a definition: keep the source
+                # text as its own chunk rather than dropping it.
+                trailing = text[pending_decorator:].strip()
+                definitions.append((pending_decorator, trailing.split("\n", 1)[0].strip()))
+
+            if definitions:
                 # Header content before the first definition (package
                 # declarations, imports, module constants) is not a symbol but
                 # must never be dropped: keep it as a preamble chunk.
-                preamble = text[: matches[0].start()].strip()
+                preamble = text[: definitions[0][0]].strip()
                 if preamble:
                     preamble_meta = {**base_metadata, "language": language, "symbol": None}
                     if self._estimate_tokens(preamble) > self.chunk_size:
@@ -209,15 +252,14 @@ class RecursiveCharacterTextSplitter:
                                 token_count=self._estimate_tokens(preamble),
                             )
                         )
-                for i, match in enumerate(matches):
-                    start = match.start()
-                    end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+                for i, (start, symbol) in enumerate(definitions):
+                    end = definitions[i + 1][0] if i + 1 < len(definitions) else len(text)
                     code_block = text[start:end].strip()
                     if code_block:
                         block_meta = {
                             **base_metadata,
                             "language": language,
-                            "symbol": match.group(1).strip(),
+                            "symbol": symbol,
                         }
                         # If block is too large, recursively split
                         if self._estimate_tokens(code_block) > self.chunk_size:
@@ -317,6 +359,8 @@ class RecursiveCharacterTextSplitter:
 
     def _force_split(self, text: str, size: int, metadata: dict[str, Any]) -> list[Chunk]:
         """Force split text into fixed-size chunks by character count."""
+        if size <= 0:
+            raise ValueError(f"chunk size must be positive, got {size}")
         chunks = []
         # Approximate: 1 token ≈ 4 chars
         char_size = size * 4
@@ -404,7 +448,13 @@ class RecursiveCharacterTextSplitter:
 
     @staticmethod
     def _hard_split(text: str, max_chars: int) -> list[str]:
-        """Split *text* into pieces ≤ max_chars, preferring separator cuts."""
+        """Split *text* into pieces ≤ max_chars, preferring separator cuts.
+
+        ``max_chars`` must be positive: a non-positive bound cannot advance
+        the cursor and would loop forever (R4-088).
+        """
+        if max_chars <= 0:
+            raise ValueError(f"max_chars must be positive, got {max_chars}")
         pieces: list[str] = []
         start = 0
         while start < len(text):
