@@ -6,6 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from machina import interop as interop_mod
 from machina.core.exceptions import ToolError
 from machina.core.self_knowledge import FEATURES, configuration
 from machina.core.session import session_manager
@@ -65,6 +66,9 @@ async def harness_status() -> str:
             },
             "features": FEATURES,
             "installed": installed,
+            # Spawn-free (state file + PATH lookup only): lets the agent answer
+            # "are you connected to opencode?" truthfully without a live probe.
+            "harnesses": interop_mod.state_summary(),
         }
 
     try:

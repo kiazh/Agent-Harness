@@ -34,7 +34,7 @@ _REAL_POPEN = subprocess.Popen
 
 
 def _result(output: str = "", rc: int = 0, stderr: str = "", timed_out: bool = False):
-    return interop.RunResult(
+    return interop._ProcessResult(
         returncode=rc, output=output, stderr=stderr, timed_out=timed_out, truncated=False
     )
 
@@ -767,7 +767,7 @@ def test_cli_status_renders_table_and_hints(monkeypatch):
     for expected in ("OpenCode", "Codex", "Hermes", "project", "manual", "machina.mcp_server"):
         assert expected in result.output
     # Installed-but-unregistered harnesses get an actionable hint.
-    assert "interop enable codex" in result.output
+    assert "harnesses enable codex" in result.output
 
 
 def test_cli_status_survives_detection_failure(monkeypatch):
@@ -940,7 +940,7 @@ def test_enable_detected_non_interactive_only_enables_listed(monkeypatch):
     assert any(line.startswith("  Codex:") for line in lines)
     assert any("Hermes: not installed" in line for line in lines)
     # Skipped candidates get the exact enable-later command.
-    assert any("machina interop enable opencode --scope global" in line for line in lines)
+    assert any("machina harnesses enable opencode --scope global" in line for line in lines)
     assert any("Enabling Machina for Codex (scope: global)" in line for line in lines)
 
 
@@ -1000,7 +1000,7 @@ def test_enable_detected_tty_prompt_yes_then_no(monkeypatch):
     assert report.enabled == ["opencode"] and report.skipped == ["codex"]
     assert any("Enable Machina in OpenCode? [Y/n]" in line for line in lines)
     assert any("Enable Machina in Codex? [Y/n]" in line for line in lines)
-    assert any("machina interop enable codex --scope global" in line for line in lines)
+    assert any("machina harnesses enable codex --scope global" in line for line in lines)
 
 
 def test_enable_detected_prompt_eof_is_a_safe_no(monkeypatch):
@@ -1117,7 +1117,7 @@ def test_cli_interop_setup_auto_piped_is_summary_only(monkeypatch):
     assert calls == [], "piped auto must write nothing"
     flat = " ".join(result.output.split())
     assert "Interop harness detection:" in flat
-    assert "machina interop enable opencode --scope global" in flat
+    assert "machina harnesses enable opencode --scope global" in flat
 
 
 @pytest.mark.parametrize(("answer", "should_enable"), [("y\n", True), ("n\n", False)])
@@ -1148,7 +1148,7 @@ def test_cli_interop_setup_no_prompt_overrides_a_tty(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls == []
-    assert "machina interop enable codex --scope global" in " ".join(result.output.split())
+    assert "machina harnesses enable codex --scope global" in " ".join(result.output.split())
 
 
 def test_cli_interop_setup_invalid_mode_exits_2():

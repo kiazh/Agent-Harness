@@ -26,7 +26,7 @@ from machina import interop as interop_mod
 from machina.cli import output
 from machina.cli.auth import app as auth_app
 from machina.cli.growth import app as growth_app
-from machina.cli.interop import app as interop_app
+from machina.cli.interop import app as harnesses_app
 from machina.cli.launcher import launch_ui
 from machina.cli.output import console
 from machina.cli.providers import app as providers_app
@@ -49,7 +49,10 @@ app = typer.Typer(
 )
 app.add_typer(auth_app, name="auth")
 app.add_typer(growth_app, name="growth")
-app.add_typer(interop_app, name="interop")
+# Primary name is ``harnesses``; ``interop`` stays registered as a kept alias
+# of the same app so existing scripts, the installer and docs keep working.
+app.add_typer(harnesses_app, name="harnesses")
+app.add_typer(harnesses_app, name="interop")
 app.add_typer(providers_app, name="providers")
 
 
@@ -1181,7 +1184,9 @@ def _doctor_interop_line(key: str, result: object) -> str:
         return f"  {label}: " + ", ".join(parts)
     parts.append("not registered")
     return (
-        f"  {label}: " + ", ".join(parts) + f" — fix: `machina interop enable {key} --scope global`"
+        f"  {label}: "
+        + ", ".join(parts)
+        + f" — fix: `machina harnesses enable {key} --scope global`"
     )
 
 
@@ -1264,7 +1269,7 @@ def doctor():
     _run(_check_db())
 
     console.print()
-    console.print("[bold]External agent harnesses (interop)[/bold]")
+    console.print("[bold]External agent harnesses[/bold]")
     try:
         detection = interop_mod.detect()
         for key, result in detection.items():
@@ -1311,15 +1316,17 @@ def _interop_state_lines(report) -> list[str]:
     lines: list[str] = []
     if report.enabled:
         names = ", ".join(labels.get(key, key) for key in report.enabled)
-        lines.append(f"Interop: registered `machina` with {names} — see `machina interop status`.")
+        lines.append(
+            f"Interop: registered `machina` with {names} — see `machina harnesses status`."
+        )
     if report.failed:
         names = ", ".join(labels.get(key, key) for key in report.failed)
         lines.append(
-            f"Interop: registration did not verify for {names} — see `machina interop status`."
+            f"Interop: registration did not verify for {names} — see `machina harnesses status`."
         )
     if report.skipped:
         names = ", ".join(labels.get(key, key) for key in report.skipped)
-        hint = f"machina interop enable {report.skipped[0]} --scope global"
+        hint = f"machina harnesses enable {report.skipped[0]} --scope global"
         lines.append(f"Interop: {names} installed but not registered — enable with `{hint}`.")
     if not lines:
         registered = [result.label for result in detected.values() if result.registered]
@@ -1357,7 +1364,7 @@ def _setup_interop(mode: str, *, non_interactive: bool) -> list[str]:
         )
     except Exception as error:  # pragma: no cover - interop is best-effort
         console.print(f"  [yellow]Interop setup skipped: {escape(str(error))}[/yellow]")
-        return ["Interop: setup skipped (run `machina interop setup` later)."]
+        return ["Interop: setup skipped (run `machina harnesses setup` later)."]
     return _interop_state_lines(report)
 
 

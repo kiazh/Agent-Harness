@@ -119,7 +119,12 @@ async def test_capability_brief_is_bounded_live_and_never_reads_secrets(monkeypa
     assert secret not in context and "A warm tutor" not in context, (
         "persona content already has its own prompt section"
     )
-    assert get_token_count(context) <= 650
+    # Bound raised 650 -> 850 for the harnesses feature entry (H1, 2026-10-15):
+    # the always-on brief now names external agent harnesses (OpenCode/Codex/
+    # Hermes), the `machina harnesses` surface and delegation. Measured 791
+    # tokens on this tree; the bound still pins the brief against unbounded
+    # growth.
+    assert get_token_count(context) <= 850
     assert '"growth_turn":"unavailable"' in context
     monkeypatch.setattr(config, "rsi_enabled", False)
     assert '"rsi":false' in capability_context(session, tool_names=set(), growth_state="skipped")
@@ -137,7 +142,7 @@ async def test_unrestricted_emotion_never_leaks_or_expands_feature_context(monke
     context = capability_context(session, tool_names={"harness_status"}, growth_state="active")
     assert emotion not in context
     assert configuration(session)["default_emotion"] == "unrecognized (neutral fallback)"
-    assert get_token_count(context) <= 650
+    assert get_token_count(context) <= 850
 
 
 def test_mode_summary_is_bounded_and_missing_mode_is_unknown():

@@ -827,8 +827,8 @@ def test_interop_auto_piped_prints_summary_without_writes(tmp_path):
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "OpenCode" in proc.stdout and "not registered" in proc.stdout
-    assert "machina interop enable opencode --scope global" in proc.stdout
-    assert "machina interop enable codex --scope global" in proc.stdout
+    assert "machina harnesses enable opencode --scope global" in proc.stdout
+    assert "machina harnesses enable codex --scope global" in proc.stdout
 
     for name in ("opencode", "codex"):
         assert "mcp add" not in logs[name].read_text(encoding="utf-8"), (

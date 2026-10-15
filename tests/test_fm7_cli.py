@@ -424,7 +424,7 @@ def test_setup_interop_all_registers_detected_harnesses(
     assert calls == [("codex", "global")], "opencode is registered, hermes not installed"
     flat = " ".join(result.output.split())
     assert "Interop: registered `machina` with Codex" in flat
-    assert "machina interop status" in flat
+    assert "machina harnesses status" in flat
 
 
 def test_setup_interop_none_skips_detection_entirely(
@@ -459,7 +459,7 @@ def test_setup_interop_auto_non_interactive_is_summary_only(
     assert calls == [], "non-interactive setup must never register silently"
     flat = " ".join(result.output.split())
     assert "OpenCode: installed" in flat and "not registered" in flat
-    assert "machina interop enable codex --scope global" in flat
+    assert "machina harnesses enable codex --scope global" in flat
     assert "Interop:" in flat
 
 
@@ -509,8 +509,9 @@ def test_doctor_interop_section_is_read_only(monkeypatch: pytest.MonkeyPatch) ->
 
     assert result.exit_code == 0, result.output
     flat = " ".join(result.output.split())
-    assert "External agent harnesses (interop)" in flat
+    assert "External agent harnesses" in flat
+    assert "External agent harnesses (interop)" not in flat, "label dropped the stale alias tag"
     assert "OpenCode: installed (v9.9), not running, registered (project)" in flat
     assert "Codex: installed (v9.9), not running, not registered" in flat
-    assert "machina interop enable codex --scope global" in flat
+    assert "machina harnesses enable codex --scope global" in flat
     assert "Hermes: not installed" in flat

@@ -1,18 +1,21 @@
-"""``machina interop`` — detect external agent harnesses and set up Machina.
+"""``machina harnesses`` — detect external agent harnesses and set up Machina.
 
 Surfaces the ``machina.interop`` module: which of OpenCode / Codex / Hermes
 are installed, running, and registered to reach Machina's MCP server
-(``python -m machina.mcp_server``), plus idempotent enable/disable and the
-best-effort ``setup`` sweep used by the installer and ``machina setup``.
+(``python -m machina.mcp_server``), plus idempotent enable/disable, the
+best-effort ``setup`` sweep used by the installer and ``machina setup``, and
+``run`` to delegate one prompt to an installed harness headlessly. The group
+is registered as ``harnesses``; ``interop`` remains a kept alias of the same
+app (``machina interop ...`` still works).
 
 Status-surface decision (interop wave, 2026-10-14): this feature is
 deliberately NOT folded into ``services.format_status_lines`` or the
 ``machina status`` rendering. The shared (label, value) subset is pinned by
 ``tests/test_mcp_server.py`` as a stability contract for two consumers (CLI +
 MCP shim), and detection spawns platform CLIs — a cost that does not belong in
-the general status path. ``machina interop status`` is the interop surface.
+the general status path. ``machina harnesses status`` is the interop surface.
 
-Exit codes: 0 ok, 1 action failed, 2 usage / unknown platform.
+Exit codes: 0 ok, 1 action failed, 2 usage / unknown platform / unsupported run.
 """
 
 from __future__ import annotations
@@ -27,8 +30,8 @@ from machina import interop
 from machina.cli.output import console
 
 app = typer.Typer(
-    help="Detect external agent harnesses (OpenCode, Codex, Hermes) and "
-    "register or remove Machina's MCP server for them.",
+    help="Detect external agent harnesses (OpenCode, Codex, Hermes), register "
+    "or remove Machina's MCP server for them, and delegate a task with `run`.",
     no_args_is_help=True,
 )
 
@@ -91,8 +94,9 @@ def run_status() -> int:
         console.print(f"[dim]· {escape(hint)}[/dim]")
     if actionable:
         console.print(
-            "[dim]Enable other harnesses with `machina interop enable <platform>`; "
-            "see `machina interop --help`.[/dim]"
+            "[dim]Enable other harnesses with `machina harnesses enable <platform>`; "
+            'delegate with `machina harnesses run <platform> "<prompt>"`; '
+            "see `machina harnesses --help`.[/dim]"
         )
     return EXIT_OK
 
@@ -103,7 +107,7 @@ def _hint_for(key: str, result: interop.DetectResult) -> str:
     if result.enabled is None and result.registered:
         return (
             f"{result.label}: registered outside Machina's state — "
-            f"`machina interop enable {key}` records it without changing anything."
+            f"`machina harnesses enable {key}` records it without changing anything."
         )
     if result.registered and result.enabled:
         scope = f" ({result.state_scope} scope)" if result.state_scope else ""
@@ -114,7 +118,7 @@ def _hint_for(key: str, result: interop.DetectResult) -> str:
             if "project" in interop.PLATFORMS[key].supports_scopes
             else "(user config)"
         )
-        return f"{result.label}: not registered — `machina interop enable {key}` {scope_hint}."
+        return f"{result.label}: not registered — `machina harnesses enable {key}` {scope_hint}."
     return ""
 
 
@@ -192,10 +196,32 @@ def run_setup(mode: str = "auto", *, scope: str = "global", no_prompt: bool = Fa
     )
     if report.failed:
         console.print(
-            "[yellow]Some registrations did not complete; run `machina interop status`.[/yellow]"
+            "[yellow]Some registrations did not complete; run `machina harnesses status`.[/yellow]"
         )
         return EXIT_FAILED
     return EXIT_OK
+
+
+def run_run(platform: str, prompt: str, *, timeout: float = 300.0) -> int:
+    """Delegate one prompt to a harness; return 0 ok, 1 failure, 2 unsupported."""
+    result = interop.run_task(platform, prompt, timeout=timeout)
+    if result.unsupported_reason:
+        console.print(
+            f"[red]Cannot run on {escape(platform)}: {escape(result.unsupported_reason)}[/red]"
+        )
+        return EXIT_USAGE
+    if result.command:
+        console.print(f"[dim]$ {escape(shlex.join(result.command))}[/dim]")
+    if result.stdout:
+        console.print(result.stdout, markup=False, highlight=False)
+    if result.stderr:
+        console.print(result.stderr, style="red", markup=False, highlight=False)
+    if result.exit_code is None:
+        console.print(f"[red]{escape(platform)} run did not start[/red]")
+    else:
+        style = "green" if result.ok else "red"
+        console.print(f"[{style}]{escape(platform)} exited {result.exit_code}[/{style}]")
+    return EXIT_OK if result.ok else EXIT_FAILED
 
 
 @app.command()
@@ -244,3 +270,15 @@ def setup(
 ) -> None:
     """Detect harnesses and register Machina's MCP server (best-effort)."""
     raise typer.Exit(run_setup(mode, scope=scope, no_prompt=no_prompt))
+
+
+@app.command()
+def run(
+    platform: str = typer.Argument(..., help=_PLATFORM_HELP),
+    prompt: str = typer.Argument(..., help="Task/prompt to delegate to the harness"),
+    timeout: float = typer.Option(
+        300.0, "--timeout", help="Seconds before the run is killed (process tree)"
+    ),
+) -> None:
+    """Delegate a task to an installed harness headlessly and print the result."""
+    raise typer.Exit(run_run(platform, prompt, timeout=timeout))

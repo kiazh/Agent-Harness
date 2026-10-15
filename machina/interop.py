@@ -18,6 +18,12 @@ inspectable operation:
     Removal where the platform CLI has a remove subcommand; platforms
     without one (OpenCode) report the exact manual step instead.
 
+``run_task(platform, prompt, timeout=...)``
+    Delegate one prompt to an installed harness's documented headless command
+    (``opencode run``, ``codex exec``, ``hermes -z``) through the same bounded
+    runner; returns a typed :class:`RunResult`. It is total: a failed or
+    unsupported run is a value (``ok``/``unsupported_reason``), never raised.
+
 ``enable_detected(...)``
     One best-effort sweep for setup/installer flows: detect every harness,
     print a summary line per platform, and act only on the installed but
@@ -74,9 +80,11 @@ else:
 
 __all__ = [
     "PLATFORMS",
+    "RUN_PLATFORMS",
     "ActionResult",
     "DetectResult",
     "EnableReport",
+    "RunResult",
     "UnknownPlatform",
     "detect",
     "disable",
@@ -84,9 +92,12 @@ __all__ = [
     "enable_detected",
     "load_state",
     "resolve_platform",
+    "run_task",
     "server_command",
     "state_path",
+    "state_summary",
     "stdin_is_tty",
+    "supported_runs",
 ]
 
 SERVER_NAME = "machina"
@@ -296,12 +307,13 @@ def remove_argv(spec: PlatformSpec, binary: str) -> list[str] | None:
 
 
 @dataclass(frozen=True)
-class RunResult:
-    """Outcome of one bounded child process.
+class _ProcessResult:
+    """Outcome of one bounded child process (internal to this module).
 
-    Public shape kept from before the F2 extraction; ``_run`` maps the
-    shared runner's :class:`~machina.core.child_process.BoundedResult` onto
-    it.
+    Kept from before the F2 extraction; ``_run`` maps the shared runner's
+    :class:`~machina.core.child_process.BoundedResult` onto it. The public
+    ``RunResult`` (delegated ``run_task`` outcomes) is a distinct, frozen
+    shape.
     """
 
     returncode: int | None
@@ -368,7 +380,7 @@ def _run(
     timeout: float,
     stdin_text: str | None = None,
     cwd: Path | None = None,
-) -> RunResult:
+) -> _ProcessResult:
     """Run one child through the shared bounded runner (round-5 review F2).
 
     Thin adapter over ``machina.core.child_process.run_bounded``: process
@@ -389,7 +401,7 @@ def _run(
         max_stdout=MAX_OUTPUT_CHARS,
         max_stderr=MAX_STDERR_CHARS,
     )
-    return RunResult(
+    return _ProcessResult(
         returncode=result.returncode,
         output=result.stdout,
         stderr=result.stderr,
@@ -635,6 +647,37 @@ def load_state() -> dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def state_summary() -> dict[str, Any]:
+    """Compact, spawn-free harness picture for ``harness_status``.
+
+    Reads the persisted state file and answers a PATH lookup only — no
+    version/list/running probes — so the agent's live self-status stays fast
+    and cannot hang on a harness CLI. Each platform reports ``installed``
+    (best-effort PATH lookup) and what Machina last recorded: ``enabled``,
+    ``scope`` and ``registered`` (enabled *and* the last verify passed). This
+    lets the agent answer "are you connected to opencode?" truthfully without
+    claiming a registration Machina never verified — or one that was removed.
+    """
+    state = load_state()
+    platforms: dict[str, Any] = {}
+    for key, spec in PLATFORMS.items():
+        entry = state.get(key)
+        entry = entry if isinstance(entry, dict) else {}
+        verify = entry.get("verify")
+        verify = verify if isinstance(verify, dict) else {}
+        enabled = bool(entry.get("enabled")) if "enabled" in entry else None
+        # A verified *removal* also stores ``verify.ok`` true (absence
+        # confirmed), so registration needs both enabled and a passing verify.
+        platforms[key] = {
+            "label": spec.label,
+            "installed": _which(spec) is not None,
+            "enabled": enabled,
+            "scope": entry.get("scope"),
+            "registered": enabled is True and bool(verify.get("ok")),
+        }
+    return {"state_file": str(state_path()), "platforms": platforms}
 
 
 def _save_state(state: dict[str, Any]) -> None:
@@ -1123,7 +1166,7 @@ def _detection_summary_line(result: DetectResult) -> str:
 def _enable_later_hint(result: DetectResult, scope: str) -> str:
     return (
         f"  {result.label}: enable later with "
-        f"`machina interop enable {result.platform} --scope {scope}`"
+        f"`machina harnesses enable {result.platform} --scope {scope}`"
     )
 
 
@@ -1220,7 +1263,7 @@ def enable_detected(
         report.skipped.append(result.platform)
         report.notes.append(
             f"{result.label}: left unregistered; enable later with "
-            f"`machina interop enable {result.platform} --scope {scope}`"
+            f"`machina harnesses enable {result.platform} --scope {scope}`"
         )
         emit(_enable_later_hint(result, scope))
 
@@ -1241,3 +1284,118 @@ def enable_detected(
         mark = "✓" if action.ok else "✗"
         emit(f"  {mark} {action.message}")
     return report
+
+
+# ---------------------------------------------------------------------------
+# Delegating a task to a harness (`machina harnesses run`)
+# ---------------------------------------------------------------------------
+
+# Headless invocations verified against the binaries installed on this host
+# (2026-10-15):
+#   * ``opencode v2.0.26`` documents ``opencode run [flags] [<message...>]``
+#     (the v1 ``run`` was interactive; the installed v2 ``run`` is the headless
+#     entry point — ``opencode run --help`` confirms the positional message).
+#   * ``codex-cli 0.162.1`` documents ``codex exec [OPTIONS] [PROMPT]`` ("Run
+#     Codex non-interactively").
+#   * ``Hermes Agent v0.21.6`` documents ``-z/--oneshot PROMPT`` ("One-shot
+#     mode: send a single prompt and print ONLY the final response text to
+#     stdout ... Intended for scripts / pipes"), so Hermes is run-capable.
+# The prefix is the executable name plus its headless subcommand; ``run_task``
+# appends the prompt. Kept as a plain mapping so callers (the CLI and the UI
+# lane) can render the exact command without a probe.
+RUN_PLATFORMS: dict[str, list[str]] = {
+    "opencode": ["opencode", "run"],
+    "codex": ["codex", "exec"],
+    "hermes": ["hermes", "-z"],
+}
+
+_RUN_DESCRIPTIONS: dict[str, str] = {
+    "opencode": 'opencode run "<prompt>" — OpenCode headless message (v2 CLI)',
+    "codex": 'codex exec "<prompt>" — Codex non-interactive execution',
+    "hermes": 'hermes -z "<prompt>" — Hermes one-shot mode (scripts/pipes)',
+}
+
+
+def supported_runs() -> dict[str, str]:
+    """Platforms that support ``machina harnesses run``, with a usage hint."""
+    return {key: _RUN_DESCRIPTIONS[key] for key in RUN_PLATFORMS}
+
+
+@dataclass
+class RunResult:
+    """Outcome of one delegated harness run (:func:`run_task`).
+
+    Frozen public interface (the UI lane and the MCP surface read these exact
+    field names): ``platform``; ``command`` is the argv actually planned;
+    ``exit_code`` is ``None`` for a spawn failure; ``stdout``/``stderr`` are
+    bounded, ANSI-stripped and secret-redacted; ``ok`` is ``exit_code == 0``
+    and not timed out. ``unsupported_reason`` is set (with ``ok`` False) for
+    an unknown platform or one without headless support, so callers never
+    raise for a run that cannot start.
+    """
+
+    platform: str
+    command: list[str]
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    ok: bool
+    unsupported_reason: str = ""
+
+
+def run_task(platform: str, prompt: str, *, timeout: float = 300.0) -> RunResult:
+    """Delegate one prompt to an installed harness, bounded and typed.
+
+    Runs the platform's documented headless command through the shared runner
+    (minimal environment, its own process group, a kill-tree deadline and
+    size-capped output) and maps the :class:`_ProcessResult` onto
+    :class:`RunResult`. Output is ANSI-stripped and secret-redacted. This is
+    total: a failed run, a missing binary, or an unsupported/unknown platform
+    is a value (``ok``/``exit_code``/``unsupported_reason``), never raised.
+    """
+    key = (platform or "").strip().lower()
+    prefix = RUN_PLATFORMS.get(key)
+    if prefix is None:
+        if key in PLATFORMS:
+            reason = f"{PLATFORMS[key].label} has no supported headless run command"
+        else:
+            reason = (
+                f"unknown platform {platform!r}; run-capable: "
+                f"{', '.join(RUN_PLATFORMS)} (see `machina harnesses status`)"
+            )
+        return RunResult(
+            platform=key,
+            command=[],
+            exit_code=None,
+            stdout="",
+            stderr="",
+            ok=False,
+            unsupported_reason=reason,
+        )
+    spec = resolve_platform(key)
+    planned = [prefix[0], *prefix[1:], prompt]
+    binary = _which(spec)
+    if binary is None:
+        return RunResult(
+            platform=key,
+            command=planned,
+            exit_code=None,
+            stdout="",
+            stderr=f"{spec.label} is not installed ({spec.binaries[0]} not on PATH)",
+            ok=False,
+        )
+    command = [binary, *prefix[1:], prompt]
+    proc = _run(command, env=_child_env(spec), timeout=timeout)
+    stdout = _redact_output(proc.output)
+    stderr = _redact_output(proc.stderr)
+    if proc.timed_out:
+        note = f"timed out after {timeout:g}s (process tree killed)"
+        stderr = f"{stderr}\n{note}".strip() if stderr else note
+    return RunResult(
+        platform=key,
+        command=command,
+        exit_code=proc.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        ok=proc.returncode == 0 and not proc.timed_out,
+    )
