@@ -15,6 +15,7 @@ import msgpack
 
 from machina.core.models import ContextChunk
 from machina.core.provider import audit_log
+from machina.core.provider.audit import redact_url_credentials
 from machina.core.serialization import (
     embedding_to_str,
     payload_to_msgpack,
@@ -228,7 +229,10 @@ class RAGPipeline:
         audit_log(
             "rag_index_start",
             session_id=str(session_id),
-            source=doc.source,
+            # R5-N (finding 18): redact URI credentials before emission so
+            # neither the log line nor the persisted audit row carries a
+            # userinfo password or credential query/fragment value.
+            source=redact_url_credentials(doc.source),
             doc_type=doc.doc_type,
         )
 
@@ -388,7 +392,8 @@ class RAGPipeline:
         audit_log(
             "rag_index_complete",
             session_id=str(session_id),
-            source=doc.source,
+            # R5-N (finding 18): same pre-emission redaction as rag_index_start.
+            source=redact_url_credentials(doc.source),
             chunks_stored=len(stored_chunks),
         )
 

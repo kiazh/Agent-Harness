@@ -67,7 +67,11 @@ def _sanitize_value(value: Any) -> Any:
             sanitized,
             flags=re.DOTALL,
         )
-        return sanitized
+        # URL credentials last: earlier patterns already redacted token-shaped
+        # and DB-scheme secrets (their markers are preserved, never rewritten).
+        # This closes the remainder — URI userinfo passwords and credential
+        # query/fragment values of any length or format (R5-N / finding 18).
+        return redact_url_credentials(sanitized)
     elif isinstance(value, dict):
         return {
             k: ("[REDACTED]" if _is_sensitive_audit_key(k) else _sanitize_value(v))
@@ -81,6 +85,74 @@ def _sanitize_value(value: Any) -> Any:
         return {_sanitize_value(v) for v in value}
     else:
         return value
+
+
+# R5-N (finding 18): URI credential redaction for audit output. Token-shaped
+# secrets and DB-scheme passwords are handled by the patterns above; these
+# cover the remainder — URI userinfo passwords and credential-bearing query /
+# fragment parameters of any length or format.
+
+#: ``scheme://user:password@`` — password allows embedded ``@`` (greedy to the
+#: last ``@`` before a path/query/fragment boundary); ``/``, whitespace, ``?``
+#: and ``#`` still terminate so ports (``host:8080/…``) and IPv6 literals
+#: never match.
+_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://[^/\s?#@]+):([^/\s?#]*)@")
+
+#: ``?name=value`` / ``&name=value`` / ``#name=value`` — value stops at the
+#: next delimiter or whitespace so surrounding parameters survive verbatim.
+_URL_CREDENTIAL_PARAM_RE = re.compile(r"([?&#;])([^?&#;\s=]+)=([^?&#;\s]*)")
+
+#: Query/fragment parameter names whose values are credentials. Normalized
+#: (lowercase, non-alphanumeric stripped) before comparison, mirroring
+#: :func:`_is_sensitive_audit_key`.
+_CREDENTIAL_PARAM_SUFFIXES = (
+    "apikey",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "pwd",
+    "credential",
+    "privatekey",
+    "accesskey",
+)
+_CREDENTIAL_PARAM_EXACT = frozenset({"authorization", "auth"})
+
+
+def _is_credential_param(name: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", name.lower())
+    return normalized in _CREDENTIAL_PARAM_EXACT or normalized.endswith(_CREDENTIAL_PARAM_SUFFIXES)
+
+
+def _redact_userinfo_match(match: re.Match[str]) -> str:
+    password = match.group(2)
+    if not password or password.startswith("[REDACTED"):
+        # Empty or already-redacted (e.g. ``[REDACTED_DB_PASSWORD]`` from the
+        # DB-scheme pattern above) — preserve verbatim.
+        return match.group(0)
+    return f"{match.group(1)}:[REDACTED_URL_PASSWORD]@"
+
+
+def _redact_credential_param_match(match: re.Match[str]) -> str:
+    value = match.group(3)
+    if not value or value.startswith("[REDACTED"):
+        return match.group(0)
+    if not _is_credential_param(match.group(2)):
+        return match.group(0)
+    return f"{match.group(1)}{match.group(2)}=[REDACTED_CREDENTIAL]"
+
+
+def redact_url_credentials(text: str) -> str:
+    """Redact URI userinfo passwords and credential query/fragment values.
+
+    Shared by audit emission (:func:`_sanitize_value`), the RAG pipeline's
+    audit call sites, and audit persistence. The username, host, path, and
+    non-credential parameters are preserved for debuggability; a bare
+    ``user@host`` (no password) is an identifier, not a credential, and is
+    left intact.
+    """
+    redacted = _URL_USERINFO_RE.sub(_redact_userinfo_match, text)
+    return _URL_CREDENTIAL_PARAM_RE.sub(_redact_credential_param_match, redacted)
 
 
 def _is_sensitive_audit_key(key: Any) -> bool:

@@ -86,6 +86,23 @@ class AuditPersistence:
                 queue.task_done()
                 return
             try:
+                # R5-N (finding 18): re-sanitize at the persistence boundary so
+                # a raw entry submitted directly (bypassing audit_log) can
+                # never persist a URI userinfo password or credential-bearing
+                # query/fragment value. Lazy import: provider.audit imports
+                # this module lazily, so a top-level import would cycle.
+                from machina.core.provider.audit import _sanitize_value
+
+                try:
+                    entry = _sanitize_value(entry)
+                except Exception:
+                    logger.exception("Could not sanitize audit event; persisting marker")
+                    entry = {
+                        "event": entry.get("event", "unknown")
+                        if isinstance(entry, dict)
+                        else "unknown",
+                        "payload": "[AUDIT_SANITIZE_FAILED]",
+                    }
                 await db.execute(
                     "INSERT INTO audit_events (event, payload) VALUES ($1, $2::jsonb)",
                     entry["event"],
