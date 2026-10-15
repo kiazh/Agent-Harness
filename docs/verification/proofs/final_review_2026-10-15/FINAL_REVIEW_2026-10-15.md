@@ -173,3 +173,33 @@ Commit trail for fixes: `56c0222` S1/S8 · `4714e5e` F12 · `39376d0` UI · `886
   0 failed**, tsc + eslint clean — log `stage3_gate_ui_final.log` (commit 9ec0bce).
 - Architecture ratchets green (agent.py 2213, audit 254, sse 55, package 5002 —
   all with delta-table entries).
+
+
+## no-mistakes gate outcome (2026-10-15)
+
+Ran `no-mistakes axi run` on `round4-fixes` (agent: codex; the bundled opencode
+adapter needs OpenCode 1.x while the installed 2.x API rejects POST /session
+with 405, and opencode 1.19.0 was installed as a dormant fallback). The gate
+completed **7 review fix rounds**, landing 7 `no-mistakes(review)` commits
+(02fe173..1b45dfa): mode-ceiling enforcement at the child boundary, cancellation
+recording/ordering, connector CAS under the store lock, joined async store
+mutations, screener nested-group charging, RAG consumer leases, joined teardown
+across agent/streaming/connectors, premature-exit finalization
+(CancelledError/GeneratorExit/disconnect), flush persistence joins, retirement
+result handling, bounded byte-scan reads, copilot backoff preservation, and the
+NULL-ordinal cursor sentinel.
+
+The run failed terminally only on the codex usage quota (review step, mid
+round 7); its Test/Push/PR/CI stages never ran. Everything it committed was
+then verified and reconciled by the coordinator:
+
+- format + import-sort fixes (26 files), connectors layering (module-level core
+  import deferred), ratchet deltas (agent.py 2267, chatgpt 684, copilot 431,
+  audit 247, package 5003; deferred census 713) - commits 100839a, 28efb79,
+  aa095a9, f24c13e.
+- four earlier pins reconciled with the gate contracts (timeout recorder Task
+  unwrap, child-env ceiling vars, CAS test field name, chaos retained-batch
+  retry, keyset `before_seq` double, behavioral close-once, close cancellation
+  cancel-then-join) - commits 61e7466, e88503c, db76a8f.
+- Final gates: backend **4950 passed / 1 skipped / 9 deselected**; UI
+  **480 tests / 474 passed / 6 skipped / 0 failed** (logs alongside).

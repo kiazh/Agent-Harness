@@ -1,0 +1,5 @@
+FAILED tests/test_tool_timeout_contract.py::test_boundary_values_map_to_the_requested_budget[300]
+FAILED tests/test_tool_timeout_contract.py::test_out_of_schema_requests_keep_the_handlers_typed_error[0]
+FAILED tests/test_tool_timeout_contract.py::test_out_of_schema_requests_keep_the_handlers_typed_error[-3]
+FAILED tests/test_tool_timeout_contract.py::test_out_of_schema_requests_keep_the_handlers_typed_error[1000]
+11 failed, 4935 passed, 1 skipped, 9 deselected in 359.00s (0:05:58)
