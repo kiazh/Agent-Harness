@@ -284,3 +284,94 @@ async def test_stream_without_usage_marks_estimate(make):
     assert usage.get("estimated") is True
     assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
     await provider.close()
+
+
+# ─── H12: explicit SSE error frames fail the stream honestly ────────────────
+
+
+async def test_error_frame_fails_stream_instead_of_empty_success(make):
+    """H12: HTTP 200 + ``{"error": ...}`` frame + ``[DONE]`` used to complete
+    as a successful empty response; it must raise a typed ProviderError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _sse({"error": {"message": "upstream overloaded", "code": "server_error"}})
+
+    provider = make(handler)
+    with pytest.raises(ProviderError) as excinfo:
+        async for _ in provider.stream_complete(MESSAGES):
+            pass
+    assert "provider stream error" in str(excinfo.value)
+    assert "upstream overloaded" in str(excinfo.value)
+    await provider.close()
+
+
+async def test_error_frame_after_partial_output_fails_without_done_event(make):
+    """H12: text already yielded stays yielded, but an explicit error frame
+    must never be reported as a completed partial response."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _sse(_text_chunk("partial "), {"error": "upstream exploded"})
+
+    provider = make(handler)
+    events: list = []
+    with pytest.raises(ProviderError) as excinfo:
+        async for event in provider.stream_complete(MESSAGES):
+            events.append(event)
+    assert [event.type for event in events] == ["text"]
+    assert "upstream exploded" in str(excinfo.value)
+    await provider.close()
+
+
+async def test_error_frame_finishes_reservation_failed_without_success_usage(make, monkeypatch):
+    """H12: the failed call keeps conservative accounting — the reservation is
+    finished ``failed`` and the already-yielded partial output is not counted
+    as a successful completion."""
+    import uuid
+
+    from machina.core.provider import copilot as copilot_module
+
+    finished: list[dict] = []
+
+    class _Store:
+        async def reserve(self, *args, **kwargs):
+            return uuid.UUID(int=1)
+
+        async def finish(self, reservation_id, usage=None, *, failed=False, model=None):
+            finished.append({"usage": usage, "failed": failed})
+            return True
+
+    monkeypatch.setattr(copilot_module, "usage_store", _Store())
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _sse(_text_chunk("partial "), {"error": {"message": "boom"}})
+
+    provider = make(handler)
+    with pytest.raises(ProviderError):
+        async for _ in provider.stream_complete(
+            MESSAGES, session_id=uuid.UUID(int=2), agent_id="harness"
+        ):
+            pass
+    assert len(finished) == 1
+    assert finished[0]["failed"] is True
+    assert not finished[0]["usage"]
+    await provider.close()
+
+
+async def test_benign_frames_without_choices_or_error_stay_tolerated(make):
+    """H12 control: a null ``error`` field and choices-free metadata frames are
+    not error frames and must not fail the stream."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _sse(
+            {"error": None},
+            {"choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 1}},
+            _text_chunk("still fine"),
+            _finish_chunk(),
+        )
+
+    provider = make(handler)
+    events = [event async for event in provider.stream_complete(MESSAGES)]
+    assert [event.type for event in events] == ["text", "done"]
+    assert events[-1].response.content == "still fine"
+    assert events[-1].response.usage["prompt_tokens"] == 4
+    await provider.close()

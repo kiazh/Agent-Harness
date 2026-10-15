@@ -47,6 +47,7 @@ from machina.core.provider.base import LLMProvider
 from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
+    _stream_error_message,
     _truncated_stream_error,
     _validate_messages,
     _validate_params,
@@ -301,6 +302,17 @@ class CopilotProvider(LLMProvider, RateLimitBinding):
                         continue
                     if not isinstance(chunk, dict):
                         continue
+                    if chunk.get("error"):
+                        # Explicit error frame: the Copilot gateway can answer
+                        # HTTP 200 and then stream an ``{"error": ...}`` frame
+                        # instead of choices. Ignoring it let a later ``[DONE]``
+                        # close the call as a successful empty/partial
+                        # completion (H12); fail the stream honestly with the
+                        # same typed error as the direct/openrouter transports.
+                        # The ordinary error path below (metrics, audit,
+                        # reservation) accounts the failed call; already-yielded
+                        # text is never re-counted as a completed response.
+                        raise ProviderError(_stream_error_message(chunk, resolved_model))
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):
                         stream_usage = usage

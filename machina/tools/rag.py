@@ -143,13 +143,13 @@ def _build_shared_pipeline() -> RAGPipeline:
 
 
 async def _close_pipeline_quietly(pipeline: RAGPipeline) -> None:
-    """Close a replaced pipeline's owned embedder/reranker clients (F08).
+    """Close a replaced or released pipeline's owned clients (F08, H19).
 
     The shared pipeline builds and owns an embedder (and reranker) per
     generation; without this the superseded instances — and the credential
     they bound — were never released. Each close is isolated so one failure
-    cannot abort the rebuild or mask the other, and a failure is only logged
-    (never surfaced), matching the shared-embedder close seam.
+    cannot abort the rebuild/release or mask the other, and a failure is only
+    logged (never surfaced), matching the shared-embedder close seam.
     """
     for name in ("_embedder", "_reranker"):
         component = getattr(pipeline, name, None)
@@ -226,6 +226,27 @@ async def release_rag_pipeline(pipeline: RAGPipeline) -> None:
             await _core_symbol("machina.core.background_tasks", "await_joined")(
                 _close_pipeline_quietly(retired)
             )
+
+
+async def close_active_rag_pipeline() -> None:
+    """Release the active shared generation through the one lifecycle helper (H19).
+
+    Runtime-shutdown seam. The previous inline close covered only the active
+    generation's embedder, so an HTTP/Cohere reranker client could outlive
+    runtime shutdown/restart; it also left the closed generation cached, so a
+    restart reused clients that were already closed. Every component the
+    active generation owns (embedder and reranker) is released through the
+    same isolated per-component close used for replaced generations, and the
+    recorded generation identity is reset so the next request builds fresh
+    clients instead of reusing the released ones.
+    """
+    global _rag_pipeline, _rag_pipeline_identity
+    async with _rag_pipeline_lock:
+        pipeline = _rag_pipeline
+        _rag_pipeline = None
+        _rag_pipeline_identity = None
+    if pipeline is not None:
+        await _close_pipeline_quietly(pipeline)
 
 
 @registry.register(

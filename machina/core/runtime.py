@@ -263,17 +263,17 @@ class RuntimeServices:
                         timeout=min(0.1 if cancellation is not None else 5, timeout),
                         label="embedder close",
                     )
-                    from machina.tools import rag as _rag_tools
+                    # H19: release the active shared RAG generation through its
+                    # one lifecycle helper. Closing only ``_rag_pipeline._embedder``
+                    # inline left the active reranker client (HTTP/Cohere) open
+                    # across shutdown and kept the released generation cached.
+                    from machina.tools.rag import close_active_rag_pipeline
 
-                    _pipeline_embedder = getattr(
-                        getattr(_rag_tools, "_rag_pipeline", None), "_embedder", None
+                    await _bounded_cleanup(
+                        close_active_rag_pipeline(),
+                        timeout=min(0.1 if cancellation is not None else 5, timeout),
+                        label="rag pipeline close",
                     )
-                    if _pipeline_embedder is not None:
-                        await _bounded_cleanup(
-                            _pipeline_embedder.close(),
-                            timeout=min(0.1 if cancellation is not None else 5, timeout),
-                            label="rag embedder close",
-                        )
                 except asyncio.CancelledError as e:
                     cancellation = e
                 except Exception:

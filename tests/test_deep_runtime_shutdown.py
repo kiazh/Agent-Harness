@@ -195,3 +195,68 @@ async def test_shutdown_service_failures_log_tracebacks(monkeypatch, caplog):
     assert "RuntimeError" in by_message["connector shutdown failed"].exc_text
     assert "RuntimeError" in by_message["database shutdown failed"].exc_text
     assert not runtime._started
+
+
+# ─── H19: shutdown releases the active RAG generation completely ────────────
+
+
+async def test_shutdown_closes_every_component_of_the_active_rag_pipeline(monkeypatch):
+    """H19: shutdown closed the active pipeline's embedder but left its
+    reranker (HTTP/Cohere client) open and kept the closed generation cached;
+    releasing the active pipeline must close all owned components and reset
+    the recorded generation."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from machina.core import runtime as runtime_module
+    from machina.observability import audit as audit_mod
+    from machina.tools import rag as rag_tools
+
+    embedder = SimpleNamespace(close=AsyncMock())
+    reranker = SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(
+        rag_tools,
+        "_rag_pipeline",
+        SimpleNamespace(_embedder=embedder, _reranker=reranker),
+    )
+    monkeypatch.setattr(rag_tools, "_rag_pipeline_identity", ((0,), (0,), (0.0, 0.0)))
+    monkeypatch.setattr(runtime_module, "drain_background_tasks", AsyncMock())
+    monkeypatch.setattr(audit_mod.audit_persistence, "stop", AsyncMock())
+    monkeypatch.setattr("machina.rag.embedder.close_shared_embedder", AsyncMock())
+    monkeypatch.setattr("machina.db.connection.db.close", AsyncMock())
+
+    runtime = RuntimeServices(_started=True)
+    await runtime.shutdown(timeout=1.0)
+
+    embedder.close.assert_awaited_once()
+    reranker.close.assert_awaited_once()
+    assert rag_tools._rag_pipeline is None
+    assert rag_tools._rag_pipeline_identity is None
+
+
+async def test_close_active_rag_pipeline_is_one_lifecycle_seam(monkeypatch):
+    """H19: one helper owns the full release — every owned component closes
+    (isolated failures never mask the others) and a second call is a no-op."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from machina.tools import rag as rag_tools
+
+    embedder = SimpleNamespace(close=AsyncMock(side_effect=RuntimeError("embedder boom")))
+    reranker = SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(
+        rag_tools,
+        "_rag_pipeline",
+        SimpleNamespace(_embedder=embedder, _reranker=reranker),
+    )
+    monkeypatch.setattr(rag_tools, "_rag_pipeline_identity", ((0,), (0,), (0.0, 0.0)))
+
+    await rag_tools.close_active_rag_pipeline()
+    embedder.close.assert_awaited_once()
+    reranker.close.assert_awaited_once()
+    assert rag_tools._rag_pipeline is None
+    assert rag_tools._rag_pipeline_identity is None
+
+    await rag_tools.close_active_rag_pipeline()
+    embedder.close.assert_awaited_once()
+    reranker.close.assert_awaited_once()
