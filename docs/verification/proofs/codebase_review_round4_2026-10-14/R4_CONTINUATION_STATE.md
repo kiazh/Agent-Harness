@@ -7,12 +7,13 @@ Read this first after any context compaction. Source-of-truth order:
 ## UPDATE — 2026-10-15 R5 wave complete, gates pending
 - ALL Round-5 lanes committed: R5-A/B/C/D/E/F/GH/J/LM/N/O/P/QR/S3, R5-F1/F2,
   R4-025, R4-096, R4-106 (+residual), R4-094(h) parity fix, ratchet delta (a424c26).
-- In flight: HELD-44 (cancelled-write ownership), HELD-55 (history ordering).
-- Remaining after those: R4-131 ledger + R5-review ledger, final docs commit,
-  sequential stage-3 gate (backend then UI, alone), second push, then the full
-  review phase (adversarial-reviewer + code-reviewer + senior-security +
-  senior-architect + security-pen-testing + line-by-line diff pass) — user
-  ordered all of it AFTER every task is done.
+- In flight: NONE. All lanes landed:
+  HELD-44 (3f030ae), HELD-55 (97c6197), R5-Nb (141675e).
+- Remaining: final docs commit, sequential stage-3 gate (backend then UI, alone),
+  bandit gate fixed (7772659), second push, then the full review phase
+  (adversarial-reviewer + code-reviewer + senior-security + senior-architect +
+  security-pen-testing + line-by-line diff pass) — user ordered all of it AFTER
+  every task is done.
 - Note: user asked then retracted test-untracking (`.gitignore`) — nothing
   changed; tests stay tracked.
 

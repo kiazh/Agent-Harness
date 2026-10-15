@@ -224,7 +224,7 @@ were refuted). Evidence under
 | 2 | Full-mode consent text contradicts policy | FIXED — disclosure rewritten to exact grant semantics (fast path stands, comment-pinned) | 8b50144 (+22081dd) |
 | 3 | Atomic writes escape validated dir | FIXED — dir-fd anchored (openat/renameat); real-renamer adversary contained | b169b12 |
 | 4 | Cancelled writes overwrite later edits | FIXED — worker joined before ownership release (agent cancel paths already await) | 3f030ae |
-| 5 | History batched order not preserved | IN FLIGHT — lane pending; status updated on completion | — |
+| 5 | History batched order not preserved | FIXED — durable event ordinal (additive column + sequence + index; readers order by it, NULLS LAST fallback) | 97c6197 |
 | 6 | Final flush errors swallowed | FIXED — PB-1 log-and-continue + retention | bceadb4 |
 | 7 | Scheduler ignores job agent | FIXED — identity replace, caps retained | 49e592c |
 | 8 | UI shows ask while full | FIXED — session-scoped mode status + switch refresh | 8b50144 |
