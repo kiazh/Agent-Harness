@@ -69,11 +69,11 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | P3 | P3 | Rate-limit "0 disables" unreachable via config bound | FIXED 0e933a8 |
 | P4 | P3 | `audit.metadata()` AttributeError on non-str keys | FIXED 0e933a8 |
 | P5 | P3 | `_is_free_model` applies OpenRouter policy to direct providers | DEFERRED (low reach; needs provider context) |
-| P6 | P3 | `render_diagnostics` omits `ledger_dropped` marker | BATCH-3 |
+| P6 | P3 | `render_diagnostics` omits `ledger_dropped` marker | FIXED 08a8f0e |
 | P7 | P3 | Runtime shutdown stops audit before draining background work | FIXED 0e933a8 |
 | P8 | P2 | Gateway global mode writes shadowed by MACHINA_EXECUTION_MODE | FIXED d1438e8 |
 | P9 | P3 | Gateway global `mode.revoke` not persisted | FIXED d1438e8 |
-| P10 | P3 | HTTP SSE v2 `tool.complete.isError` always false | BATCH-3 (post-streaming lane) |
+| P10 | P3 | HTTP SSE v2 `tool.complete.isError` always false | FIXED 08a8f0e |
 | P11 | P3 | Source-text assertion test (r5_011_013) | BATCH-3 |
 
 ## E. Connectors / memory
@@ -83,7 +83,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 | N1 | P2 | Screener charges nested counts, not atom/body size (`(<193ch>){10000}` compile bomb) | LANE (connectors) |
 | N2 | P3 | `OAuthCoordinator.forget()` ignores its owner argument | DEFERRED (route enforces; defense-in-depth) |
 | N3 | P3 | Completed-logout tombstone window can resurrect a grant | DEFERRED (cancel-first guard makes it narrow) |
-| N4 | P3 | Streaming redactor flush drops withheld PEM prefix | BATCH-3 |
+| N4 | P3 | Streaming redactor flush drops withheld PEM prefix | FIXED 08a8f0e |
 | N5 | Q | `MemoryStore.add` drops explicit connection via gate | DEFERRED (latent; all live callers bypass) |
 | N6 | Q | `execute_call` semaphore timeout may leak a permit | DEFERRED (unconfirmed; needs runtime repro) |
 
