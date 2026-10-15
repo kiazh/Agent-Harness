@@ -31,6 +31,15 @@ from machina.observability.diagnostics import record_failure
 
 logger = logging.getLogger(__name__)
 
+# L1b (H01 residual): bound on how long the SSE retire path waits for the
+# cancelled step task to settle before quarantining it (same contract as the
+# engine's H01 source close). The engine for this stream is constructed with
+# the same bound, so a cancellation-resistant step delays ``close_turn`` by at
+# most ~2x this value (retire join, then the engine source close on the same
+# task) plus the fixed 0.1 s settle window — instead of unbounded. Read at
+# call time so tests can shorten it.
+RETIRE_JOIN_TIMEOUT_SECONDS = 5.0
+
 
 async def _stream_session(
     session_id: str, req: PromptRequest, *, resume: tuple[dict, dict] | None = None
@@ -164,14 +173,18 @@ async def _stream_session(
             _TurnHooks(),
             boundary="app.create_app",
             renew_interval_s=_renew_interval,
+            source_close_timeout_s=RETIRE_JOIN_TIMEOUT_SECONDS,
         )
 
-        async def close_turn():
+        async def close_turn(*, driver_settled: bool = True):
+            """Close the stream and the engine; ``driver_settled=False`` when the
+            stream's step task was quarantined (its own unwind owns the stream
+            close — an ``aclose`` on a still-running generator would raise)."""
             from machina.core.background_tasks import await_joined
 
             async def finish():
                 try:
-                    if stream is not None:
+                    if stream is not None and driver_settled:
                         await stream.aclose()
                 finally:
                     closed = await engine.close(cancelled=_stream_cancelled)
@@ -403,7 +416,7 @@ async def _stream_session(
                     # can run in a different task context; the resumed
                     # request context is already gone.
                     pass
-            from machina.core.background_tasks import await_joined
+            from machina.core.background_tasks import await_joined, await_joined_bounded
 
             async def cleanup():
                 active = _renew_state.get("active")
@@ -414,13 +427,29 @@ async def _stream_session(
                     from machina.core.runtime import runtime_services
 
                     async def retire_execution():
+                        # L1b: bound the join of the wedged step. Same contract
+                        # as the engine's H01 source close — a cancellation
+                        # delivered while joining is consumed once and the
+                        # operation gets the bound again; at the deadline the
+                        # step is quarantined by ``await_joined_bounded``
+                        # (cancelled, strongly referenced, failure observed)
+                        # and ``close_turn()`` proceeds, so the provider close
+                        # and claim release can never be held hostage.
                         try:
-                            await await_joined(active)
+                            await await_joined_bounded(
+                                active,
+                                timeout=RETIRE_JOIN_TIMEOUT_SECONDS,
+                                label="app.retire_execution",
+                            )
                         except asyncio.CancelledError:
                             pass
                         except Exception as error:
                             record_failure("app.retire_execution", error)
-                        await close_turn()
+                        # A quarantined driver is still executing the stream
+                        # generator (``aclose`` would raise); its own unwind
+                        # closes it, exactly like the engine's H01 rule. Only
+                        # a settled driver lets the stream close here.
+                        await close_turn(driver_settled=active.done())
 
                     runtime_services.track(active)
                     runtime_services.track(asyncio.create_task(retire_execution()))
