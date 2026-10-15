@@ -322,9 +322,9 @@ class RecursiveCharacterTextSplitter:
         ``base_offset``), never by re-joining a separator-stripped part list.
         That keeps every emission a genuine source substring and keeps
         consecutive emissions adjacent even when a too-large part is recursed
-        (R5-F2): the separator run between the recursed part and the following
-        part is captured as the real source gap instead of being silently
-        dropped, so :meth:`_apply_overlap` can never splice across it.
+        (R5-F2/P3-1): the separator runs before AND after the recursed part
+        are captured as real source gaps instead of being silently dropped,
+        so :meth:`_apply_overlap` can never splice across one.
         """
         if not text:
             return []
@@ -382,8 +382,28 @@ class RecursiveCharacterTextSplitter:
                 sub_chunks = self._split_recursive(
                     part_text, remaining, metadata, base_offset + part_start
                 )
-                # Bridge the recursion back to the following part: extend the
-                # last sub-chunk over the source gap up to the next part's
+                # Bridge the recursion back over a dropped LEADING separator
+                # (P3-1): a part can begin with a character that is a
+                # separator of the next level (``"a\n\n\nb".split("\n\n")``
+                # yields ``"\nb"``). The inner recursion then treats it as a
+                # separator, drops the empty leading span, and starts at the
+                # following character — leaving that one source character
+                # covered by no chunk. Extend the first sub-chunk over the
+                # genuine source gap so the emission still starts at the part
+                # boundary, the mirror of the forward bridge below.
+                if sub_chunks:
+                    first = sub_chunks[0]
+                    first_start = (
+                        first.start - base_offset if first.start is not None else part_start
+                    )
+                    leading = text[part_start:first_start]
+                    if leading:
+                        first.text = leading + first.text
+                        first.token_count = self._estimate_tokens(first.text)
+                    if first.start is not None:
+                        first.start = base_offset + part_start
+                # Bridge the recursion forward to the following part: extend
+                # the last sub-chunk over the source gap up to the next part's
                 # start (a genuine source slice, never fabricated). Start the
                 # gap at the sub-chunk's real end, which may sit before
                 # ``part_end`` because the recursion can drop trailing

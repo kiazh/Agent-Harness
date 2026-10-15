@@ -33,14 +33,17 @@ def _execution_workspace() -> Path:
 _rag_pipeline: RAGPipeline | None = None
 _rag_pipeline_lock = asyncio.Lock()
 # IDENTITY of the shared instance: (reranker selection identity,
-# (embedding backend, model, base_url), (keyword RRF weight, dense RRF
+# resolved embedding selection identity, (keyword RRF weight, dense RRF
 # weight)). Rotation of any component — a different reranker
 # backend/model/endpoint/timeout, a rotated Cohere key, an embedding
-# backend/model/endpoint change, or an RRF weight change — must rebuild the
-# pipeline; comparing presence alone kept the old client (and its old key)
-# serving all later requests (AH-AUDIT-036, R17, R19).
+# backend/model/endpoint change, an embedding credential rotation, a
+# backend that becomes available/unavailable (keyword-only <-> dense), or an
+# RRF weight change — must rebuild the pipeline; comparing presence alone
+# kept the old client (and its old key) serving all later requests
+# (AH-AUDIT-036, R17, R19, F08). The embedding component delegates to the
+# shared embedder's identity helper so both agree on the credential digest.
 _rag_pipeline_identity: (
-    tuple[tuple[str, str, str, str, float], tuple[str, str, str], tuple[float, float]] | None
+    tuple[tuple[str, str, str, str, float], tuple[str, str, str, str], tuple[float, float]] | None
 ) = None
 
 
@@ -75,18 +78,22 @@ def _built_reranker_identity(
         return None
 
 
-def _current_embedding_identity() -> tuple[str, str, str]:
-    """Configured embedding backend identity (backend, model, base_url)."""
-    try:
-        from machina.core.config import config as _cfg
+def _current_embedding_identity() -> tuple[str, str, str, str]:
+    """Resolved embedding selection identity (kind, model, base_url, digest).
 
-        return (
-            str(_cfg.get("embedding_backend") or "auto"),
-            str(_cfg.get("embedding_model") or ""),
-            str(_cfg.get("embedding_base_url") or ""),
-        )
+    Delegates to the shared embedder's :func:`~machina.rag.embedder._embedder_identity`
+    so the pipeline and the process-wide embedder agree on ONE nonsecret
+    credential digest (F08: do not duplicate the digest). The resolved
+    ``kind`` also captures effective availability, so a keyword-only pipeline
+    rebuilds to dense when a key or local runtime appears — even though the
+    configured backend/model/base_url text is unchanged.
+    """
+    try:
+        from machina.rag.embedder import _embedder_identity, resolve_embedding_settings
+
+        return _embedder_identity(resolve_embedding_settings())
     except Exception:
-        return ("auto", "", "")
+        return ("none", "", "", "")
 
 
 def _current_weight_identity() -> tuple[float, float]:
@@ -100,7 +107,7 @@ def _current_weight_identity() -> tuple[float, float]:
 
 
 def _current_pipeline_identity() -> tuple[
-    tuple[str, str, str, str, float], tuple[str, str, str], tuple[float, float]
+    tuple[str, str, str, str, float], tuple[str, str, str, str], tuple[float, float]
 ]:
     """Identity of everything the shared pipeline is configured from (fresh read)."""
     return (
@@ -133,13 +140,35 @@ def _build_shared_pipeline() -> RAGPipeline:
     return RAGPipeline(reranker=reranker)
 
 
+async def _close_pipeline_quietly(pipeline: RAGPipeline) -> None:
+    """Close a replaced pipeline's owned embedder/reranker clients (F08).
+
+    The shared pipeline builds and owns an embedder (and reranker) per
+    generation; without this the superseded instances — and the credential
+    they bound — were never released. Each close is isolated so one failure
+    cannot abort the rebuild or mask the other, and a failure is only logged
+    (never surfaced), matching the shared-embedder close seam.
+    """
+    for name in ("_embedder", "_reranker"):
+        component = getattr(pipeline, name, None)
+        close = getattr(component, "close", None)
+        if not callable(close):
+            continue
+        try:
+            await close()
+        except Exception as e:
+            logger.warning("failed to close replaced RAG %s: %s", name, e, exc_info=True)
+
+
 async def get_rag_pipeline() -> RAGPipeline:
     """Get or create the global RAG pipeline instance.
 
     Rebuilds when the pipeline IDENTITY changes: the reranker selection it
     was built with (backend/model/endpoint/timeout or a rotated Cohere key),
-    the configured embedding backend/model/endpoint, or the RRF fusion
-    weights. Reuses when unchanged.
+    the resolved embedding selection (backend/model/endpoint, a rotated or
+    newly supplied embedding credential, or a keyword-only <-> dense
+    availability change), or the RRF fusion weights. Reuses when unchanged;
+    the superseded pipeline's owned clients are closed.
     """
     global _rag_pipeline, _rag_pipeline_identity
     current = _current_pipeline_identity()
@@ -147,20 +176,25 @@ async def get_rag_pipeline() -> RAGPipeline:
         async with _rag_pipeline_lock:
             # Double-check after acquiring lock
             if _rag_pipeline is None or _rag_pipeline_identity != current:
+                previous = _rag_pipeline
                 _rag_pipeline = _build_shared_pipeline()
                 # Record the identity the reranker actually bound to. When the
                 # build fell back to passthrough without binding a backend,
                 # keep the configured identity so a failing runtime is not
                 # retried on every request; a real config/key change changes
                 # `current` and still forces the rebuild. Embedding and weight
-                # identity stay config-derived: build_embedder degrades to
-                # keyword-only without changing it.
+                # identity stay resolved-config-derived: build_embedder
+                # degrades to keyword-only without changing it, and the
+                # resolved embedding identity already carries the effective
+                # availability (F08).
                 built = _built_reranker_identity(_rag_pipeline)
                 _rag_pipeline_identity = (
                     built if built is not None else current[0],
                     current[1],
                     current[2],
                 )
+                if previous is not None:
+                    await _close_pipeline_quietly(previous)
     return _rag_pipeline
 
 
