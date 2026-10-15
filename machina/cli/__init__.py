@@ -234,7 +234,7 @@ def chat(
             try:
                 await db.initialize_runtime_schema()
             except Exception as error:
-                output.error("Runtime schema upgrade failed. Run machina db init and retry.")
+                output.error("Runtime schema upgrade failed. Run machina init and retry.")
                 raise typer.Exit(1) from error
             if continue_:
                 session = await session_manager.get_last_active()

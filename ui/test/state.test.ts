@@ -1021,7 +1021,7 @@ class PinClient extends FakeClient {
 					modelResetTo: switched ? "openrouter/free" : null,
 					cleanup: {
 						storeEntry: true,
-						envKey: `MACHINA_PROVIDER_${name.toUpperCase()}_API_KEY`,
+						apiKeyEnv: `MACHINA_PROVIDER_${name.toUpperCase()}_API_KEY`,
 						envLineRemoved: true,
 						envVarRemoved: true,
 						cachedModels: 1,

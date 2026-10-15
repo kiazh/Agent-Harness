@@ -28,9 +28,16 @@ metadata contains ids/windows/efforts only.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
 
-from machina.core.config import DEFAULTS, config
+from machina.core.config import (
+    DEFAULTS,
+    REASONING_EFFORTS,
+    REASONING_UNSET_EFFORTS,
+    config,
+    persist_provider_fallback,
+)
 from machina.core.exceptions import ValidationError
 from machina.core.provider import catalog
 from machina.core.provider.specs import PROVIDER_SPECS
@@ -41,6 +48,8 @@ from machina.security import providers as store
 
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
+
+logger = logging.getLogger(__name__)
 
 #: Bound-in-family names treated as built-in providers by ``models.list``
 #: (no discovery endpoint of their own; the UI falls back to its curated list).
@@ -173,8 +182,10 @@ async def models_set_effort(gw: Gateway, params: dict[str, Any]) -> dict[str, An
         raise RpcError(INVALID_PARAMS, "effort must be a string")
     # The UI advertises "off"; every unset alias means "provider default"
     # and clears the setting instead of failing provider validation
-    # (round-3 review finding 11).
-    if effort in catalog.UNSET_EFFORT_SENTINELS:
+    # (round-3 review finding 11). The alias list is the canonical config
+    # vocabulary (REASONING_UNSET_EFFORTS), so this surface and config.set
+    # cannot disagree.
+    if effort in REASONING_UNSET_EFFORTS:
         effort = ""
     persist = _bool(params, "persist")
     provider, model = await _session_route(gw, params)
@@ -185,16 +196,23 @@ async def models_set_effort(gw: Gateway, params: dict[str, Any]) -> dict[str, An
             raise RpcError(INVALID_PARAMS, str(exc)) from None
         supported = list(catalog.supported_efforts_for(model) or ())
     else:
-        allowed = ("", "low", "medium", "high")
+        allowed = ("", *REASONING_EFFORTS)
         if effort not in allowed:
             raise RpcError(
                 INVALID_PARAMS,
                 f"reasoning effort {effort!r} is not supported for "
-                f"{provider or 'this provider'}; supported: low, medium, high (or unset)",
+                f"{provider or 'this provider'}; supported: {', '.join(REASONING_EFFORTS)} "
+                "(or unset)",
             )
         normalized = effort
-        supported = ["low", "medium", "high"]
-    config.set("reasoning_effort", normalized, persist=persist)
+        supported = list(REASONING_EFFORTS)
+    try:
+        config.set("reasoning_effort", normalized, persist=persist)
+    except ValueError as exc:
+        # The catalog can never hand config a value it rejects (both read the
+        # canonical vocabulary); if that ever drifts, report a typed invalid
+        # parameter instead of escaping as INTERNAL_ERROR.
+        raise RpcError(INVALID_PARAMS, str(exc)) from None
     return {
         "provider": provider,
         "model": model,
@@ -280,9 +298,10 @@ async def providers_remove(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
     derived ``.env`` key line, the live env var, and — because ``PROVIDERS``
     consults the store live — its dynamic-registry membership. When the
     removed provider was the gateway's active one, both provider and model
-    fall back to the shipped defaults so the next turn cannot route to a
-    provider that no longer exists; the response reports the cleanup and the
-    fallback for a visible notice.
+    fall back to the shipped defaults AND the fallback is persisted
+    (config.yaml + shadowing env/``.env`` lines, the same mechanism the CLI
+    uses) so a restart cannot resurrect the removed route; the response
+    reports the cleanup and the fallback for a visible notice.
     """
     gw.require_db()
     name = _str(params, "name", max_len=64).lower()
@@ -296,6 +315,18 @@ async def providers_remove(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
         switched = str(gw.provider)
         gw.model = str(DEFAULTS["model"])
         model_reset = gw.model
+        # Same durability contract as the CLI removal fallback: persist the
+        # route (config.yaml + any shadowing MACHINA_PROVIDER/MACHINA_MODEL
+        # env/.env lines) so a restart cannot resurrect the removed provider.
+        try:
+            persist_provider_fallback(gw.provider, gw.model)
+        except (OSError, ValueError) as error:
+            logger.warning(
+                "providers.remove: fallback persistence failed (%s); a restart may still "
+                "name the removed provider %s",
+                type(error).__name__,
+                name,
+            )
     cleanup = {
         "storeEntry": bool(report.get("storeEntry")),
         "apiKeyEnv": report.get("apiKeyEnv"),

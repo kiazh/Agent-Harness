@@ -193,7 +193,8 @@ def run_bounded(
     never stops a thread or child on its own (AH-AUDIT-023). ``env=None``
     builds the shared minimal allowlist (plus ``extra_env_var`` passthrough);
     ``cwd=None`` runs in the call-time launch directory (N2). Spawning never
-    raises: an OSError comes back as a typed result (``spawn_error``), and
+    raises: an OSError, or a ValueError from an invalid argv (e.g. embedded
+    NUL bytes), comes back as a typed result (``spawn_error``), and
     ``stdin_text`` writes and closes the child's stdin.
     """
     target_cwd = Path(cwd) if cwd is not None else Path(os.getcwd())
@@ -218,7 +219,9 @@ def run_bounded(
             env=env,
             **popen_kwargs,
         )
-    except OSError as error:
+    except (OSError, ValueError) as error:
+        # ValueError: invalid argv/env (embedded NUL bytes) — still a typed
+        # result, never a raise (the "spawning never raises" contract).
         message = str(error)
         return BoundedResult(
             returncode=None,

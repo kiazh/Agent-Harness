@@ -1477,6 +1477,33 @@ test("/provider add reports fetch failures without losing the entry", async () =
 	assert.match(host.last().text, /saved, but model fetch failed: could not reach/);
 });
 
+test("/provider add keeps the error message intact for a keyless endpoint", async () => {
+	const host = new FakeHost();
+	host.responses["providers.add"] = () => {
+		throw new Error("could not reach http://127.0.0.1:9000/v1 (ConnectError)");
+	};
+	host.textQueue.push("acme", "http://127.0.0.1:9000/v1", "");
+	host.picks.push("yes");
+	await run("/provider add", host);
+	assert.match(
+		host.last().text,
+		/Could not add acme: could not reach http:\/\/127\.0\.0\.1:9000\/v1 \(ConnectError\)/,
+	);
+	assert.ok(!host.last().text.includes("[redacted]"), "empty key must not mangle the message");
+});
+
+test("/provider add redacts a submitted key from the error message", async () => {
+	const host = new FakeHost();
+	host.responses["providers.add"] = () => {
+		throw new Error("store rejected key sk-secret-value (bad)");
+	};
+	host.textQueue.push("acme", "http://127.0.0.1:9000/v1", "sk-secret-value");
+	host.picks.push("yes");
+	await run("/provider add", host);
+	assert.match(host.last().text, /\[redacted\]/);
+	assert.ok(!host.last().text.includes("sk-secret-value"), "key never echoed");
+});
+
 test("/provider remove confirms what will be deleted and reports the cleanup", async () => {
 	const host = new FakeHost();
 	host.current = { ...SESSION, provider: "acme", model: "acme-1" };
@@ -1502,7 +1529,7 @@ test("/provider remove confirms what will be deleted and reports the cleanup", a
 		modelResetTo: "openrouter/free",
 		cleanup: {
 			storeEntry: true,
-			envKey: "MACHINA_PROVIDER_ACME_API_KEY",
+			apiKeyEnv: "MACHINA_PROVIDER_ACME_API_KEY",
 			envLineRemoved: true,
 			envVarRemoved: true,
 			cachedModels: 3,
@@ -1540,7 +1567,7 @@ test("/provider remove reports traces that were already gone without pretending"
 		removed: true,
 		selected: "openrouter",
 		switchedTo: null,
-		cleanup: { storeEntry: true, envKey: "MACHINA_PROVIDER_ACME_API_KEY", envLineRemoved: false, envVarRemoved: false, cachedModels: 0, registryEntry: true },
+		cleanup: { storeEntry: true, apiKeyEnv: "MACHINA_PROVIDER_ACME_API_KEY", envLineRemoved: false, envVarRemoved: false, cachedModels: 0, registryEntry: true },
 	};
 	host.picks.push("yes");
 	await run("/provider remove acme", host);

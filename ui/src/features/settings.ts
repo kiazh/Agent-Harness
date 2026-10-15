@@ -16,6 +16,7 @@ import type {
 } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
 import { applyModel, CURATED_MODELS, filterCuratedModels, pickCuratedModel } from "./models.ts";
+import { redactSecret } from "./keys.ts";
 import { confirm, formatValue, options, PROFILE_ID_RE, type Command, type FeatureHost } from "./types.ts";
 
 function printProfile(host: FeatureHost, profile: ProfileInfo): void {
@@ -161,8 +162,9 @@ async function addProvider(host: FeatureHost, rest: string): Promise<void> {
 	try {
 		result = await host.request<ProviderAddResult>("providers.add", { name, baseUrl, apiKey: key || undefined });
 	} catch (error) {
-		// The submitted key must never echo in an error string.
-		const message = (error instanceof Error ? error.message : String(error)).split(key).join("[redacted]");
+		// The submitted key must never echo in an error string (redactSecret
+		// is empty-safe: a keyless endpoint submits "" and the message stays intact).
+		const message = redactSecret(key, error instanceof Error ? error.message : String(error));
 		host.print(`Could not add ${name}: ${message}`, "error");
 		return;
 	}
@@ -254,8 +256,8 @@ function removalSummary(result: ProviderRemoveResult): string {
 		return `Provider "${result.provider}" removed${result.switchedTo ? `; switched to ${result.switchedTo}` : ""}.`;
 	}
 	const bits: string[] = ["store entry"];
-	if (cleanup.envKey) {
-		bits.push(cleanup.envLineRemoved ? `${cleanup.envKey} line in .env` : `${cleanup.envKey} (no .env line found)`);
+	if (cleanup.apiKeyEnv) {
+		bits.push(cleanup.envLineRemoved ? `${cleanup.apiKeyEnv} line in .env` : `${cleanup.apiKeyEnv} (no .env line found)`);
 	}
 	if (cleanup.cachedModels) bits.push(`${cleanup.cachedModels} cached model(s)`);
 	bits.push("registry entry");

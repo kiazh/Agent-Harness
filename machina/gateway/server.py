@@ -693,15 +693,11 @@ class Gateway:
             elif key in SECRET_KEYS:
                 raise RpcError(INVALID_PARAMS, f"{key} is a secret; use /keys or .env instead")
             elif isinstance(key, str) and key in DEFAULTS:
-                # Coerce first so invalid values raise; persist the coerced value.
+                # Coerce first so invalid values raise; persist the coerced
+                # value. reasoning_effort goes through the same single-sourced
+                # vocabulary as config.set (aliases normalize to "" there), so
+                # this surface and models.setEffort can never disagree.
                 value = features.coerce_config_value(key, value)
-                if key == "reasoning_effort":
-                    from machina.core.provider import normalize_reasoning_effort
-
-                    try:
-                        value = normalize_reasoning_effort(value)
-                    except Exception as e:
-                        raise RpcError(INVALID_PARAMS, str(e)) from None
                 config.set(key, value, persist=persist)
             else:
                 raise RpcError(INVALID_PARAMS, f"unknown setting: {key}")

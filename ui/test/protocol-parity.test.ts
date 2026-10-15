@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import type { AgentInfo, GatewayEvent, HistoryEntry, SessionInfo } from "../src/protocol.js";
+import type { AgentInfo, GatewayEvent, HistoryEntry, ProviderRemoveResult, SessionInfo } from "../src/protocol.js";
 
 // Every event type the TS GatewayEvent union represents. Compile-time
 // bound to the union: each entry must be a member...
@@ -136,4 +136,41 @@ test("protocol-parity: HistoryEntry mirrors history_from_chunks", () => {
 		{ role: "system", content: "summary" },
 	] as const satisfies readonly HistoryEntry[];
 	assert.equal(entries.length, 4);
+});
+
+test("protocol-parity: ProviderRemoveResult.cleanup mirrors providers_feature.py", () => {
+	// Exact backend keys from
+	// machina/gateway/features/providers_feature.py::providers_remove; the
+	// Python twin of this assertion lives in tests/test_r4_082_gateway_providers.py.
+	const backend = {
+		provider: "acme",
+		removed: true,
+		selected: "openrouter",
+		switchedTo: "openrouter",
+		modelResetTo: "openrouter/free",
+		cleanup: {
+			storeEntry: true,
+			apiKeyEnv: "MACHINA_PROVIDER_ACME_API_KEY",
+			envLineRemoved: true,
+			envVarRemoved: true,
+			cachedModels: 2,
+			registryEntry: true,
+		},
+	} satisfies ProviderRemoveResult;
+	const consumed: ProviderRemoveResult = backend;
+	// Fields the UI actually reads (features/settings.ts removalSummary):
+	assert.equal(consumed.cleanup?.apiKeyEnv, "MACHINA_PROVIDER_ACME_API_KEY");
+	assert.equal(consumed.cleanup?.envLineRemoved, true);
+	assert.deepEqual(Object.keys(consumed.cleanup ?? {}).sort(), [
+		"apiKeyEnv",
+		"cachedModels",
+		"envLineRemoved",
+		"envVarRemoved",
+		"registryEntry",
+		"storeEntry",
+	]);
+	assert.ok(
+		!Object.keys(consumed.cleanup ?? {}).includes("envKey"),
+		"the old envKey spelling is not on the wire",
+	);
 });

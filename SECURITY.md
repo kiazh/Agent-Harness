@@ -10,7 +10,7 @@ Do not expose a gateway, database, or Docker socket to untrusted clients.
 
 | Boundary | Authority and enforcement | Regression evidence |
 |---|---|---|
-| Human → HTTP/gateway | HTTP bearer key; local gateway token. Agent principals cannot resolve human approvals. A gateway without `MACHINA_GATEWAY_TOKEN` is explicitly unauthenticated and belongs only on trusted local stdio. | `test_api.py`, `test_approvals_ownership.py` |
+| Human → HTTP/gateway | HTTP bearer key; local gateway token. Agent principals cannot resolve human approvals. A gateway without `MACHINA_GATEWAY_TOKEN` is explicitly unauthenticated and belongs only on trusted local stdio; the standalone `python -m machina.gateway` entrypoint mints a token and prints it to stderr when the variable is absent. | `test_api.py`, `test_approvals_ownership.py` |
 | Agent → tools | Broker evaluates declared effects and exact action; tools execute a stamped mode/backend/workspace snapshot. Durable mode reads fail closed on database failure. | `test_execution_context_boundary.py`, `test_integration_permissions.py` |
 | Tool → filesystem | Canonical workspace boundary, private path restrictions, symlink/parent traversal and hard-link defenses, identity checks on file operations. | `test_security.py`, `test_audit_remediation.py` |
 | Tool → process | Structured argv and guarded command grammar. Known project test/build/lint workflows are operator-trusted; other opaque execution requires approval; shell payloads are distinct approval material. Child environment uses an allowlist. | `test_terminal_safety.py`, `test_scheduler_scripts.py`, `test_integration_permissions.py` |

@@ -17,10 +17,26 @@ import yaml
 from dotenv import load_dotenv
 
 from machina.observability.diagnostics import record_failure
+from machina.security.env_file import find_env_file, read_env_values, set_env_values
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path.home() / ".machina" / "config.yaml"
+
+# Canonical reasoning-effort vocabulary — the single source of truth shared by
+# config validation and provider normalization (machina.core.provider.reasoning
+# derives its exported set from these; config never imports the provider
+# package, so the dependency stays acyclic).
+#  * REASONING_EFFORTS: tiers every provider transport can map directly
+#    (low|medium|high: OpenAI-style top-level param, OpenRouter
+#    reasoning.effort, Anthropic thinking budget, Ollama think flag).
+#  * REASONING_CATALOG_EFFORTS: wider tiers the ChatGPT catalog validates per
+#    model; stored only after that validation. Transports without a mapping
+#    ignore them (provider default), exactly as before.
+#  * REASONING_UNSET_EFFORTS: aliases meaning "provider default" -> "".
+REASONING_EFFORTS: tuple[str, ...] = ("low", "medium", "high")
+REASONING_CATALOG_EFFORTS: tuple[str, ...] = ("minimal", "xhigh", "max")
+REASONING_UNSET_EFFORTS: tuple[str, ...] = ("", "none", "off", "default", "auto")
 
 # Secrets live in the environment (.env), never in config.yaml.
 SECRET_KEYS = frozenset(
@@ -48,8 +64,6 @@ SECRET_KEYS = frozenset(
 # .env upward, else repo .env — the same path secret management writes to.
 # Real environment variables always win over .env values.
 def _startup_env_path() -> str | None:
-    from machina.security.env_file import find_env_file
-
     try:
         return str(find_env_file())
     except (OSError, ValueError):
@@ -78,7 +92,11 @@ __all__ = [
     "SECRET_KEYS",
     "LEGACY_ENV_VARS",
     "DEFAULTS",
+    "REASONING_EFFORTS",
+    "REASONING_CATALOG_EFFORTS",
+    "REASONING_UNSET_EFFORTS",
     "get_config",
+    "persist_provider_fallback",
     "validate_value",
 ]
 
@@ -218,6 +236,10 @@ DEFAULTS: dict[str, Any] = {
     "terminal_image": "machina-tool-sandbox:latest",
     "approval_timeout": 300,
     # Feature integration toggles with real enforcement.
+    # Human-in-the-loop approval gate for memory writes (R4-089): when on,
+    # MemoryStore.add routes writes to pending_memories for approve/reject.
+    # Default OFF preserves direct durable writes.
+    "memory_approval_enabled": False,
     "memory_consolidation_enabled": True,
     "auto_compaction_enabled": True,
     "eviction_max_tokens": 0,
@@ -274,15 +296,17 @@ def validate_value(key: str, value: Any) -> Any:
             raise ValueError("terminal_sandbox must be disabled|local|docker")
         return normalized
     if key == "reasoning_effort":
-        # low/medium/high are the classic wire vocabulary; xhigh/max are
-        # live-verified ChatGPT (Codex catalog) levels — the per-model set
-        # is validated by the chatgpt provider against the catalog entry.
+        # low/medium/high are the wire-wide transport tiers; minimal/xhigh/max
+        # are live-verified wider tiers (ChatGPT Codex catalog) stored only
+        # after the chatgpt provider validates them per model. The unset
+        # aliases mean "provider default" and normalize to "". All three sets
+        # come from the canonical vocabulary above so both surfaces agree.
         normalized = str(value).strip().lower()
-        # Cross-reference: the classic set lives in core/provider/reasoning.
-        # REASONING_EFFORTS; wider tiers are catalog-validated per model
-        # (review round 6, R6-3).
-        if normalized not in ("", "low", "medium", "high", "xhigh", "max"):
-            raise ValueError("reasoning_effort must be ''|low|medium|high|xhigh|max")
+        if normalized in REASONING_UNSET_EFFORTS:
+            return ""
+        if normalized not in REASONING_EFFORTS + REASONING_CATALOG_EFFORTS:
+            tiers = "|".join(REASONING_EFFORTS + REASONING_CATALOG_EFFORTS)
+            raise ValueError(f"reasoning_effort must be ''|{tiers} (or none|off|default|auto)")
         return normalized
     if key == "embedding_backend":
         normalized = str(value).strip().lower()
@@ -455,6 +479,9 @@ class Config:
     terminal_sandbox: str = "disabled"
     terminal_image: str = "machina-tool-sandbox:latest"
     approval_timeout: int = 300
+    # Human-in-the-loop memory writes: ON routes MemoryStore.add to
+    # pending_memories (approve/reject via CLI/gateway); OFF writes directly.
+    memory_approval_enabled: bool = False
     memory_consolidation_enabled: bool = True
     auto_compaction_enabled: bool = True
     eviction_max_tokens: int = 0
@@ -577,6 +604,15 @@ class Config:
                 logger.warning("Failed to load config from %s: %s", load_path, e, exc_info=True)
             else:
                 logger.debug("Config loaded from %s", load_path)
+            # A YAML root that is not a mapping (list/scalar) must never crash
+            # the caller: keep the defaults and say exactly what was ignored.
+            if not isinstance(file_data, dict):
+                logger.warning(
+                    "Ignoring config file %s: expected a YAML mapping at the top level, got %s",
+                    load_path,
+                    type(file_data).__name__,
+                )
+                file_data = {}
             for key, value in file_data.items():
                 if key in DEFAULTS and key not in SECRET_KEYS:
                     try:
@@ -623,6 +659,45 @@ def get_config() -> Config:
             _config = None
             raise
     return _config
+
+
+def persist_provider_fallback(provider: str = "openrouter", model: str | None = None) -> None:
+    """Persist the provider/model safe defaults and sync shadowing env entries.
+
+    Shared removal fallback (see machina/cli/providers.py and the gateway's
+    ``providers.remove``): config.yaml keeps the durable default, and
+    MACHINA_PROVIDER/MACHINA_MODEL are updated wherever they already exist in
+    the process environment or ``.env`` — ``Config.get`` checks the
+    environment before config.yaml, so a stale line would otherwise resurrect
+    a removed provider across restarts. ``.env`` lines are only updated in
+    place, never appended (an absent line cannot shadow the config file).
+    """
+    resolved_model = model or DEFAULTS["model"]
+    current = get_config()
+    current.set("provider", provider, persist=True)
+    current.set("model", resolved_model, persist=True)
+    os.environ["MACHINA_PROVIDER"] = provider
+    os.environ["MACHINA_MODEL"] = resolved_model
+    try:
+        present = read_env_values()
+        updates = {
+            key: value
+            for key, value in (
+                ("MACHINA_PROVIDER", provider),
+                ("MACHINA_MODEL", resolved_model),
+            )
+            if key in present
+        }
+        if updates:
+            set_env_values(updates)
+    except (OSError, ValueError) as error:
+        # Optional fallback preserves the primary outcome (the config file
+        # already carries the default); report the class, never payloads.
+        logger.warning(
+            "provider fallback: .env sync failed (%s); edit MACHINA_PROVIDER/"
+            "MACHINA_MODEL manually",
+            type(error).__name__,
+        )
 
 
 def __getattr__(name: str) -> Any:

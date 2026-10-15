@@ -180,7 +180,7 @@ export interface ProviderAddResult {
 export interface ProviderCleanup {
 	storeEntry: boolean;
 	/** Derived env name when the provider had one (never a value). */
-	envKey: string | null;
+	apiKeyEnv: string | null;
 	/** True when the `.env` line existed and was deleted. */
 	envLineRemoved: boolean;
 	/** True when the live process env var was set and removed. */

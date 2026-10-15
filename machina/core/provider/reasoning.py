@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from machina.core.config import config
+from machina.core.config import REASONING_EFFORTS, REASONING_UNSET_EFFORTS, config
 from machina.core.exceptions import ValidationError
 from machina.core.provider._log import logger
 
 # ---------------------------------------------------------------------------
 # Reasoning effort — per-provider reasoning depth (low|medium|high).
+# The vocabulary is single-sourced in machina.core.config (imported below).
 #
 # Each provider family exposes this differently, so the mapping lives here
 # next to the transport code:
@@ -20,7 +21,6 @@ from machina.core.provider._log import logger
 # ``reasoning_effort`` config key); unset means "provider default", so existing
 # behavior is unchanged.
 # ---------------------------------------------------------------------------
-REASONING_EFFORTS = ("low", "medium", "high")
 
 # Anthropic thinking budgets per effort level (tokens reserved for thinking).
 ANTHROPIC_THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": 10000}
@@ -31,7 +31,7 @@ def normalize_reasoning_effort(value: str | None) -> str:
     if value is None:
         return ""
     normalized = str(value).strip().lower()
-    if normalized in ("", "none", "off", "default", "auto"):
+    if normalized in REASONING_UNSET_EFFORTS:
         return ""
     if normalized not in REASONING_EFFORTS:
         raise ValidationError(

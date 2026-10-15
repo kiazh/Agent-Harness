@@ -31,25 +31,48 @@ class Database:
             or "postgresql://postgres@127.0.0.1:5432/machina"
         )
         self._pool: asyncpg.Pool | None = None
+        # Connect mutex: overlapping first connects must not each build a pool
+        # (the loser's pool would leak its connections). asyncio locks bind to
+        # the event loop of first use, so the lock is recreated per loop —
+        # a Database instance reused across test/dev loops still serializes
+        # within each loop.
+        self._connect_lock: asyncio.Lock | None = None
+        self._connect_lock_loop: asyncio.AbstractEventLoop | None = None
+
+    def _connect_mutex(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._connect_lock is None or self._connect_lock_loop is not loop:
+            self._connect_lock = asyncio.Lock()
+            self._connect_lock_loop = loop
+        return self._connect_lock
 
     async def connect(self) -> None:
-        """Initialize the connection pool with configurable sizes."""
+        """Initialize the connection pool with configurable sizes.
+
+        Concurrent first connects are serialized per event loop: the double
+        check after acquiring the mutex guarantees exactly one pool is ever
+        created and assigned, so no overlapping caller can leak a second
+        pool's connections.
+        """
         if self._pool is not None:
             return
-        if not self.dsn:
-            raise ValueError(
-                "Database DSN not configured. Set DATABASE_URL or database_url in config."
-            )
-        min_size = int(os.environ.get("MACHINA_DB_MIN_POOL", "2"))
-        max_size = int(os.environ.get("MACHINA_DB_MAX_POOL", "10"))
-        command_timeout = int(os.environ.get("MACHINA_DB_TIMEOUT", "30"))
+        async with self._connect_mutex():
+            if self._pool is not None:
+                return
+            if not self.dsn:
+                raise ValueError(
+                    "Database DSN not configured. Set DATABASE_URL or database_url in config."
+                )
+            min_size = int(os.environ.get("MACHINA_DB_MIN_POOL", "2"))
+            max_size = int(os.environ.get("MACHINA_DB_MAX_POOL", "10"))
+            command_timeout = int(os.environ.get("MACHINA_DB_TIMEOUT", "30"))
 
-        self._pool = await asyncpg.create_pool(
-            dsn=self.dsn,
-            min_size=min_size,
-            max_size=max_size,
-            command_timeout=command_timeout,
-        )
+            self._pool = await asyncpg.create_pool(
+                dsn=self.dsn,
+                min_size=min_size,
+                max_size=max_size,
+                command_timeout=command_timeout,
+            )
 
     async def close(self) -> None:
         """Close the pool."""

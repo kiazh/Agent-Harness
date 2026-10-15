@@ -59,12 +59,22 @@ def _start_stdin_reader(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[st
 async def _serve() -> None:
     from machina.gateway.server import Gateway
 
+    # The UI launcher injects MACHINA_GATEWAY_TOKEN into the environment.
+    # Standalone runs have no launcher: mint a token BEFORE the Gateway reads
+    # the environment and disclose it on stderr — a silent mint would leave
+    # every method except bare initialize answering unauthorized. Tokens
+    # injected by the launcher are never re-printed.
+    minted = ""
+    if not os.environ.get("MACHINA_GATEWAY_TOKEN"):
+        minted = secrets.token_hex(32)
+        os.environ["MACHINA_GATEWAY_TOKEN"] = minted
     gateway = Gateway(_write)
-    # Gateway.__init__ already picks up MACHINA_GATEWAY_TOKEN from the environment
-    # (set by the UI launcher). Only generate one for standalone use; None
-    # stays open for local stdio (Gateway logs a warning in that case).
-    if gateway._auth_token is None:
-        gateway._auth_token = secrets.token_hex(32)
+    if minted:
+        print(
+            f"gateway auth token: {minted} (send it as params.token on every request)",
+            file=sys.stderr,
+            flush=True,
+        )
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     _start_stdin_reader(asyncio.get_running_loop(), queue)
     try:
