@@ -121,6 +121,24 @@ def _sanitized_env() -> dict[str, str]:
     return env
 
 
+def _child_database_env() -> dict[str, str]:
+    """Environment override pinning children to the parent's database (R4-081).
+
+    The in-process tools (``machina_status``, ``machina_session_create``)
+    connect through the shared ``machina.db.connection.db`` singleton, whose
+    DSN the parent already resolved from config/``DATABASE_URL``/
+    ``MACHINA_ENV_FILE``. Children run with the minimal allowlist above, so
+    without this explicit handoff they would re-resolve those sources on their
+    own and could observe a different database than the same server's tools.
+    The resolved DSN travels only in the child environment; it is never logged
+    or returned. No resolved DSN (test/degraded runtimes) adds no override.
+    """
+    from machina.db.connection import db
+
+    dsn = str(db.dsn or "")
+    return {"DATABASE_URL": dsn} if dsn else {}
+
+
 def _bounded(text: str, limit: int) -> str:
     """Cap a string at ``limit`` characters, marker included."""
     if len(text) <= limit:
@@ -176,22 +194,34 @@ def _default_child_cwd() -> Path:
     return Path(os.getcwd())
 
 
-def _run_process(cmd: list[str], *, timeout: float, cwd: Path | None = None) -> ProcessResult:
+def _run_process(
+    cmd: list[str],
+    *,
+    timeout: float,
+    cwd: Path | None = None,
+    env_extra: dict[str, str] | None = None,
+) -> ProcessResult:
     """Run one child through the shared bounded runner (round-5 review F2).
 
     ``cwd=None`` (default) runs the child in the host launch directory
     captured at call time (see ``_default_child_cwd``); pass ``cwd`` to pin a
-    different working directory. stdout (the reply) and stderr (audit/log
-    chatter) are read separately, each capped. Prolific stdout stops the
-    child; stderr past its cap is drained and discarded so the pipe cannot
-    deadlock. On deadline expiry the whole group is killed; this function
-    never waits past ``timeout`` plus bounded teardown. Spawn failures come
-    back as a typed result (``stderr``), never raised.
+    different working directory. ``env_extra`` merges caller-supplied,
+    explicitly resolved values (e.g. the parent's database DSN) onto the
+    sanitized allowlist — the only channel for values the child may not
+    re-derive. stdout (the reply) and stderr (audit/log chatter) are read
+    separately, each capped. Prolific stdout stops the child; stderr past its
+    cap is drained and discarded so the pipe cannot deadlock. On deadline
+    expiry the whole group is killed; this function never waits past
+    ``timeout`` plus bounded teardown. Spawn failures come back as a typed
+    result (``stderr``), never raised.
     """
     child_cwd = cwd if cwd is not None else _default_child_cwd()
+    env = _sanitized_env()
+    if env_extra:
+        env.update(env_extra)
     result = _child_process().run_bounded(
         cmd,
-        env=_sanitized_env(),
+        env=env,
         timeout=timeout,
         cwd=child_cwd,
         max_stdout=MAX_OUTPUT_CHARS,
@@ -418,16 +448,32 @@ async def machina_chat(prompt: str, session_id: str | None = None, mode: str | N
     """Run one headless Machina turn and return a JSON result.
 
     Spawns `machina chat` with the repo venv interpreter, bounded by a timeout
-    and a kill-tree deadline. Text only: attachments/images are refused in
-    phase 1. Returns JSON text with status completed | paused_for_approval |
-    failed | timeout | invalid_request, plus session_id, the reply, and — for
-    an approval pause — the pending request ids. Never hangs on exit 3.
+    and a kill-tree deadline, and hands it the parent-resolved database DSN
+    explicitly (R4-081) so both observe the same database. Text only:
+    attachments/images are refused in phase 1. Returns JSON text with status
+    completed | paused_for_approval | failed | timeout | invalid_request, plus
+    session_id, the reply, and — for an approval pause — the pending request
+    ids. Never hangs on exit 3.
     """
     invalid = _validate_chat_args(prompt, session_id, mode)
     if invalid:
         return _json_text({"status": "invalid_request", "error": invalid})
     cmd = _chat_command(prompt, session_id, mode)
-    result = await asyncio.to_thread(_run_process, cmd, timeout=DEFAULT_CHAT_TIMEOUT_SECONDS)
+    try:
+        # R4-081: resolve the parent's own DSN; the child must never guess.
+        child_env = _child_database_env()
+    except Exception as exc:
+        # Fail closed with the class name only (resolution errors never echo
+        # values) instead of spawning a child that would pick its own database.
+        return _json_text(
+            {
+                "status": "failed",
+                "error": _bounded(f"database resolution failed: {type(exc).__name__}", 600),
+            }
+        )
+    result = await asyncio.to_thread(
+        _run_process, cmd, timeout=DEFAULT_CHAT_TIMEOUT_SECONDS, env_extra=child_env
+    )
     parsed_session = _parse_session_id(result.output)
     reply = _bounded(_extract_reply(result.output), MAX_REPLY_CHARS)
     if result.timed_out:

@@ -15,7 +15,9 @@ import os
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -45,10 +47,11 @@ PAUSE_SUGGESTION_LINE = "Resolve the request, then resume the session."
 
 
 def _fake_runner(result: ProcessResult, capture: dict | None = None):
-    def run(cmd, *, timeout):
+    def run(cmd, *, timeout, env_extra=None):
         if capture is not None:
             capture["cmd"] = cmd
             capture["timeout"] = timeout
+            capture["env_extra"] = env_extra
         return result
 
     return run
@@ -250,13 +253,67 @@ async def test_chat_failure_is_bounded(monkeypatch):
     ],
 )
 async def test_chat_invalid_requests_never_spawn(monkeypatch, kwargs):
-    def forbidden(cmd, *, timeout):
+    def forbidden(cmd, *, timeout, env_extra=None):
         raise AssertionError("subprocess must not run for invalid chat requests")
 
     monkeypatch.setattr(mcp_server, "_run_process", forbidden)
     payload = json.loads(await mcp_server.machina_chat(**kwargs))
     assert payload["status"] == "invalid_request"
     assert payload["error"]
+
+
+# ---------------------------------------------------------------------------
+# R4-081 — the child observes the parent-resolved database
+# ---------------------------------------------------------------------------
+
+
+async def test_chat_hands_the_parent_resolved_dsn_to_the_child_env(monkeypatch):
+    """The parent's exact DSN travels as an explicit child environment override."""
+    capture: dict = {}
+    monkeypatch.setattr(
+        mcp_server,
+        "_run_process",
+        _fake_runner(ProcessResult(0, SAMPLE_OK_OUTPUT, "", False, False), capture),
+    )
+    monkeypatch.setattr(
+        "machina.db.connection.db",
+        SimpleNamespace(dsn="postgresql://parent:pw@db:5432/machina_test"),
+    )
+    payload = json.loads(await mcp_server.machina_chat("hello"))
+    assert payload["status"] == "completed"
+    assert capture["env_extra"] == {"DATABASE_URL": "postgresql://parent:pw@db:5432/machina_test"}
+
+
+async def test_chat_without_a_resolved_dsn_passes_no_override(monkeypatch):
+    """No resolved DSN (test/degraded runtime) adds no override at all."""
+    capture: dict = {}
+    monkeypatch.setattr(
+        mcp_server,
+        "_run_process",
+        _fake_runner(ProcessResult(0, SAMPLE_OK_OUTPUT, "", False, False), capture),
+    )
+    monkeypatch.setattr("machina.db.connection.db", SimpleNamespace(dsn=""))
+    payload = json.loads(await mcp_server.machina_chat("hello"))
+    assert payload["status"] == "completed"
+    assert not capture["env_extra"]
+
+
+async def test_chat_fails_typed_when_database_resolution_fails(monkeypatch):
+    """A parent that cannot resolve its own DSN must not spawn a guessing child."""
+
+    def unresolved() -> dict[str, str]:
+        raise RuntimeError("runtime unavailable")
+
+    def forbidden(cmd, *, timeout, env_extra=None):
+        raise AssertionError("subprocess must not run without a resolved DSN")
+
+    monkeypatch.setattr(mcp_server, "_child_database_env", unresolved)
+    monkeypatch.setattr(mcp_server, "_run_process", forbidden)
+    payload = json.loads(await mcp_server.machina_chat("hello"))
+    assert payload["status"] == "failed"
+    assert "RuntimeError" in payload["error"]
+    # Class name only: resolution failures never echo values/messages.
+    assert "runtime unavailable" not in payload["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +379,21 @@ def test_run_process_spawn_failure_is_typed_not_raised():
     assert result.stderr, "the OSError message travels in stderr"
     assert result.timed_out is False
     assert result.truncated is False
+
+
+def test_run_process_env_extra_reaches_the_child():
+    """R4-081: the explicit override is merged onto the sanitized child env."""
+    result = mcp_server._run_process(
+        [
+            sys.executable,
+            "-c",
+            "import os, sys; sys.stdout.write(os.environ.get('DATABASE_URL', 'absent'))",
+        ],
+        timeout=30.0,
+        env_extra={"DATABASE_URL": "postgresql://probe:probe@127.0.0.1:1/probe"},
+    )
+    assert result.returncode == 0
+    assert result.output == "postgresql://probe:probe@127.0.0.1:1/probe"
 
 
 def test_run_bounded_default_cwd_is_call_time_launch_directory(monkeypatch, tmp_path):
@@ -612,3 +684,94 @@ async def test_stdio_handshake_lists_tools_and_roundtrips(tmp_path):
                     assert "Machina status" in result.content[0].text
     except TimeoutError:
         pytest.skip("stdio handshake exceeded 60s in this environment")
+
+
+# ---------------------------------------------------------------------------
+# R4-081 E2E — one DSN source for the parent; the real chat child resumes the
+# parent-created row (RED pre-fix: the child resolved another database and
+# exited "not found")
+# ---------------------------------------------------------------------------
+
+
+def _stdio_server_env(tmp_path: Path, dsn_source: str, dsn: str) -> dict[str, str]:
+    """Minimal stdio-server env with exactly ONE database source."""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(home),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "NO_COLOR": "1",
+    }
+    if dsn_source == "env":
+        env["DATABASE_URL"] = dsn
+    else:
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"DATABASE_URL={dsn}\n", encoding="utf-8")
+        env["MACHINA_ENV_FILE"] = str(env_file)
+    return env
+
+
+@pytest.mark.parametrize("dsn_source", ["env", "env_file"])
+async def test_chat_child_observes_the_parent_database(tmp_path, dsn_source, db_pool, monkeypatch):
+    """R4-081: the child and the parent's in-process tools share one database.
+
+    The parent server resolves its DSN from ``DATABASE_URL`` (separately, from
+    ``MACHINA_ENV_FILE``) and ``machina_session_create`` writes the row there.
+    The real ``machina chat --session <id>`` child must then read that same
+    row: children run with the sanitized allowlist, so it can only do so if
+    the parent hands the resolved DSN over explicitly. The session's provider
+    is pinned to an unknown name so the child fails at the provider stage
+    deterministically, with no network and no key dependence — reaching that
+    stage proves the row was read (pre-fix the child resolved another database
+    and exited with "Session ... not found").
+    """
+    stdio = pytest.importorskip("mcp.client.stdio")
+    from mcp import ClientSession
+
+    dsn = os.environ.get("MACHINA_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("MACHINA_TEST_DATABASE_URL not set")
+    # The test process only needs the pool for fixture setup/cleanup; the
+    # server under test is a separate process with its own environment.
+    monkeypatch.setattr("machina.db.connection.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+
+    params = stdio.StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "machina.mcp_server"],
+        cwd=str(REPO_ROOT),
+        env=_stdio_server_env(tmp_path, dsn_source, dsn),
+    )
+    sid = None
+    try:
+        async with asyncio.timeout(150):
+            async with stdio.stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    created = await session.call_tool("machina_session_create", {"title": "R4-081"})
+                    assert created.is_error is False, created.content
+                    sid = json.loads(created.content[0].text)["session_id"]
+                    await db_pool.execute(
+                        "UPDATE sessions SET provider = $2 WHERE id = $1",
+                        uuid.UUID(sid),
+                        "r4-081-no-such-provider",
+                    )
+                    result = await session.call_tool(
+                        "machina_chat", {"prompt": "hello", "session_id": sid}
+                    )
+                    assert result.is_error is False, result.content
+                    payload = json.loads(result.content[0].text)
+    finally:
+        if sid is not None:
+            from machina.core.session import session_manager
+
+            await session_manager.delete(uuid.UUID(sid))
+
+    assert payload["status"] == "failed", payload
+    error = payload["error"]
+    assert "Resuming session" in error, (
+        f"the chat child did not observe the parent's database: {error!r}"
+    )
+    assert "not found" not in error.lower(), error
+    assert "Provider error" in error, error

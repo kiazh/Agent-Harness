@@ -46,9 +46,14 @@ async def _stream_session(
     # Shared coordinator: owner-token claim BEFORE SSE headers so a
     # conflicting turn gets a clean 409 instead of an interleaved stream.
     # Fails closed: claim errors propagate, never concurrent execution.
+    # R4-084: the wire carries the canonical 12-hex turn id (the same shape
+    # the stdio gateway generates, ``uuid4().hex[:12]``) so transports can
+    # correlate one turn; the internal owner token ("turn:<id>:<nonce>")
+    # never leaves this module.
     from machina.core.turns import try_begin_turn as _try_begin
 
-    turn_token = await _try_begin(sid)
+    turn_id = uuid.uuid4().hex[:12]
+    turn_token = await _try_begin(sid, turn_id=turn_id)
     if not turn_token:
         raise HTTPException(409, "a turn is already running for this session")
 
@@ -93,7 +98,7 @@ async def _stream_session(
         if req.protocolVersion == 2:
             from machina.protocol import canonical_http_event
 
-            data = canonical_http_event(data, session_id, turn_token)
+            data = canonical_http_event(data, session_id, turn_id)
         return f"data: {json.dumps(data)}\n\n"
 
     async def event_stream() -> AsyncGenerator[str, None]:
@@ -131,7 +136,7 @@ async def _stream_session(
         engine = TurnEngine(
             TurnSpec(
                 session_id=sid,
-                turn_id=str(turn_token or ""),
+                turn_id=turn_id,
                 token=turn_token,
                 text=req.text,
                 verbose=req.verbose,
@@ -159,8 +164,8 @@ async def _stream_session(
         try:
             from machina.permissions.broker import set_approval_handler
 
-            set_approval_handler(None, principal="http", turn_id=turn_token)
-            yield frame({"type": "turn.started", "sessionId": session_id, "turnId": turn_token})
+            set_approval_handler(None, principal="http", turn_id=turn_id)
+            yield frame({"type": "turn.started", "sessionId": session_id, "turnId": turn_id})
             # AH-022: definition-aware factory so specialist sessions
             # cannot bypass allowed_tools/persona via direct HTTP.
             from machina.core.agent_factory import build_agent_for_session
@@ -205,7 +210,7 @@ async def _stream_session(
                             "type": "approval.resumed",
                             "requestId": turn_event.payload["request_id"],
                             "sessionId": session_id,
-                            "turnId": turn_token,
+                            "turnId": turn_id,
                             "originTurnId": turn_event.payload["origin_turn_id"],
                         }
                     )
@@ -322,9 +327,7 @@ async def _stream_session(
             error_data = {"type": "error", "message": "turn timed out"}
             yield frame(error_data)
         except StaleOwnershipError:
-            yield frame(
-                {"type": "turn.ownership_lost", "sessionId": session_id, "turnId": turn_token}
-            )
+            yield frame({"type": "turn.ownership_lost", "sessionId": session_id, "turnId": turn_id})
         except Exception:
             logger.exception("Prompt stream failed for session %s", session_id)
             error_data = {"type": "error", "message": "prompt failed; check server logs"}
@@ -387,7 +390,7 @@ async def _stream_session(
                         {
                             "type": "turn.cleanup_pending",
                             "sessionId": session_id,
-                            "turnId": turn_token,
+                            "turnId": turn_id,
                         }
                     )
             else:

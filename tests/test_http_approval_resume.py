@@ -1,6 +1,7 @@
 """HTTP continuations execute only the reviewed action under a new claim."""
 
 import json
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -133,6 +134,32 @@ async def test_http_approved_action_resumes_once_with_new_fence(approval_http, p
         await database.fetchval("SELECT claim_owner FROM sessions WHERE id=$1", session.id) is None
     )
     assert (await client.post(f"/api/v1/approvals/{rid}/resume", json=body)).status_code == 409
+
+
+async def test_resume_frames_carry_canonical_turn_ids(approval_http):
+    """R4-084: the durable origin and the resume stream correlate via the
+    canonical 12-hex turn id; the internal claim token never reaches a frame."""
+    client, session, record, arguments, root, database = approval_http
+    assert re.fullmatch(r"[0-9a-f]{12}", record["turn_id"]), record["turn_id"]
+    rid = record["request_id"]
+    await client.post(
+        f"/api/v1/approvals/{rid}/resolve",
+        json={"sessionId": str(session.id), "verdict": "approved"},
+    )
+    resumed = await client.post(
+        f"/api/v1/approvals/{rid}/resume",
+        json={"sessionId": str(session.id), "turnId": record["turn_id"], "toolArgs": arguments},
+    )
+    emitted = events(resumed)
+    started = next(event for event in emitted if event["type"] == "turn.started")
+    resumed_event = next(event for event in emitted if event["type"] == "approval.resumed")
+    assert re.fullmatch(r"[0-9a-f]{12}", started["turnId"]), started["turnId"]
+    # One resume stream: turn.started and approval.resumed share the new id.
+    assert resumed_event["turnId"] == started["turnId"]
+    # The origin turn stored on the durable approval is the canonical id too.
+    assert resumed_event["originTurnId"] == record["turn_id"]
+    assert record["turn_id"] != started["turnId"]
+    assert "turn:" not in json.dumps(emitted), "claim-token spelling reached the wire"
 
 
 @pytest.mark.parametrize("verdict", ["denied", "cancelled", "expired"])
