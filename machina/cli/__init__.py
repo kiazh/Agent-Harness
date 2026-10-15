@@ -31,7 +31,7 @@ from machina.cli.launcher import launch_ui
 from machina.cli.output import console
 from machina.cli.providers import app as providers_app
 from machina.core.background_tasks import drain_background_tasks
-from machina.core.config import SECRET_KEYS, config
+from machina.core.config import SECRET_KEYS, config, validate_value
 from machina.core.context import context_manager
 from machina.core.execution_context import begin_turn_scope, end_turn_scope
 from machina.core.provider.specs import provider_names
@@ -1379,6 +1379,7 @@ def setup(
 
     from machina.security.env_file import (
         PROVIDER_KEYS,
+        _write_env_lines,
         find_env_file,
         read_env_values,
         set_env_values,
@@ -1398,7 +1399,8 @@ def setup(
         # A bad $MACHINA_ENV_FILE override is a typed error, never a traceback.
         output.error(f"Cannot resolve the .env location: {error}")
         raise typer.Exit(1) from None
-    if target.is_file() and force:
+    overwriting = target.is_file() and force
+    if overwriting:
         console.print(f"[bold]Overwriting existing .env:[/bold] {escape(str(target))}")
         existing: dict[str, str] = {}
     elif target.is_file():
@@ -1505,7 +1507,25 @@ def setup(
         if "DATABASE_URL" in existing:
             updates = {}
 
-    if not target.is_file():
+    if overwriting:
+        # F10: --force must REPLACE the file, not merge. Build a fresh seed
+        # (comments/docs from .env.example, or a header) and write it
+        # atomically at 0600 via the shared env_file writer before applying
+        # the new values. Previously the seed branch was skipped for an
+        # existing file and set_env_values merged, so old keys/model/provider
+        # and secrets survived a start-over.
+        try:
+            example = target.parent / ".env.example"
+            seed_text = (
+                example.read_text(encoding="utf-8")
+                if example.is_file()
+                else "# Machina environment (git-ignored)\n"
+            )
+            _write_env_lines(target, seed_text.splitlines())
+        except (OSError, ValueError) as error:
+            output.error(f"Could not overwrite {target}: {type(error).__name__}.")
+            raise typer.Exit(1) from None
+    elif not target.is_file():
         # Seed from .env.example so comments/docs carry over, then apply values.
         try:
             example = target.parent / ".env.example"
@@ -1530,6 +1550,8 @@ def setup(
             raise typer.Exit(1) from None
         changed = ", ".join(sorted(updates))
         console.print(f"\n[green]✓ Wrote {len(updates)} value(s) to .env:[/green] {changed}")
+    elif overwriting:
+        console.print(f"\n[green]✓ Replaced {escape(str(target))} with a fresh .env.[/green]")
     else:
         console.print("\n[dim]No changes written.[/dim]")
 
@@ -1634,7 +1656,12 @@ def config_set(
         if key in ("model", "provider"):
             # MACHINA_MODEL/MACHINA_PROVIDER shadow the file (Config.get
             # checks the environment first) — sync them like the gateway.
-            _sync_env_shadow(key, str(config.get(key)))
+            # F09: sync the *validated value just assigned*, never config.get,
+            # which still prefers a pre-existing env shadow and would write the
+            # old value back. Confirm the effective value only after the shadow
+            # has been updated.
+            _sync_env_shadow(key, str(validate_value(key, value)))
+            console.print(f"[dim]Effective {escape(key)}: {escape(str(config.get(key)))}[/dim]")
 
 
 # ─── Memory commands ────────────────────────────────────────────────────────
