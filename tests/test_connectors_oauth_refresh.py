@@ -501,3 +501,115 @@ def test_overlapping_refresh_waits_for_existing_journal_owner(tmp_path):
             )
 
     asyncio.run(run())
+
+
+def test_in_flight_refresh_preflight_coalesces_for_concurrent_callers(tmp_path):
+    """R4-085(c): a preflight during a live refresh waits it out, 5/5 rounds.
+
+    ``mcp_client._oauth_preflight`` performs ``refresh_auth_cache()`` then
+    ``auth_identity()``; while the journal owner held the refresh lock that
+    pair used to observe ``in_flight`` and report the connector signed-out
+    before ever reaching the refresh lock.
+    """
+
+    async def one_round(round_index):
+        from types import SimpleNamespace
+
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path / f"r{round_index}")
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        token_value = f"new-access-{round_index}"
+
+        class Network:
+            async def refresh_token(self, record, *, deadline):
+                entered.set()
+                await release.wait()
+                return SimpleNamespace(
+                    access_token=token_value,
+                    refresh_token="new-refresh",
+                    scope="read write",
+                    expires_in=3600,
+                )
+
+            async def aclose(self):
+                pass
+
+        coordinator._network_factory = lambda **kwargs: Network()
+        refresher = asyncio.create_task(
+            coordinator.ensure_token(
+                binding,
+                expected_grant=identity,
+                deadline=asyncio.get_running_loop().time() + 10,
+            )
+        )
+        try:
+            await entered.wait()
+            # The journal owner dropped the cached identity before its POST.
+            assert coordinator.auth_identity("web") is None
+            preflight = asyncio.create_task(coordinator.refresh_auth_cache("web"))
+            await asyncio.sleep(0.05)
+            assert not preflight.done(), "preflight must coalesce on the live refresh"
+            release.set()
+            assert await refresher == token_value
+            await preflight
+            cached = coordinator.auth_identity("web")
+            assert cached is not None, "the request must not be reported signed-out"
+            assert cached["grantId"] == identity["grantId"]
+            assert cached["generation"] == identity["generation"]
+        finally:
+            release.set()
+            await asyncio.gather(refresher, return_exceptions=True)
+
+    async def run():
+        for round_index in range(5):
+            await one_round(round_index)
+
+    asyncio.run(run())
+
+
+def test_in_flight_preflight_wait_is_bounded_and_fails_closed(tmp_path, monkeypatch):
+    """A refresh stuck past the bound keeps the fail-closed signed-out reply."""
+    from types import SimpleNamespace
+
+    from machina.connectors import oauth as oauth_module
+
+    async def run():
+        monkeypatch.setattr(oauth_module, "OAUTH_LOCK_SECONDS", 0.2)
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class Network:
+            async def refresh_token(self, record, *, deadline):
+                entered.set()
+                await release.wait()
+                return SimpleNamespace(
+                    access_token="late-access",
+                    refresh_token="late-refresh",
+                    scope="read write",
+                    expires_in=3600,
+                )
+
+            async def aclose(self):
+                pass
+
+        coordinator._network_factory = lambda **kwargs: Network()
+        refresher = asyncio.create_task(
+            coordinator.ensure_token(
+                binding,
+                expected_grant=identity,
+                deadline=asyncio.get_running_loop().time() + 10,
+            )
+        )
+        try:
+            await entered.wait()
+            started = asyncio.get_running_loop().time()
+            await coordinator.refresh_auth_cache("web")
+            elapsed = asyncio.get_running_loop().time() - started
+            assert elapsed < 1.0, f"preflight wait must be bounded ({elapsed:.2f}s)"
+            assert coordinator.auth_identity("web") is None
+        finally:
+            release.set()
+            await asyncio.gather(refresher, return_exceptions=True)
+
+    asyncio.run(run())

@@ -12,6 +12,7 @@ import hashlib
 import json
 import secrets
 import webbrowser
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -19,6 +20,7 @@ from typing import Any
 from machina.connectors.oauth_callback import LoopbackOAuthCallback
 from machina.connectors.oauth_models import (
     OAUTH_EXCHANGE_SECONDS,
+    OAUTH_LOCK_SECONDS,
     OAUTH_MAX_OPERATIONS,
     OAUTH_MAX_PREVIEWS,
     OAUTH_OPERATION_TTL_SECONDS,
@@ -90,6 +92,9 @@ class OAuthCoordinator:
         self._operations: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self._auth_cache: dict[str, dict[str, Any]] = {}
+        # Current refresh-lock owner per credential key (task identity): an
+        # indirect preflight from inside that task must not wait on itself.
+        self._refresh_owners: dict[str, asyncio.Task] = {}
         self._retention_tasks: set[asyncio.Task] = set()
         self._shutting_down = False
 
@@ -151,7 +156,7 @@ class OAuthCoordinator:
         self, connector_id: str, owner: OAuthOwner, *, issuer: str | None = None
     ) -> dict[str, Any]:
         config = await self._resolve_config(connector_id)
-        settings = OAuthSettings.from_dict(getattr(config, "oauth", None) or {})
+        settings = OAuthSettings.from_dict(getattr(config, "oauth", None))
         if settings is None:
             raise OAuthError("oauth is not configured", reason="oauth_not_configured")
         if issuer is not None and (not isinstance(issuer, str) or len(issuer) > 2048):
@@ -175,6 +180,13 @@ class OAuthCoordinator:
                     return {"issuers": list(exc.candidates)}  # type: ignore[attr-defined]
                 raise OAuthError(
                     str(exc), reason=getattr(exc, "reason", "oauth_discovery_failed")
+                ) from exc
+            except ValueError as exc:
+                # Defence in depth: an endpoint that bypassed
+                # ConnectorConfig.validate (legacy in-memory config) must
+                # still refuse as a typed OAuth error, never a raw ValueError.
+                raise OAuthError(
+                    "connector endpoint is invalid", reason="oauth_discovery_failed"
                 ) from exc
             # Scope allowlist authority: empty allowlist requires explicit review
             # of discovered scopes (caller reviews them); non-empty must contain.
@@ -404,7 +416,7 @@ class OAuthCoordinator:
                 raise OAuthError(
                     "configuration changed during authorization", reason="oauth_config_changed"
                 )
-            settings = OAuthSettings.from_dict(getattr(config, "oauth", None) or {})
+            settings = OAuthSettings.from_dict(getattr(config, "oauth", None))
             if settings is None:
                 raise OAuthError("oauth is not configured", reason="oauth_not_configured")
             content = json.dumps(
@@ -737,7 +749,7 @@ class OAuthCoordinator:
         return result
 
     async def _public_auth(self, config) -> dict[str, Any]:
-        settings = OAuthSettings.from_dict(getattr(config, "oauth", None) or {})
+        settings = OAuthSettings.from_dict(getattr(config, "oauth", None))
         if settings is None:
             return {"state": "not_configured", "generation": 0}
         # Derive candidate bindings: we don't know issuer/client until discovery,
@@ -758,7 +770,7 @@ class OAuthCoordinator:
         # Scan index for any grant for this connector (bounded, local only).
         stale_binding = None
         try:
-            index = self._creds._read_index()
+            index = await asyncio.to_thread(self._creds._read_index)
             for key, entry in index.get("grants", {}).items():
                 if entry.get("connector_id") == config.id:
                     record = await self._creds.load(
@@ -981,7 +993,7 @@ class OAuthCoordinator:
 
     async def _primary_binding(self, config) -> OAuthBinding | None:
         try:
-            index = self._creds._read_index()
+            index = await asyncio.to_thread(self._creds._read_index)
         except Exception:
             return None
         for key, entry in index.get("grants", {}).items():
@@ -1127,7 +1139,7 @@ class OAuthCoordinator:
     @staticmethod
     def _record_matches_config(record, config, binding: OAuthBinding) -> bool:
         try:
-            settings = OAuthSettings.from_dict(getattr(config, "oauth", None) or {})
+            settings = OAuthSettings.from_dict(getattr(config, "oauth", None))
             if settings is None:
                 return False
             expected_client = (
@@ -1161,7 +1173,7 @@ class OAuthCoordinator:
             return
         settings = None
         try:
-            settings = OAuthSettings.from_dict(getattr(config, "oauth", None) or {})
+            settings = OAuthSettings.from_dict(getattr(config, "oauth", None))
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
             record_failure("oauth.refresh_auth_cache", _boundary_error)
@@ -1179,11 +1191,25 @@ class OAuthCoordinator:
             record_failure("oauth.refresh_auth_cache", _boundary_error)
             self._auth_cache.pop(connector_id, None)
             return
+        if record is not None and not self._record_matches_config(record, config, binding):
+            record = None
         if (
-            record is None
-            or record.refresh_state != "idle"
-            or not self._record_matches_config(record, config, binding)
+            record is not None
+            and record.refresh_state != "idle"
+            and self._refresh_owners.get(binding.credential_key) is not asyncio.current_task()
         ):
+            # A live refresh journals "in_flight" before its token POST and
+            # drops the auth cache; coalesce on that refresh (bounded) so a
+            # concurrent preflight re-reads the settled record instead of
+            # reporting the connector signed-out before reaching the lock.
+            # The task holding the lock skips this wait (no self-deadlock).
+            record = await self._await_in_flight_refresh(binding)
+            if record is not None and not self._record_matches_config(record, config, binding):
+                record = None
+        if record is not None and record.refresh_state != "idle":
+            # Crash journal (or a wait that timed out): fail closed.
+            record = None
+        if record is None:
             self._auth_cache.pop(connector_id, None)
             return
         self._auth_cache[connector_id] = {
@@ -1195,6 +1221,33 @@ class OAuthCoordinator:
             "clientId": record.client_id,
             "grantedScopes": list(record.granted_scopes),
         }
+
+    @asynccontextmanager
+    async def _owned_refresh_lock(self, binding: OAuthBinding, *, deadline: float):
+        """Store refresh lock that records its owning task for coalescing."""
+        async with self._creds.refresh_lock(binding, deadline=deadline):
+            self._refresh_owners[binding.credential_key] = asyncio.current_task()
+            try:
+                yield
+            finally:
+                self._refresh_owners.pop(binding.credential_key, None)
+
+    async def _await_in_flight_refresh(self, binding: OAuthBinding) -> OAuthCredentialRecord | None:
+        """Bounded coalesce on a concurrent refresh, then one re-read.
+
+        ``refresh_state != "idle"`` is journaled inside the store's refresh
+        lock, so waiting on that lock reaches either the winner's published
+        record or, for a crash journal, the unchanged fail-closed state.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + OAUTH_LOCK_SECONDS
+        try:
+            async with self._creds.refresh_lock(binding, deadline=deadline):
+                return await self._creds.load(binding)
+        except (TimeoutError, ValueError):
+            # Bounded wait exhausted or unreadable store: the caller keeps the
+            # fail-closed signed-out outcome.
+            return None
 
     async def ensure_token(
         self, binding: OAuthBinding, *, expected_grant: dict[str, Any], deadline: float
@@ -1232,7 +1285,7 @@ class OAuthCoordinator:
             return record.access_token
         if not record.refresh_token:
             raise OAuthError("authorization required", reason="oauth_reauthorization_required")
-        async with self._creds.refresh_lock(binding, deadline=deadline):
+        async with self._owned_refresh_lock(binding, deadline=deadline):
             # Re-read: another worker may have refreshed already.
             fresh = await self._creds.load(binding)
             if fresh is None:

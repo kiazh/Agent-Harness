@@ -179,12 +179,14 @@ def test_hostile_patterns_are_time_bounded():
         "(a{10000}){10000}b",
         "(?:a{20000}){20000}c",
         "(a{50000}){50000}?",
+        "(a{100}){11}b",
     ],
 )
 def test_pattern_compile_bombs_are_rejected(pattern):
     """Counted repetitions expand at COMPILE time; the timeout cannot cover
-    that, so over-budget counts and nested counted repetitions fail closed
-    before any compile (re-verification NEW-1)."""
+    that, so over-counted repetitions and nested counted repetitions whose
+    product exceeds the budget fail closed before any compile
+    (re-verification NEW-1; R4-086 budget)."""
     import time as _time
 
     schema = {"type": "object", "properties": {"x": {"type": "string", "pattern": pattern}}}
@@ -201,10 +203,50 @@ def test_pattern_counts_within_budget_still_match():
         validate_arguments("t", {"x": "aaaaaa"}, within)
     grouped = {"type": "object", "properties": {"x": {"type": "string", "pattern": "^(ab){2}$"}}}
     validate_arguments("t", {"x": "abab"}, grouped)
-    # Nested counted repetitions are refused explicitly, not by accident.
+    # Bounded nested counted repetitions are admitted (R4-086 relax) ...
     nested = {"type": "object", "properties": {"x": {"type": "string", "pattern": "^(a{2}){3}$"}}}
+    validate_arguments("t", {"x": "aaaaaa"}, nested)
+    # ... while an over-budget product is still refused explicitly.
+    over = {
+        "type": "object",
+        "properties": {"x": {"type": "string", "pattern": "^(a{100}){100}$"}},
+    }
     with pytest.raises(ConnectorToolError, match="nested"):
-        validate_arguments("t", {"x": "aaaaaa"}, nested)
+        validate_arguments("t", {"x": "a" * 10000}, over)
+
+
+@pytest.mark.parametrize(
+    "pattern,value",
+    [
+        (r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$", "192.168.0.1"),  # IPv4-style schema
+        (r"^(a{2}){3}$", "aaaaaa"),
+        (r"^((a{2}){3}){5}$", "a" * 30),
+        (r"^(a{100}){10}$", "a" * 1000),  # exactly at the 1000-rep product budget
+    ],
+)
+def test_nested_counted_repetitions_within_budget_are_accepted(pattern, value):
+    schema = {"type": "object", "properties": {"x": {"type": "string", "pattern": pattern}}}
+    validate_arguments("t", {"x": value}, schema)
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", {"x": "!"}, schema)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        r"^(a{100}){11}$",  # one past the product budget
+        r"^(a{10000}){10000}b",  # explosive product
+        r"^(?:[0-9]{1,3}){3,}$",  # unbounded outer count stays refused
+    ],
+)
+def test_nested_counted_repetitions_over_budget_are_rejected(pattern):
+    import time as _time
+
+    schema = {"type": "object", "properties": {"x": {"type": "string", "pattern": pattern}}}
+    started = _time.monotonic()
+    with pytest.raises(ConnectorToolError, match="nested"):
+        validate_arguments("t", {"x": "a"}, schema)
+    assert _time.monotonic() - started < 1.0
 
 
 @pytest.mark.parametrize("pattern", ["^a{²}$", "^a{①}$", "^x{١٠٠}y$"])
@@ -222,9 +264,11 @@ def test_non_ascii_brace_content_follows_the_engines_literal_treatment(pattern):
 def test_real_world_repetition_patterns_validate():
     """Real MCP schema patterns (self-hosted Firecrawl) must never be
     false-rejected by the count screen: high bounds in the hundreds are
-    legitimate; the screen rejects nested pairs and astronomical counts."""
+    legitimate; bounded nested counts (IPv4-style octet groups) are admitted,
+    while over-budget nesting and astronomical counts fail closed."""
     real_world = [
         ("^[A-Za-z0-9._:-]{1,128}$", "example-host:8080"),
+        (r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$", "192.168.0.1"),
         (
             r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$",
             "docs.python.org",

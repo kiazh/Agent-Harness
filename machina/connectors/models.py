@@ -176,7 +176,15 @@ class ConnectorConfig:
             if self.endpoint:
                 raise ConfigError("endpoint is HTTP-only; stdio connectors must not set it")
         elif self.transport == Transport.STREAMABLE_HTTP.value:
-            parts = urlparse(self.endpoint)
+            try:
+                parts = urlparse(self.endpoint)
+                # ``urlparse`` defers port errors until ``.port`` is read:
+                # validate eagerly so a bad port (`:99999`, `:abc`) is a
+                # typed ConfigError here, not a deferred crash in preview().
+                # Malformed netlocs (e.g. broken IPv6) raise at urlparse().
+                _ = parts.port
+            except ValueError:
+                raise ConfigError("endpoint must be a valid http(s) URL") from None
             if parts.scheme not in ("http", "https") or not parts.hostname:
                 raise ConfigError("endpoint must be an http(s) URL with a host")
             if (

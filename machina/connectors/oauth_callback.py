@@ -215,7 +215,15 @@ class LoopbackOAuthCallback:
             code = (multi.get("code") or [""])[0]
             error = (multi.get("error") or [""])[0]
             iss = (multi.get("iss") or [""])[0]
-            if not state or not hmac.compare_digest(state, self._state):
+            # hmac.compare_digest raises TypeError on non-ASCII str operands:
+            # reject those as an ordinary invalid request so the caller gets
+            # the error page and no exception escapes the handler.
+            if (
+                not state
+                or not state.isascii()
+                or not self._state.isascii()
+                or not hmac.compare_digest(state, self._state)
+            ):
                 writer.write(_response(_ERROR_HTML))
                 await writer.drain()
                 writer.close()

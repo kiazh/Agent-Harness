@@ -87,22 +87,73 @@ _TYPE_NAMES = ("string", "number", "integer", "boolean", "object", "array", "nul
 # `(a{10000}){10000}` freeze compilation synchronously on the event loop.
 # Counts are bounded well above real-world schema patterns (e.g.
 # `^[A-Za-z0-9._:-]{1,128}$`, host masks use {1,128}/{0,61}) so a single
-# level stays cheap (<=10k nodes per count), while astronomically large
-# counts and any NESTED counted pair (whose product explodes) fail closed.
+# level stays cheap (<=10k nodes per count). A counted repetition nested
+# inside a counted group is admitted while the multiplicative product of
+# its counts stays within the budget: bounded nesting such as the IPv4
+# octet group `(?:[0-9]{1,3}\.){3}` compiles to a handful of nodes, while
+# products that would explode, and unbounded outer counts, fail closed.
 _MAX_REPETITION_COUNT = 10_000
+_NESTED_REPETITION_BUDGET = 1_000
 _ASCII_DIGITS = "0123456789"
 
 
 def _screen_pattern_budget(pattern: str) -> None:
-    """Reject repetition counts that make compilation expand without bound."""
+    """Reject repetition counts that make compilation expand without bound.
+
+    ``group_expansion`` tracks, per open group, how many counted expansions
+    its body produces (``inf`` once an unbounded ``{n,}`` appears inside).
+    A group that was just closed stays ``pending`` so a following counted
+    quantifier can be checked as a product before its cost is attributed
+    to the enclosing group.
+    """
     escaped = False
     in_class = False
-    group_stack: list[bool] = []
-    quantifies_a_counted_group = False
+    group_expansion: list[float] = []
+    pending: float | None = None
     index = 0
     length = len(pattern)
     while index < length:
         char = pattern[index]
+        if char == "{" and not escaped and not in_class:
+            cursor = index + 1
+            while cursor < length and pattern[cursor] in _ASCII_DIGITS:
+                cursor += 1
+            low_text = pattern[index + 1 : cursor]
+            has_comma = cursor < length and pattern[cursor] == ","
+            high_text = ""
+            if has_comma:
+                end = cursor + 1
+                while end < length and pattern[end] in _ASCII_DIGITS:
+                    end += 1
+                high_text = pattern[cursor + 1 : end]
+                cursor = end
+            if cursor < length and pattern[cursor] == "}" and (low_text or high_text):
+                low = int(low_text) if low_text else 0
+                high = (int(high_text) if high_text else None) if has_comma else low
+                if low > _MAX_REPETITION_COUNT or (
+                    high is not None and high > _MAX_REPETITION_COUNT
+                ):
+                    raise ConnectorToolError("pattern repetition count too large")
+                if pending is not None:
+                    if high is None:
+                        raise ConnectorToolError("nested counted repetitions must be bounded")
+                    nested = 0.0 if high == 0 else pending * high
+                    if nested > _NESTED_REPETITION_BUDGET:
+                        raise ConnectorToolError(
+                            "nested counted repetition expansion exceeds the budget"
+                        )
+                    pending = None
+                    if group_expansion:
+                        group_expansion[-1] += nested
+                elif group_expansion:
+                    group_expansion[-1] += math.inf if high is None else high
+                index = cursor + 1
+                continue
+        if pending is not None:
+            # A closed counted group with no counted quantifier: one run.
+            if group_expansion:
+                group_expansion[-1] += pending
+            pending = None
         if escaped:
             escaped = False
         elif char == "\\":
@@ -113,40 +164,10 @@ def _screen_pattern_budget(pattern: str) -> None:
         elif char == "[":
             in_class = True
         elif char == "(":
-            group_stack.append(False)
-            quantifies_a_counted_group = False
+            group_expansion.append(0)
         elif char == ")":
-            popped = group_stack.pop() if group_stack else False
-            if popped and group_stack:
-                group_stack[-1] = True
-            quantifies_a_counted_group = popped
-        elif char == "{":
-            cursor = index + 1
-            while cursor < length and pattern[cursor] in _ASCII_DIGITS:
-                cursor += 1
-            low_text = pattern[index + 1 : cursor]
-            high_text = ""
-            if cursor < length and pattern[cursor] == ",":
-                end = cursor + 1
-                while end < length and pattern[end] in _ASCII_DIGITS:
-                    end += 1
-                high_text = pattern[cursor + 1 : end]
-                cursor = end
-            if cursor < length and pattern[cursor] == "}" and (low_text or high_text):
-                low = int(low_text) if low_text else 0
-                high = int(high_text) if high_text else None
-                if low > _MAX_REPETITION_COUNT or (
-                    high is not None and high > _MAX_REPETITION_COUNT
-                ):
-                    raise ConnectorToolError("pattern repetition count too large")
-                if quantifies_a_counted_group:
-                    raise ConnectorToolError("nested counted repetitions are not supported")
-                if group_stack:
-                    group_stack[-1] = True
-                index = cursor
-            quantifies_a_counted_group = False
-        else:
-            quantifies_a_counted_group = False
+            closed = group_expansion.pop() if group_expansion else 0
+            pending = closed if closed > 0 else None
         index += 1
 
 

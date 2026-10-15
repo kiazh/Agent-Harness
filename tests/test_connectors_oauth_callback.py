@@ -29,6 +29,18 @@ async def _get(port, path, query="", host=None):
     return head.decode("latin-1", "replace")
 
 
+async def _full_get(port, path, query=""):
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(
+        f"GET {path}{query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+        f"Connection: close\r\n\r\n".encode()
+    )
+    await writer.drain()
+    raw = await asyncio.wait_for(reader.read(), timeout=5)
+    writer.close()
+    return raw.decode("latin-1", "replace")
+
+
 def test_bad_callback_does_not_consume_good_flow():
     async def _run():
         callback = await _reserve()
@@ -83,6 +95,41 @@ def test_malformed_callbacks_rejected(query):
             head = await _get(callback.port, path, query)
             assert "200 OK" in head
         finally:
+            await callback.aclose()
+
+    asyncio.run(_run())
+
+
+def test_non_ascii_state_returns_error_page_without_typeerror():
+    """R4-085(d): hmac.compare_digest raises TypeError on non-ASCII str
+    operands; the hostile state must produce the normal error page, never an
+    unhandled exception, and must not consume the legitimate attempt."""
+
+    async def _run():
+        loop = asyncio.get_running_loop()
+        unhandled: list[dict] = []
+        previous = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+        callback = await _reserve()
+        try:
+            state = "good-state"
+            callback.arm(state=state, issuer="http://127.0.0.1:9/auth", require_iss=False)
+            path = callback.redirect_uri.split(f"127.0.0.1:{callback.port}")[1]
+            waiter = asyncio.create_task(
+                callback.wait(deadline=asyncio.get_running_loop().time() + 10)
+            )
+            bad = await _full_get(callback.port, path, "?code=abc&state=caf%C3%A9")
+            await asyncio.sleep(0.05)
+            assert "200 OK" in bad
+            assert "Authorization request invalid" in bad
+            assert not any(isinstance(item.get("exception"), TypeError) for item in unhandled)
+            # A refused hostile state is not a consumption: the real flow lives.
+            good = await _get(callback.port, path, f"?code=legit&state={state}")
+            assert "200 OK" in good
+            result = await asyncio.wait_for(asyncio.shield(waiter), timeout=5)
+            assert result.ok and result.code == "legit"
+        finally:
+            loop.set_exception_handler(previous)
             await callback.aclose()
 
     asyncio.run(_run())
