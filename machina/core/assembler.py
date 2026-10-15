@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
+from machina.core.checkpoint import validate_checkpoint
 from machina.core.models import ContextChunk
 
 __all__ = [
@@ -101,11 +103,12 @@ class PromptAssembler:
         """Assemble a prompt within the token budget.
 
         Keep the system instructions and current query first, then use any
-        remaining space for the goal, recent activity, and retrieved context.
+        remaining space for the goal, the latest compaction summary, recent
+        activity, and retrieved context — in that priority order.
         """
         budget = max(1, self.session_budget)
         sections: dict[str, str] = {}
-        order = ("system", "goal", "recent", "retrieved", "query")
+        order = ("system", "goal", "summary", "recent", "retrieved", "query")
 
         def render() -> str:
             return "\n".join(sections[key] for key in order if sections.get(key))
@@ -150,24 +153,105 @@ class PromptAssembler:
         add("query", query_text)
         if goal:
             add("goal", f"\n\n## Current Goal\n{goal}")
+        # H04: the latest compaction summary/checkpoint is reserved ahead of
+        # raw recent chunks and retrieved context — it is the only remaining
+        # record of pre-compaction state, and the newest-three recent window
+        # can never select it (the compressor stamps it behind the preserved
+        # recent chunks). ``add`` still truncates it to fit the authoritative
+        # token budget.
+        summary_chunk = self._latest_compaction_summary(recent_chunks, retrieved_chunks)
+        if summary_chunk is not None:
+            add("summary", f"\n\n## Compacted Context\n{self._compress_chunk(summary_chunk)}")
         if recent_chunks:
-            recent = "\n\n## Recent Activity\n" + "\n".join(
-                self._compress_chunk(chunk) for chunk in reversed(recent_chunks[:3])
-            )
-            add("recent", recent)
+            recent_parts = [
+                self._compress_chunk(chunk)
+                for chunk in reversed(recent_chunks[:3])
+                if not self._is_compaction_summary(chunk)
+            ]
+            if recent_parts:
+                add("recent", "\n\n## Recent Activity\n" + "\n".join(recent_parts))
         if retrieved_chunks:
-            relevant = "\n\n## Relevant Context\n" + "\n".join(
+            # Summaries are owned by the reserved section above; rendering
+            # them again here would duplicate the compacted context.
+            relevant_parts = [
                 self._compress_chunk({"type": chunk.chunk_type, "payload": chunk.payload})
                 for chunk, _score in retrieved_chunks
-            )
-            add("retrieved", relevant)
+                if not self._is_compaction_summary(chunk)
+            ]
+            if relevant_parts:
+                add("retrieved", "\n\n## Relevant Context\n" + "\n".join(relevant_parts))
         return render()
+
+    @staticmethod
+    def _is_compaction_summary(entry: Any) -> bool:
+        """True for a ``compression_summary`` dict row or ContextChunk."""
+        if isinstance(entry, dict):
+            return entry.get("type") == "compression_summary"
+        return getattr(entry, "chunk_type", None) == "compression_summary"
+
+    @staticmethod
+    def _summary_payload(entry: Any) -> dict[str, Any] | None:
+        """Return the payload dict of a compaction summary entry, else None."""
+        if isinstance(entry, dict):
+            payload = entry.get("payload")
+        else:
+            payload = getattr(entry, "payload", None)
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _summary_is_usable(payload: dict[str, Any]) -> bool:
+        """A summary must carry free-form content or a (renderable) checkpoint."""
+        content = payload.get("content")
+        if isinstance(content, str) and content.strip():
+            return True
+        return isinstance(payload.get("checkpoint"), dict)
+
+    def _latest_compaction_summary(
+        self,
+        recent_chunks: list[dict[str, Any]],
+        retrieved_chunks: list[tuple[ContextChunk, float]],
+    ) -> dict[str, Any] | None:
+        """Latest compaction summary available for the reserved section.
+
+        ``recent_chunks`` is newest-first (``get_recent_context`` ordering):
+        the first usable summary is the latest live one. Archived summaries
+        from retrieved context participate only when the live window no
+        longer carries one; they are ordered newest-first by
+        ``created_at`` (id as the deterministic tiebreak) so a keyword recall
+        of an old summary cannot displace a newer one.
+        """
+        for entry in recent_chunks:
+            if not self._is_compaction_summary(entry):
+                continue
+            payload = self._summary_payload(entry)
+            if payload is not None and self._summary_is_usable(payload):
+                return {"type": "compression_summary", "payload": payload}
+        candidates: list[tuple[datetime, str, dict[str, Any]]] = []
+        for entry in retrieved_chunks:
+            chunk = entry[0] if isinstance(entry, tuple) and entry else entry
+            if not self._is_compaction_summary(chunk):
+                continue
+            payload = self._summary_payload(chunk)
+            if payload is None or not self._summary_is_usable(payload):
+                continue
+            created = getattr(chunk, "created_at", None)
+            if isinstance(created, datetime) and created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            candidates.append(
+                (created or datetime(1, 1, 1, tzinfo=UTC), str(getattr(chunk, "id", "")), payload)
+            )
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return {"type": "compression_summary", "payload": candidates[0][2]}
 
     def _compress_chunk(self, chunk_data: dict[str, Any]) -> str:
         """Compress a context chunk into minimal text for the LLM."""
         chunk_type = chunk_data.get("type", "unknown")
         payload = chunk_data.get("payload", {})
 
+        if chunk_type == "compression_summary":
+            return self._render_compaction_summary(payload)
         if chunk_type in ("tool_call", "user_message"):
             tool = payload.get("tool", payload.get("content", "unknown"))
             args = payload.get("args", {})
@@ -199,6 +283,43 @@ class PromptAssembler:
             return f"[assistant] {payload.get('content', '')}"
         else:
             return f"[{chunk_type}] {str(payload)[:100]}"
+
+    def _render_compaction_summary(self, payload: dict[str, Any]) -> str:
+        """Render a compaction summary explicitly (H04).
+
+        Free-form summary text is never reduced to a payload-dict preview;
+        a persisted checkpoint is validated first and its full structured
+        content is appended (an incomplete checkpoint is rejected with a
+        warning instead of being used silently). The section budget, not this
+        renderer, bounds the final text.
+        """
+        parts: list[str] = []
+        content = payload.get("content")
+        if isinstance(content, str) and content:
+            parts.append(content)
+        checkpoint = payload.get("checkpoint")
+        if isinstance(checkpoint, dict):
+            try:
+                validated = validate_checkpoint(checkpoint)
+            except ValueError:
+                logger.warning("invalid compaction checkpoint dropped from prompt")
+            else:
+                lines = [
+                    f"objective: {validated['objective']}",
+                    f"artifact: {validated['expected_artifact']}",
+                    f"constraints: {'; '.join(validated['constraints']) or '(none)'}",
+                    f"read-only scope: {validated['read_only_scope'] or '(none)'}",
+                ]
+                for finding in validated["findings"]:
+                    lines.append(f"finding ({finding['count']}): {finding['finding']}")
+                if validated["unresolved_questions"]:
+                    lines.append("open: " + "; ".join(validated["unresolved_questions"]))
+                lines.append(f"next: {validated['next_action']}")
+                lines.append("Latest explicit user instruction overrides this checkpoint.")
+                parts.append("\n".join(lines))
+        if not parts:
+            return f"[compression_summary] {str(payload)[:100]}"
+        return "\n".join(parts)
 
     def _estimate_tokens(self, text: str) -> int:
         """Accurate token count via tiktoken (falls back to len//4)."""

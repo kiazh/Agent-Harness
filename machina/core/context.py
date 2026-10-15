@@ -36,6 +36,28 @@ NULL_EVENT_SEQ_DESC = -9223372036854775808
 # keys, media types and MessagePack headers in addition to those names.
 _MAX_IMAGE_CONTEXT_BYTES = MAX_TOTAL_IMAGE_BYTES + 8192
 
+# H04 residual (M5b): a compaction summary is stamped *behind* the preserved
+# recent chunks, so the fixed-size `get_recent_context` window loses it after
+# ~7 newer chunks. When the window carries no usable summary, the newest rows
+# of the session's live `compression_summary` chunks are scanned (bound below)
+# and only the first usable one is carried — never a collection.
+_SUMMARY_RECOVERY_SCAN_LIMIT = 5
+
+
+def _summary_payload_is_usable(chunk_type: Any, payload: Any) -> bool:
+    """Whether a live row can be rendered as the reserved compaction summary.
+
+    Mirrors ``PromptAssembler._summary_is_usable``: free-form content (not
+    whitespace-only) or a checkpoint dict. The live reader applies the same
+    rule so a degenerate newest row cannot mask an older usable summary.
+    """
+    if chunk_type != "compression_summary" or not isinstance(payload, dict):
+        return False
+    content = payload.get("content")
+    if isinstance(content, str) and content.strip():
+        return True
+    return isinstance(payload.get("checkpoint"), dict)
+
 
 def _document_source_for(
     chunk_type: Any, payload: dict[str, Any], current: str | None
@@ -756,7 +778,18 @@ class ContextManager:
     async def get_recent_context(
         self, session_id: uuid.UUID, limit: int = 10
     ) -> list[dict[str, Any]]:
-        """Get recent context as a list of payloads (for prompt assembly)."""
+        """Get recent context as a list of payloads (for prompt assembly).
+
+        Newest-first window of *limit* chunks, plus at most one extra trailing
+        entry: when the window carries no usable ``compression_summary``, the
+        latest usable live summary is carried along (H04 residual, M5b). The
+        compressor deliberately stamps its summary behind the preserved recent
+        chunks, so a fixed-size window silently loses the only live record of
+        pre-compaction state after ~7 newer chunks; the extra entry keeps it
+        reachable for the assembler's reserved ``## Compacted Context``
+        section. Ordinary-chunk window semantics are unchanged and the
+        assembler's token budget stays authoritative for rendering.
+        """
         rows = await db.fetch(
             """
             SELECT payload_msgpack, chunk_type, token_count
@@ -768,9 +801,12 @@ class ContextManager:
             session_id,
             limit,
         )
-        results = []
+        results: list[dict[str, Any]] = []
+        has_usable_summary = False
         for r in rows:
             payload = msgpack.unpackb(r["payload_msgpack"], raw=False)
+            if not has_usable_summary and _summary_payload_is_usable(r["chunk_type"], payload):
+                has_usable_summary = True
             results.append(
                 {
                     "type": r["chunk_type"],
@@ -778,7 +814,55 @@ class ContextManager:
                     "tokens": r["token_count"],
                 }
             )
+        if not has_usable_summary:
+            latest = await self._latest_usable_compaction_summary(session_id)
+            if latest is not None:
+                results.append(latest)
         return results
+
+    async def _latest_usable_compaction_summary(
+        self, session_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        """Latest usable live ``compression_summary`` entry, else None.
+
+        Bounded scan (``_SUMMARY_RECOVERY_SCAN_LIMIT`` newest rows): the
+        newest usable summary is the only one carried — never a collection and
+        never an archived copy (archive recall belongs to the assembler's
+        ``retrieved_chunks`` fallback). The row type is re-checked so a test
+        double that ignores the SQL filter cannot inject a non-summary. The
+        returned dict has the same shape as ``get_recent_context`` entries.
+        """
+        rows = await db.fetch(
+            """
+            SELECT id, payload_msgpack, chunk_type, token_count
+            FROM context_chunks
+            WHERE session_id = $1 AND chunk_type = 'compression_summary'
+            ORDER BY created_at DESC, event_seq DESC NULLS LAST, id DESC
+            LIMIT $2
+            """,
+            session_id,
+            _SUMMARY_RECOVERY_SCAN_LIMIT,
+        )
+        for r in rows:
+            try:
+                payload = msgpack.unpackb(r["payload_msgpack"], raw=False)
+            except Exception:
+                # Recovery reads rows the newest-N window never touched: a
+                # corrupt row is skipped (like the legacy image scan) so one
+                # bad summary neither kills the turn nor masks an older one.
+                logger.warning(
+                    "skipping corrupt compaction summary %s during recent-context recovery",
+                    r["id"],
+                    exc_info=True,
+                )
+                continue
+            if _summary_payload_is_usable(r["chunk_type"], payload):
+                return {
+                    "type": r["chunk_type"],
+                    "payload": payload,
+                    "tokens": r["token_count"],
+                }
+        return None
 
     async def search_by_embedding(
         self,

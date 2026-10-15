@@ -6,7 +6,7 @@ import type { SelectItem } from "@earendil-works/pi-tui";
 import type { AgentInfo, AgentHistoryResult, AgentSaveResult, DelegationResult, ResumeResult, SessionInfo } from "../protocol.ts";
 import { listFamilySessions } from "../family.ts";
 import { splitSub } from "../commands.ts";
-import { confirm, options, requireArgs, requireSession, type Command } from "./types.ts";
+import { confirm, options, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
 
 /**
  * The family picker rows shared by `/agents sessions` and the composer's
@@ -185,6 +185,82 @@ export const delegateCommand: Command = {
 		});
 		const r = results[0]!;
 		if (r.status === "error") host.print(`${agent} failed: ${r.response}`, "error");
+		else if (r.status === "waiting_approval") await reportPausedDelegation(agent, r, host);
 		else host.printMarkdown(`**${agent}** (${r.tokens} tokens):\n\n${r.response}`);
 	},
 };
+
+/**
+ * Distinct paused state for a delegated approval (H24).
+ *
+ * A child that pauses keeps its session alive with pending approval requests;
+ * rendering its response like a finished answer hides both the requested
+ * approvals and the child session that must be resumed after they are
+ * resolved. The child session id travels with the delegation result and is
+ * the continuation target here.
+ */
+async function reportPausedDelegation(agent: string, result: DelegationResult, host: FeatureHost): Promise<void> {
+	const child = result.sessionId ?? "";
+	const pauses = (result.needsApproval ?? []).filter((p) => typeof p.requestId === "string" && p.requestId);
+	host.print(
+		`${agent} is waiting for approval — it did not finish. Resolve the request, then resume the subagent session.`,
+		"warning",
+	);
+	if (pauses.length) {
+		host.print(
+			table(
+				["Request", "Operation", "Target"],
+				pauses.map((p) => [shortId(p.requestId!), p.operation ?? "", p.target ?? ""]),
+				40,
+			),
+			"plain",
+		);
+	}
+	if (child) host.print(`Subagent session: ${shortId(child)} (also listed by /agents sessions)`, "plain");
+
+	const choices: SelectItem[] = [];
+	for (const pause of pauses) {
+		const detail = [pause.operation, pause.target].filter(Boolean).join(" ");
+		choices.push({ value: `allow:${pause.requestId}`, label: `Allow ${detail || pause.requestId}` });
+		choices.push({ value: `deny:${pause.requestId}`, label: `Deny ${detail || pause.requestId}` });
+	}
+	if (child) {
+		choices.push({
+			value: "switch",
+			label: "Switch to the subagent session",
+			description: `${shortId(child)} — resolve the approval and resume it there`,
+		});
+	}
+	choices.push({ value: "leave", label: "Leave it paused", description: "Continue later with /agents sessions" });
+	const choice = await host.pick(`${agent} paused for approval`, choices);
+	if (!choice || choice.value === "leave") {
+		if (choice?.value === "leave") host.print(`Left ${shortId(child)} paused. Continue it later with /agents sessions.`, "plain");
+		return;
+	}
+	if (choice.value === "switch" && child) {
+		const { session, history } = await host.request<ResumeResult>("session.resume", { sessionId: child });
+		host.switchTo(session, history);
+		host.print(
+			`Switched to "${session.title || "untitled"}" (${shortId(session.id)}). Resolve the approval with /approvals, then send a message to resume.`,
+			"plain",
+		);
+		return;
+	}
+	const allowed = choice.value.startsWith("allow:");
+	const requestId = choice.value.slice(allowed ? "allow:".length : "deny:".length);
+	const pause = pauses.find((p) => p.requestId === requestId);
+	const detail = [pause?.operation, pause?.target].filter(Boolean).join(" ");
+	const params: Record<string, unknown> = {
+		requestId,
+		verdict: allowed ? "approved" : "denied",
+	};
+	// The approval belongs to the child session; binding the resolve to it
+	// keeps the parent's own pending approvals untouched.
+	if (child) params.sessionId = child;
+	await host.request("approvals.resolve", params);
+	host.print(
+		`Approval ${allowed ? "allowed" : "denied"}: ${detail || requestId}. ` +
+			`${agent} is still paused — switch to the subagent session (${shortId(child)}) and send a message to resume.`,
+		allowed ? "success" : "warning",
+	);
+}
