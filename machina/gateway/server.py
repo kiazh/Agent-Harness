@@ -54,6 +54,7 @@ from machina.gateway.errors import (  # noqa: F401 — re-exported for clients a
     RpcError,
 )
 from machina.gateway.features._common import _bool
+from machina.gateway.features.mode import sync_execution_mode_env
 from machina.gateway.serializers import history_from_chunks, session_to_dict
 from machina.observability.diagnostics import record_failure
 from machina.observability.tracing import span
@@ -500,6 +501,11 @@ class Gateway:
                 if mode not in ("ask", "workspace", "sandbox", "full"):
                     raise RpcError(INVALID_PARAMS, "mode must be ask|workspace|sandbox|full")
                 config.set("execution_mode", mode)
+                # F1: Config.get prefers MACHINA_EXECUTION_MODE, so without
+                # the process-env sync a launcher --mode was silently ignored
+                # under a pre-existing .env shadow. Process-scoped only here
+                # (never persisted): --mode applies to this gateway process.
+                sync_execution_mode_env(mode, persist=False)
         if not self._db_ready:
             try:
                 await db.connect()
@@ -722,6 +728,14 @@ class Gateway:
                         env_key,
                         type(e).__name__,
                     )
+            elif key == "execution_mode":
+                # F1: Config.get reads MACHINA_EXECUTION_MODE before the
+                # in-memory value, so a global mode write is shadowed by the
+                # .env line `machina mode X` leaves behind unless the shadow
+                # is updated too. `value` is the coerced new value, never
+                # config.get (which still prefers the stale shadow). Process
+                # env always; .env in the durable path.
+                sync_execution_mode_env(str(value), persist=persist)
         result: dict[str, Any] = {"model": self.model, "provider": self.provider, "key": key}
         result["value"] = getattr(self, key) if key in ("model", "provider") else config.get(key)
         return result
