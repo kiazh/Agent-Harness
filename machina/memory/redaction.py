@@ -890,12 +890,17 @@ class StreamingSecretRedactor:
     def flush(self) -> str:
         """Redact and return any buffered remainder."""
         if self._pem_open:
-            # Oversized unterminated block: the marker was already emitted;
-            # drop the remaining body tail rather than emitting any of it.
+            # Oversized unterminated block: the marker was already emitted, so
+            # the buffered body tail must never be emitted. The withheld prefix
+            # (text that preceded the block, held only because a partial secret
+            # rule reached the block) is not body material; emit it through the
+            # same whole-buffer redaction as the normal path instead of silently
+            # dropping it. Complete secrets inside it are still removed.
+            prefix = redact_secrets(self._pem_prefix).text if self._pem_prefix else ""
             self._buf = ""
             self._pem_prefix = ""
             self._pem_open = False
-            return ""
+            return prefix
         if _open_pem_block_start(self._buf) is not None:
             # Unterminated block under the cap: the whole-string PEM pattern
             # needs the END marker to match, so fail closed instead of

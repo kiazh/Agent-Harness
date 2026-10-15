@@ -63,12 +63,18 @@ def _serialize_event(
     protocol_version: int = 1,
     session_id: str = "",
     turn_id: str = "",
+    tool_is_error: bool | None = None,
 ) -> dict[str, Any]:
     """Convert a StreamEvent to a JSON-serializable dict.
 
     When *_pre_redacted* is True the text content already passed through the
     boundary-safe streaming redactor and must not be redacted a second time
     (double redaction is harmless but the flag documents the contract).
+
+    *tool_is_error* forwards the engine's real failure flag for a tool result
+    (SSE v2 ``tool.complete.isError``); ``None`` leaves it to the protocol
+    default. Callers gate it to the canonical protocol so the v1 compatibility
+    shape is unchanged.
     """
     data: dict[str, Any] = {"type": event.type}
     if event.type == "text":
@@ -85,6 +91,10 @@ def _serialize_event(
             data["outcome"] = event.tool_outcome
         if getattr(event, "tool_call_id", ""):
             data["id"] = event.tool_call_id
+        if tool_is_error is not None:
+            # P10: forward the engine's real failure flag; canonical_http_event
+            # maps it onto v2 ``tool.complete.isError`` instead of defaulting.
+            data["isError"] = bool(tool_is_error)
     elif event.type == "token_usage":
         data["tokens"] = event.tokens_used
     elif event.type == "done" and event.response is not None:

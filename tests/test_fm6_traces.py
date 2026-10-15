@@ -55,6 +55,11 @@ def test_usage_ledger_is_capped_with_dropped_marker():
     report = turn_report("t-ledger")
     assert report["llm_calls"] == traces.MAX_LEDGER_ENTRIES_PER_TURN
     assert report["ledger_dropped"] == 20
+    # P6: the rendered diagnostics must surface the dropped-ledger marker so a
+    # capped usage ledger does not silently understate llm_calls/tokens.
+    rendered = render_diagnostics("t-ledger")
+    llm_line = next(line for line in rendered.splitlines() if line.startswith("llm:"))
+    assert "(+20 dropped)" in llm_line, rendered
     end_turn("t-ledger")
 
 

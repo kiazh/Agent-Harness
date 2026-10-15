@@ -262,7 +262,13 @@ async def _stream_session(
                                 tool_result=payload["result"],
                                 tool_outcome=payload.get("outcome", ""),
                                 tool_call_id=payload["id"],
-                            )
+                            ),
+                            # P10: carry the engine's real failure flag on the
+                            # canonical wire; the v1 compatibility shape has no
+                            # isError field, so only v2 requests forward it.
+                            tool_is_error=(
+                                payload.get("isError", False) if req.protocolVersion == 2 else None
+                            ),
                         )
                     )
                 elif turn_event.kind == "needs_approval":
