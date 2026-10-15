@@ -369,10 +369,13 @@ class SessionManager:
 
                 # Copy context chunks, keeping their timestamps: a single INSERT ... SELECT
                 # would otherwise stamp every copy with the same now(), scrambling order.
+                # HELD-55: event_seq is copied verbatim too, so the fork keeps the
+                # created_at-tied batch order instead of re-deriving ordinals by
+                # insertion (= row read) order.
                 await conn.execute(
                     """
-                    INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, created_at, accessed_at)
-                    SELECT $2, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, created_at, accessed_at
+                    INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, created_at, accessed_at, event_seq)
+                    SELECT $2, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, created_at, accessed_at, event_seq
                     FROM context_chunks
                     WHERE session_id = $1
                     """,

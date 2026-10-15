@@ -558,24 +558,38 @@ class ContextManager:
         limit: int = 500,
         before_time=None,
         before_id: uuid.UUID | None = None,
+        before_seq: int | None = None,
         chunk_type: str | None = None,
     ) -> list[ContextChunk]:
-        """Keyset page: rows strictly older than (before_time, before_id).
+        """Keyset page: rows strictly older than the ``(time, event_seq, id)`` cursor.
 
         Cursor-based pagination is stable under concurrent inserts/deletes:
         new rows sort before the cursor and never duplicate into later pages;
         deleted rows are simply absent. NULL created_at sorts with the epoch
-        floor, matching the eviction index.
+        floor, matching the eviction index. The order includes ``event_seq``
+        (HELD-55) so a same-``created_at`` batch pages in event order instead
+        of falling back to the random UUID; ``COALESCE(event_seq, <bigint
+        min>)`` reproduces ``NULLS LAST`` under DESC. A None ``before_seq``
+        keeps the legacy 2-key predicate (no reinterpretation of a stored
+        cursor), and the caller advances the ordinal from the last row.
         """
         if chunk_type:
             rows = await db.fetch(
                 """
-                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
+                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source, event_seq
                 FROM context_chunks
                 WHERE session_id = $1 AND chunk_type = $2
-                  AND ($4::uuid IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
-                       < (COALESCE($3::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $4::uuid))
-                ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC, id DESC
+                  AND ($4::uuid IS NULL OR (
+                        CASE WHEN $6::bigint IS NULL
+                          THEN (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                               < (COALESCE($3::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $4::uuid)
+                          ELSE (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz),
+                                COALESCE(event_seq, -9223372036854775808), id)
+                               < (COALESCE($3::timestamptz, '0001-01-01 00:00:00+00'::timestamptz),
+                                  $6::bigint, $4::uuid)
+                        END))
+                ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC,
+                         COALESCE(event_seq, -9223372036854775808) DESC, id DESC
                 LIMIT $5
                 """,
                 session_id,
@@ -583,22 +597,32 @@ class ContextManager:
                 before_time,
                 before_id,
                 limit,
+                before_seq,
             )
         else:
             rows = await db.fetch(
                 """
-                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
+                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source, event_seq
                 FROM context_chunks
                 WHERE session_id = $1
-                  AND ($3::uuid IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
-                       < (COALESCE($2::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $3::uuid))
-                ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC, id DESC
+                  AND ($3::uuid IS NULL OR (
+                        CASE WHEN $5::bigint IS NULL
+                          THEN (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                               < (COALESCE($2::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $3::uuid)
+                          ELSE (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz),
+                                COALESCE(event_seq, -9223372036854775808), id)
+                               < (COALESCE($2::timestamptz, '0001-01-01 00:00:00+00'::timestamptz),
+                                  $5::bigint, $3::uuid)
+                        END))
+                ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC,
+                         COALESCE(event_seq, -9223372036854775808) DESC, id DESC
                 LIMIT $4
                 """,
                 session_id,
                 before_time,
                 before_id,
                 limit,
+                before_seq,
             )
         return [self._row_to_chunk(r) for r in rows]
 
@@ -608,27 +632,44 @@ class ContextManager:
         *,
         since_time=None,
         since_id: uuid.UUID | None = None,
+        since_seq: int | None = None,
         limit: int = 200,
     ) -> list[ContextChunk]:
-        """Chunks strictly newer than the (time, id) consolidation cursor.
+        """Chunks strictly newer than the consolidation cursor.
 
-        Lets extraction process only new input; failed ranges retry because
-        the cursor advances only after successful writes.
+        The cursor is a prefix of the ``(created_at, event_seq NULLS LAST, id)``
+        order, so the predicate must use that same 3-key (HELD-55 F1): a
+        same-``created_at`` batch straddling the page ``LIMIT`` would otherwise
+        be permanently skipped by a ``(created_at, id)`` predicate whose id-max
+        can exceed unprocessed ids. ``COALESCE(event_seq, <bigint max>)``
+        reproduces ``NULLS LAST`` in both the ORDER BY and the predicate.
+        ``since_seq`` is None for a legacy 2-key cursor: that path keeps the old
+        ``(created_at, id)`` predicate (no reinterpretation of a stored range),
+        and the next checkpoint carries the ordinal.
         """
         rows = await db.fetch(
             """
-            SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
+            SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source, event_seq
             FROM context_chunks
             WHERE session_id = $1
-              AND ($3::uuid IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
-                   > (COALESCE($2::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $3::uuid))
-            ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) ASC, event_seq ASC NULLS LAST, id ASC
+              AND ($3::uuid IS NULL OR (
+                    CASE WHEN $5::bigint IS NULL
+                      THEN (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                           > (COALESCE($2::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $3::uuid)
+                      ELSE (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz),
+                            COALESCE(event_seq, 9223372036854775807), id)
+                           > (COALESCE($2::timestamptz, '0001-01-01 00:00:00+00'::timestamptz),
+                              $5::bigint, $3::uuid)
+                    END))
+            ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) ASC,
+                     COALESCE(event_seq, 9223372036854775807) ASC, id ASC
             LIMIT $4
             """,
             session_id,
             since_time,
             since_id,
             limit,
+            since_seq,
         )
         return [self._row_to_chunk(r) for r in rows]
 
@@ -669,20 +710,28 @@ class ContextManager:
     async def get_all_chunks(self, session_id: uuid.UUID) -> list[ContextChunk]:
         """Fetch every active chunk for *session_id* (newest first).
 
-        Keyset snapshot (5.7): pages by (created_at, id) cursor, dedupes by
-        id, and returns exactly the validated input snapshot. Callers replace
-        only these IDs, so concurrent inserts survive and competing
-        compression cannot insert a stale summary twice for the same rows
-        without detection (id-set comparison at the caller).
+        Keyset snapshot (5.7): pages by the (created_at, event_seq, id) cursor
+        (HELD-55; a same-created_at batch pages in event order rather than
+        falling back to the random UUID), dedupes by id, and returns exactly
+        the validated input snapshot. Callers replace only these IDs, so
+        concurrent inserts survive and competing compression cannot insert a
+        stale summary twice for the same rows without detection (id-set
+        comparison at the caller).
         """
         all_chunks: list[ContextChunk] = []
         seen: set[uuid.UUID] = set()
         before_time = None
         before_id: uuid.UUID | None = None
+        before_seq: int | None = None
         while True:
-            page = await self.get_chunks_before(
-                session_id, limit=500, before_time=before_time, before_id=before_id
-            )
+            cursor_kwargs: dict = {
+                "limit": 500,
+                "before_time": before_time,
+                "before_id": before_id,
+            }
+            if before_seq is not None:
+                cursor_kwargs["before_seq"] = before_seq
+            page = await self.get_chunks_before(session_id, **cursor_kwargs)
             if not page:
                 break
             fresh = [c for c in page if c.id not in seen]
@@ -698,6 +747,7 @@ class ContextManager:
             last = page[-1]
             before_time = last.created_at
             before_id = last.id
+            before_seq = last.event_seq
         return all_chunks
 
     async def get_recent_context(
@@ -778,6 +828,13 @@ class ContextManager:
         are archived transactionally before deletion (AH-009); a failure rolls
         back archive+delete+insert together so originals remain recoverable.
 
+        HELD-55: preserved chunks (id in *original_ids*) keep their original
+        ``event_seq`` exactly — read from the locked originals inside the
+        transaction, so a compressor that drops the field cannot re-derive it
+        by insertion order. New chunks draw a fresh ordinal from the sequence;
+        a preserved legacy row stays NULL. This keeps the created_at-tied
+        batch order that compaction would otherwise revert to UUID order.
+
         AH-AUDIT-014: when *expected_owner* is given, the live mutation
         token is validated INSIDE the same transaction (owner + expiry on
         the DB clock) — a preflight check alone is not a fence. Ownership
@@ -807,6 +864,7 @@ class ContextManager:
                     embedding_to_str(c.embedding) if c.embedding is not None else None,
                     _search_text_for(c.payload),
                     created,
+                    getattr(c, "event_seq", None),
                 )
             )
 
@@ -838,6 +896,7 @@ class ContextManager:
                         raise StaleOwnershipError(
                             "mutation ownership lost before replacement; aborted"
                         )
+                ordinal_by_id: dict[uuid.UUID, int | None] = {}
                 if original_ids:
                     from machina.core.exceptions import StaleSnapshotError
 
@@ -845,7 +904,7 @@ class ContextManager:
                     orig_rows = await conn.fetch(
                         """
                         SELECT id, agent_id, chunk_type, payload_msgpack, token_count,
-                               embedding, created_at
+                               embedding, created_at, event_seq
                         FROM context_chunks
                         WHERE session_id = $1 AND id = ANY($2::uuid[])
                         FOR UPDATE
@@ -862,6 +921,9 @@ class ContextManager:
                             f"original set changed ({len(wanted) - len(locked)} missing); "
                             "stale replacement aborted"
                         )
+                    # HELD-55: the originals are the authority for the ordinal;
+                    # the compressor's in-memory chunks may have dropped it.
+                    ordinal_by_id = {r["id"]: r.get("event_seq") for r in orig_rows}
                     for r in orig_rows:
                         raw_payload = r["payload_msgpack"]
                         try:
@@ -904,13 +966,30 @@ class ContextManager:
                     # concurrent inserts). Just insert the new chunks.
                     pass
                 if records:
+                    # -1 is the "draw a fresh ordinal" sentinel (sequence values
+                    # are positive); a preserved legacy row's real NULL is kept
+                    # as NULL. This avoids an explicit-NULL insert suppressing
+                    # the column DEFAULT while still preserving originals.
+                    insert_records = []
+                    for rec in records:
+                        chunk_id = rec[0]
+                        if chunk_id in ordinal_by_id:
+                            event_seq = ordinal_by_id[chunk_id]
+                        elif rec[9] is not None:
+                            event_seq = rec[9]
+                        else:
+                            event_seq = -1
+                        insert_records.append((*rec[:9], event_seq))
                     await conn.executemany(
                         """
                         INSERT INTO context_chunks
-                            (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                            (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at, event_seq)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                                CASE WHEN $10::bigint = -1
+                                     THEN nextval('context_chunks_event_seq')
+                                     ELSE $10::bigint END)
                         """,
-                        records,
+                        insert_records,
                     )
         return len(records)
 
@@ -1380,7 +1459,16 @@ class ContextManager:
         return evicted
 
     def _row_to_chunk(self, row: asyncpg.Record) -> ContextChunk:
-        return row_to_chunk(row)
+        chunk = row_to_chunk(row)
+        # event_seq is selected only by the cursor reader; every other reader
+        # omits the column, so read it defensively (additive optional field).
+        try:
+            event_seq = row["event_seq"]
+        except (KeyError, TypeError):
+            event_seq = None
+        if event_seq is not None:
+            chunk.event_seq = event_seq
+        return chunk
 
     @classmethod
     def reset(cls) -> None:

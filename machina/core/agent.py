@@ -1129,6 +1129,7 @@ class BaseReActAgent:
                 return item
 
             tasks = [asyncio.create_task(_bounded(item)) for item in runnable]
+            cancelled = False
             try:
                 for coro in asyncio.as_completed(tasks):
                     try:
@@ -1178,6 +1179,11 @@ class BaseReActAgent:
                             },
                             tool_call_id=finished["call_id"],
                         )
+            except asyncio.CancelledError:
+                # F02: record already-finished effects in the `finally` below
+                # before unwinding; a bare cancel would otherwise skip Phase D.
+                cancelled = True
+                raise
             finally:
                 # Ensure no task leaks on cancellation.
                 for t in tasks:
@@ -1186,148 +1192,213 @@ class BaseReActAgent:
                 # Cancellation is complete only when children retire their
                 # claims, reservations, and owned providers.
                 await asyncio.gather(*tasks, return_exceptions=True)
+                if cancelled:
+                    await self._finalize_completed_tools(
+                        planned, session_id, pending_chunks, tool_calls_made
+                    )
 
         # ── Phase D: metrics for denied + persistence in provider order ───
         # Provider message order must follow the original tool_calls order
         # (OpenAI requires tool replies in order), even though UI completions
-        # above may have arrived out of order.
-        for item in planned:
-            tool_name = item["name"]
-            tool_args = item["args"]
-            result_str = item["result"]
-            tc = item["tc"]
+        # above may have arrived out of order. A cancellation here still
+        # finalizes any completed-but-unrecorded action (F02).
+        try:
+            for item in planned:
+                tool_name = item["name"]
+                result_str = item["result"]
+                tc = item["tc"]
 
-            if tool_name is None:
-                # Missing name / unparsable args: no events, just the reply.
-                self._append_tool_messages(messages, response, tc, result_str)
-                continue
+                if tool_name is None:
+                    # Missing name / unparsable args: no events, just the reply.
+                    self._append_tool_messages(messages, response, tc, result_str)
+                    continue
 
-            if item.get("_denied"):
-                metrics.increment_counter(f"tool.{tool_name}.calls")
-                metrics.record_error(f"tool.{tool_name}")
-                await plugin_registry.dispatch("on_tool_result", tool_name, result_str)
-                audit_log(
-                    "tool_call_complete",
-                    session_id=str(session_id),
-                    tool_name=tool_name,
-                    duration_ms=0,
-                )
-                # Denied completions were not yielded in Phase C (no
-                # execution); emit them now in order.
-                yield StreamEvent(
-                    type="tool_result",
-                    tool_name=tool_name,
-                    tool_result=result_str,
-                    tool_call_id=item["call_id"],
-                    tool_outcome=_tool_outcome(item),
-                )
-                # AH-AUDIT-030: typed pause event on the stream (not just in
-                # the terminal done response) so SSE/transports can pause
-                # mid-turn with request binding instead of parsing prose.
-                _pause = item.get("_needs_approval")
-                if isinstance(_pause, dict) and _pause.get("request_id"):
-                    yield StreamEvent(
-                        type="needs_approval",
-                        content=str(_pause.get("request_id", "")),
-                        tool_name=tool_name,
-                        tool_args={
-                            "requestId": str(_pause.get("request_id", "")),
-                            "sessionId": str(_pause.get("session_id", "")),
-                            "operation": str(_pause.get("operation", "")),
-                            "target": str(_pause.get("target", "")),
-                            "status": str(_pause.get("status", "pending")),
-                        },
-                        tool_call_id=item["call_id"],
-                    )
-            else:
-                # Executed tools: metrics already recorded at completion time;
-                # still dispatch result hooks + audit once (idempotent).
-                if "elapsed_ms" in item and not item.get("_hooked"):
-                    # Phase C recorded latency/counters; dispatch hooks here
-                    # once in original order for determinism.
+                if item.get("_denied"):
+                    metrics.increment_counter(f"tool.{tool_name}.calls")
+                    metrics.record_error(f"tool.{tool_name}")
                     await plugin_registry.dispatch("on_tool_result", tool_name, result_str)
                     audit_log(
                         "tool_call_complete",
                         session_id=str(session_id),
                         tool_name=tool_name,
-                        duration_ms=int(item["elapsed_ms"]),
+                        duration_ms=0,
                     )
-                    item["_hooked"] = True
-                # LP-01 lifecycle: claimed → completed/failed exactly once.
-                _aid = item.get("_approval_id", "")
-                if _aid and not item.get("_approval_done"):
-                    item["_approval_done"] = True
-                    try:
-                        from machina.permissions.broker import permission_broker as _broker2
-
-                        outcome = (
-                            "failed"
-                            if item.get("_failed") or result_str.startswith("Error:")
-                            else "completed"
+                    # Denied completions were not yielded in Phase C (no
+                    # execution); emit them now in order.
+                    yield StreamEvent(
+                        type="tool_result",
+                        tool_name=tool_name,
+                        tool_result=result_str,
+                        tool_call_id=item["call_id"],
+                        tool_outcome=_tool_outcome(item),
+                    )
+                    # AH-AUDIT-030: typed pause event on the stream (not just in
+                    # the terminal done response) so SSE/transports can pause
+                    # mid-turn with request binding instead of parsing prose.
+                    _pause = item.get("_needs_approval")
+                    if isinstance(_pause, dict) and _pause.get("request_id"):
+                        yield StreamEvent(
+                            type="needs_approval",
+                            content=str(_pause.get("request_id", "")),
+                            tool_name=tool_name,
+                            tool_args={
+                                "requestId": str(_pause.get("request_id", "")),
+                                "sessionId": str(_pause.get("session_id", "")),
+                                "operation": str(_pause.get("operation", "")),
+                                "target": str(_pause.get("target", "")),
+                                "status": str(_pause.get("status", "pending")),
+                            },
+                            tool_call_id=item["call_id"],
                         )
-                        await _broker2.complete(_aid, outcome)
-                    except Exception as _boundary_error:
-                        # Optional fallback preserves the primary outcome; report no payload.
-                        record_failure("agent._execute_tool_calls_stream", _boundary_error)
+                else:
+                    # Executed tools: metrics already recorded at completion time;
+                    # still dispatch result hooks + audit once (idempotent).
+                    if "elapsed_ms" in item and not item.get("_hooked"):
+                        # Phase C recorded latency/counters; dispatch hooks here
+                        # once in original order for determinism.
+                        await plugin_registry.dispatch("on_tool_result", tool_name, result_str)
+                        audit_log(
+                            "tool_call_complete",
+                            session_id=str(session_id),
+                            tool_name=tool_name,
+                            duration_ms=int(item["elapsed_ms"]),
+                        )
+                        item["_hooked"] = True
 
-            if pending_chunks is not None:
-                pending_chunks.append(
-                    {
-                        "session_id": session_id,
-                        "agent_id": self.agent_id,
-                        "chunk_type": "tool_call",
-                        "payload": {
-                            "tool": tool_name,
-                            "args": tool_args,
-                            "result_preview": result_str[:500],
-                            "result": result_str[:_STORED_TOOL_RESULT_CHARS],
-                            "result_truncated": len(result_str) > _STORED_TOOL_RESULT_CHARS,
-                        },
-                        "token_count": len(result_str) // 4,
-                    }
-                )
-            else:
-                await context_manager.add_chunk(
-                    session_id=session_id,
-                    agent_id=self.agent_id,
-                    chunk_type="tool_call",
-                    payload={
-                        "tool": tool_name,
-                        "args": tool_args,
-                        "result_preview": result_str[:500],
-                        "result": result_str[:_STORED_TOOL_RESULT_CHARS],
-                        "result_truncated": len(result_str) > _STORED_TOOL_RESULT_CHARS,
-                    },
-                    token_count=len(result_str) // 4,
-                )
-            tool_entry: dict[str, Any] = {
-                "tool": tool_name,
-                "args": tool_args,
-                "result_preview": result_str[:200],
-                "outcome": _tool_outcome(item),
-            }
-            # AH-AUDIT-022: typed pause marker travels with the entry so
-            # schedulers/transports never parse prose to detect pauses.
-            if item.get("_needs_approval"):
-                tool_entry["needs_approval"] = item["_needs_approval"]
-            if item.get("_needs_approvals"):
-                tool_entry["needs_approvals"] = item["_needs_approvals"]
-                tool_entry["needs_approval"] = item["_needs_approvals"][0]
-            if item.get("_delegated_tokens"):
-                tool_entry["delegated_tokens"] = item["_delegated_tokens"]
-            tool_calls_made.append(tool_entry)
-            # Skill pages and status snapshots already have bounded output.
-            # Preserve continuation offsets and complete JSON beyond the preview cap.
-            message_limit = tool_message_limit(tool_name)
-            self._append_tool_messages(messages, response, tc, result_str[:message_limit])
+                # Durably record the action exactly once (context chunk +
+                # approval retirement + tool_calls_made entry). Shared with the
+                # cancellation finalizer so the normal path stays unchanged.
+                await self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
+                # Skill pages and status snapshots already have bounded output.
+                # Preserve continuation offsets and complete JSON beyond the preview cap.
+                message_limit = tool_message_limit(tool_name)
+                self._append_tool_messages(messages, response, tc, result_str[:message_limit])
+        except asyncio.CancelledError:
+            await self._finalize_completed_tools(
+                planned, session_id, pending_chunks, tool_calls_made
+            )
+            raise
 
-    async def _flush_pending_chunks(self, pending_chunks: list[dict[str, Any]]) -> None:
+    def _tool_entry(self, item: dict[str, Any]) -> dict[str, Any]:
+        """Build the ``tool_calls_made`` entry for one finished tool action."""
+        result_str = item["result"]
+        entry: dict[str, Any] = {
+            "tool": item["name"],
+            "args": item["args"],
+            "result_preview": result_str[:200],
+            "outcome": _tool_outcome(item),
+        }
+        # AH-AUDIT-022: typed pause marker travels with the entry so
+        # schedulers/transports never parse prose to detect pauses.
+        if item.get("_needs_approval"):
+            entry["needs_approval"] = item["_needs_approval"]
+        if item.get("_needs_approvals"):
+            entry["needs_approvals"] = item["_needs_approvals"]
+            entry["needs_approval"] = item["_needs_approvals"][0]
+        if item.get("_delegated_tokens"):
+            entry["delegated_tokens"] = item["_delegated_tokens"]
+        return entry
+
+    async def _record_tool_action(
+        self,
+        item: dict[str, Any],
+        session_id: uuid.UUID,
+        pending_chunks: list[dict[str, Any]] | None,
+        tool_calls_made: list[dict[str, Any]],
+    ) -> None:
+        """Durably record one finished action exactly once (F02).
+
+        Writes the ``tool_call`` context chunk, retires the action's approval
+        (claimed → completed/failed), and appends its ``tool_calls_made`` entry.
+        Called from Phase D in provider order on the normal path and from
+        ``_finalize_completed_tools`` for completed-but-unrecorded items when a
+        batch is cancelled. Provider-message assembly stays with the caller
+        (order-sensitive). Idempotent via ``item['_recorded']``.
+        """
+        if item.get("_recorded"):
+            return
+        item["_recorded"] = True
+        result_str = item["result"]
+        # LP-01 lifecycle: claimed → completed/failed exactly once.
+        _aid = item.get("_approval_id", "")
+        if _aid and not item.get("_approval_done"):
+            item["_approval_done"] = True
+            try:
+                from machina.permissions.broker import permission_broker as _broker2
+
+                outcome = (
+                    "failed"
+                    if item.get("_failed") or result_str.startswith("Error:")
+                    else "completed"
+                )
+                await _broker2.complete(_aid, outcome)
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("agent._record_tool_action", _boundary_error)
+        payload = {
+            "tool": item["name"],
+            "args": item["args"],
+            "result_preview": result_str[:500],
+            "result": result_str[:_STORED_TOOL_RESULT_CHARS],
+            "result_truncated": len(result_str) > _STORED_TOOL_RESULT_CHARS,
+        }
+        if pending_chunks is not None:
+            pending_chunks.append(
+                {
+                    "session_id": session_id,
+                    "agent_id": self.agent_id,
+                    "chunk_type": "tool_call",
+                    "payload": payload,
+                    "token_count": len(result_str) // 4,
+                }
+            )
+        else:
+            await context_manager.add_chunk(
+                session_id=session_id,
+                agent_id=self.agent_id,
+                chunk_type="tool_call",
+                payload=payload,
+                token_count=len(result_str) // 4,
+            )
+        tool_calls_made.append(self._tool_entry(item))
+
+    async def _finalize_completed_tools(
+        self,
+        planned: list[dict[str, Any]],
+        session_id: uuid.UUID,
+        pending_chunks: list[dict[str, Any]] | None,
+        tool_calls_made: list[dict[str, Any]],
+    ) -> None:
+        """Record completed-but-unrecorded actions when a batch is cancelled (F02).
+
+        Phase D records completions only after the whole batch returns; a
+        cancellation in between would otherwise drop an already-finished
+        effect from the conversation record and leave its approval claimed.
+        Runs in provider order, shielded so the recording survives the in-flight
+        cancellation, and is idempotent per item. Provider-message ordering is
+        deliberately untouched (the aborted turn discards those messages).
+        """
+        for item in planned:
+            if item["name"] is None or item.get("_denied") or item.get("_recorded"):
+                continue
+            if "elapsed_ms" not in item:
+                continue
+            try:
+                await asyncio.shield(
+                    self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
+                )
+            except Exception as exc:
+                logger.warning("cancellation finalize failed for %s: %s", item["name"], exc)
+
+    async def _flush_pending_chunks(self, pending_chunks: list[dict[str, Any]]) -> bool:
         """Insert all pending chunks in a single batch operation.
 
-        R4-025/PB-1: a failing context store must never fail the turn. Flush
-        errors are logged and the turn continues with its response; pending
-        chunks are retained so a later flush can retry them. Cancellation
-        still propagates to the caller.
+        R4-025/PB-1: a failing context store must never fail the turn. Returns
+        True only when every pending chunk was durably written — the list is
+        then cleared, so a later flush cannot re-insert it. Returns False when
+        the write failed: the chunks are RETAINED for the remainder of the turn
+        so a later flush can retry them (never silently dropped — code_review
+        #6). Cancellation still propagates to the caller.
         """
         if pending_chunks:
             try:
@@ -1338,8 +1409,9 @@ class BaseReActAgent:
                 raise
             except Exception as exc:
                 logger.warning("Context flush failed (%s); continuing turn", type(exc).__name__)
-                return
+                return False
             pending_chunks.clear()
+        return True
 
     async def _flush_pending_cancellation_safe(
         self,
@@ -1350,17 +1422,26 @@ class BaseReActAgent:
         """Flush pending history on cancellation without losing writes (AH-015).
 
         Uses a shielded, bounded flush so CancelledError during a turn does
-        not drop the user message or completed tool records. Appends an
-        explicit interruption marker instead of misrepresenting partial
-        effects as complete.
+        not drop the user message or completed tool records. The pending list
+        is cleared only on a CONFIRMED flush: a failed flush keeps the chunks
+        retained instead of clearing a batch it never persisted (code_review
+        #6). Appends an explicit interruption marker instead of misrepresenting
+        partial effects as complete.
         """
         if pending_chunks:
             try:
-                # Shield so the flush itself is not cancelled mid-write.
-                await asyncio.shield(
-                    asyncio.wait_for(self._flush_pending_chunks(list(pending_chunks)), timeout=10.0)
+                # Shield so the flush itself is not cancelled mid-write. The
+                # flush clears the list on success; on failure it returns False
+                # and the list stays retained.
+                flushed = await asyncio.shield(
+                    asyncio.wait_for(self._flush_pending_chunks(pending_chunks), timeout=10.0)
                 )
-                pending_chunks.clear()
+                if not flushed:
+                    logger.warning(
+                        "Cancellation-safe flush did not persist %d pending chunk(s); "
+                        "chunks retained",
+                        len(pending_chunks),
+                    )
             except Exception as e:
                 logger.warning("Cancellation-safe flush failed: %s", e)
         # Record the interruption explicitly (best-effort, bounded).
@@ -1417,8 +1498,11 @@ class BaseReActAgent:
     def _parse_consolidation_cursor(self, cursor: dict | None) -> tuple | None:
         """Parse a stored ``mem_consolidated_up_to`` dict into a cursor tuple.
 
-        Returns ``(created_at, id)`` or ``None``; an unparseable cursor is
-        diagnosed (W7) and falls back to a full cursorless scan rather than
+        Returns ``(created_at, id)`` for a legacy cursor (no ordinal) and
+        ``(created_at, event_seq, id)`` when the stored cursor carries ``seq``
+        (HELD-55 F1), or ``None``. The legacy 2-tuple shape is preserved so a
+        pre-ordinal cursor is unpacked exactly as before; an unparseable cursor
+        is diagnosed (W7) and falls back to a full cursorless scan rather than
         raising into the consolidation turn.
         """
         if not (cursor and cursor.get("id")):
@@ -1430,13 +1514,17 @@ class BaseReActAgent:
                 since_time = datetime.fromisoformat(text)
                 if since_time.tzinfo is None:
                     since_time = since_time.replace(tzinfo=UTC)
-            return (since_time, uuid.UUID(str(cursor["id"])))
+            since_id = uuid.UUID(str(cursor["id"]))
+            since_seq = cursor.get("seq")
+            if since_seq is None:
+                return (since_time, since_id)
+            return (since_time, int(since_seq), since_id)
         except Exception as exc:
             record_failure("agent.consolidation_cursor", exc)
             return None
 
     async def _read_consolidation_cursor(self, session_id: uuid.UUID) -> tuple | None:
-        """Resolve the durable watermark as a ``(created_at, id)`` cursor.
+        """Resolve the durable watermark as a ``(created_at, [event_seq,] id)`` cursor.
 
         Prefers ``get_fresh`` (AH-AUDIT-019) so a worker's up-to-60s cached
         session snapshot cannot pin a stale cursor; the built-in consolidator
@@ -1457,14 +1545,18 @@ class BaseReActAgent:
         failure is logged and leaves the range retryable.
         """
         try:
+            stored_cursor: dict = {
+                "id": str(checkpoint["id"]),
+                "at": checkpoint["at"],
+            }
+            # Additive optional ordinal (HELD-55 F1): persisted only when the
+            # checkpoint carries one, so a stored cursor without seq keeps the
+            # legacy 2-key predicate path.
+            if checkpoint.get("seq") is not None:
+                stored_cursor["seq"] = int(checkpoint["seq"])
             await session_manager.update_state_fields(
                 session_id,
-                {
-                    "mem_consolidated_up_to": {
-                        "id": str(checkpoint["id"]),
-                        "at": checkpoint["at"],
-                    }
-                },
+                {"mem_consolidated_up_to": stored_cursor},
             )
         except Exception as e:
             logger.debug("consolidation cursor persist failed: %s", e)
@@ -1505,11 +1597,16 @@ class BaseReActAgent:
                     newest = []
                 if since is not None:
                     try:
+                        pending_kwargs: dict = {
+                            "since_time": since[0],
+                            "since_id": since[-1],
+                            "limit": 1,
+                        }
+                        if len(since) >= 3 and since[1] is not None:
+                            pending_kwargs["since_seq"] = since[1]
                         pending = await context_manager.get_chunks_since(
                             session_id,
-                            since_time=since[0],
-                            since_id=since[1],
-                            limit=1,
+                            **pending_kwargs,
                         )
                         if not pending:
                             logger.debug("consolidation cursor unchanged, skipping")
@@ -1653,8 +1750,14 @@ class ReActAgent(BaseReActAgent):
             images=images,
         )
         # AH-015: persist the user message immediately so cancellation during
-        # the first LLM call cannot lose it.
-        await self._flush_pending_chunks(pending_chunks)
+        # the first LLM call cannot lose it. Wrapped like the stream loop (F3):
+        # a CancelledError during this DB write must still persist the user
+        # message with an interruption marker rather than dropping the batch.
+        try:
+            await self._flush_pending_chunks(pending_chunks)
+        except asyncio.CancelledError:
+            await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+            raise
 
         total_tokens = 0
         tool_calls_made = []

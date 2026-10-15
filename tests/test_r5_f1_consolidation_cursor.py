@@ -217,3 +217,55 @@ async def test_cursor_reader_overrides_since_and_commits_checkpoint(monkeypatch)
     assert result.status == "empty" and result.checkpoint is not None
     assert commits == [result.checkpoint], "checkpoint must be committed via the writer"
     assert commits[0]["id"] == str(chunk.id)
+
+
+@pytest.mark.integration
+@pytest.mark.db
+async def test_same_created_at_batch_straddling_page_is_not_skipped(cursor_env):
+    """HELD-55 F1: a batch split by the page LIMIT must not be skipped.
+
+    ``get_chunks_since`` orders by ``(created_at, event_seq NULLS LAST, id)``
+    but the cursor predicate/checkpoint used only ``(created_at, id)``. A
+    same-``created_at`` batch (one transaction -> identical created_at, random
+    UUIDs) straddling the ``LIMIT`` lets the id-max of the processed prefix
+    exceed unprocessed ids, which then never satisfy ``(created_at, id) >
+    checkpoint``. RED before the 3-key cursor: the second page returns nothing
+    and the watermark stalls on the first page's id-max.
+    """
+    database = cursor_env
+    from machina.core.serialization import payload_to_msgpack
+
+    session_id = await database.fetchval(
+        "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
+    )
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    # Ids chosen so max(id of the first page) > id of an unprocessed row:
+    # the two earliest events carry the two largest UUIDs.
+    rows = [
+        (uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"), 1, "e0"),
+        (uuid.UUID("ffffffff-ffff-ffff-ffff-fffffffffffe"), 2, "e1"),
+        (uuid.UUID("00000000-0000-0000-0000-000000000002"), 3, "e2"),
+        (uuid.UUID("00000000-0000-0000-0000-000000000003"), 4, "e3"),
+    ]
+    for chunk_id, seq, label in rows:
+        await database.execute(
+            """INSERT INTO context_chunks
+               (id, session_id, agent_id, chunk_type, payload_msgpack, created_at, event_seq)
+               VALUES ($1, $2, 'harness', 'user_message', $3, $4, $5)""",
+            chunk_id,
+            session_id,
+            payload_to_msgpack({"content": label}),
+            base,
+            seq,
+        )
+
+    agent = _agent(_plain_consolidator())
+    await agent._consolidate_memories(session_id)  # page 1 -> e0, e1
+    await agent._consolidate_memories(session_id)  # page 2 must reach e2, e3
+
+    final = await _read_cursor(database, session_id)
+    assert final is not None
+    assert final["id"] == str(rows[3][0]), (
+        f"same-created_at page boundary skipped rows: cursor {final['id']} != {rows[3][0]}"
+    )
+    assert final.get("seq") == 4, "the 3-key cursor must carry the ordinal"

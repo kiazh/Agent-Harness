@@ -391,6 +391,17 @@ def test_deferred_import_count_ratchet():
 #         max_iterations surface and added the PB-1 flush log-and-continue
 #         (+9 net), then R5-F1 serialized the consolidation cursor
 #         read+extract+checkpoint under the advisory lock (+46).
+#     +103 core/agent.py (2110 -> 2213, final-review core/runtime fix lane):
+#         HELD-55 F1 3-key consolidation cursor — reader 2-/3-tuple parse +
+#         seq-aware persist + non-built-in since unpacking (+21);
+#         F02 cancellation finalization — `_tool_entry` / `_record_tool_action`
+#         extraction (Phase D body deduped, net +25), `_finalize_completed_tools`
+#         (+27) and the Phase C/D cancellation guards (+10); core-runtime F2
+#         `run()` immediate-flush cancellation wrapper mirroring `run_stream`
+#         (+6); code_review #6 truthful flush contract — `bool` return +
+#         confirmed-flush clearing in `_flush_pending_cancellation_safe` (+15).
+#         Offset by the removed duplicated Phase D recording body. No
+#         unreviewed growth may land on top of this.
 #     Provider package +178:
 #      +72 core/provider/audit.py (R5-N; URL-credential redaction — userinfo
 #          passwords and credential query/fragment values, shared by audit
@@ -405,7 +416,7 @@ def test_deferred_import_count_ratchet():
 #          +1 direct.py, +1 openrouter.py (R5-GH shared-parser wiring).
 #     Package total 4780 -> 4958 by exactly this delta.
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
-    ("core/agent.py", 2110),
+    ("core/agent.py", 2213),
     ("core/compression.py", 999),
     ("core/provider/__init__.py", 53),
     ("core/provider/_log.py", 10),

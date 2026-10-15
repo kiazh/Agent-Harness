@@ -72,6 +72,10 @@ DEFAULT_DEDUP_THRESHOLD = 0.85
 # Maximum chunks to process in a single consolidation run
 MAX_CHUNKS_PER_CONSOLIDATION = 100
 
+# Stands in for a NULL event_seq when deriving the checkpoint key so a legacy
+# row sorts exactly as `ORDER BY ... NULLS LAST` places it (HELD-55 F1).
+_SEQ_NULL_SENTINEL = 9223372036854775807
+
 
 def _cosine_similarity(a: list[float] | None, b: list[float] | None) -> float:
     """Cosine similarity for intra-batch dedup (0.0 when either is missing)."""
@@ -275,13 +279,21 @@ class MemoryConsolidator:
 
         # Step 0: Get context chunks (cursor-filtered when resuming).
         if since is not None:
-            since_time, since_id = since
-            chunks = await context_manager.get_chunks_since(
-                session_id,
-                since_time=since_time,
-                since_id=since_id,
-                limit=MAX_CHUNKS_PER_CONSOLIDATION,
-            )
+            # Cursor shape: legacy ``(created_at, id)`` or the HELD-55 F1
+            # ``(created_at, event_seq, id)``. Both resolve; a missing seq keeps
+            # the legacy 2-key predicate path (no reinterpretation of a range
+            # stored before the ordinal existed).
+            since_time = since[0]
+            since_id = since[-1]
+            since_seq = since[1] if len(since) >= 3 else None
+            cursor_kwargs: dict = {
+                "since_time": since_time,
+                "since_id": since_id,
+                "limit": MAX_CHUNKS_PER_CONSOLIDATION,
+            }
+            if since_seq is not None:
+                cursor_kwargs["since_seq"] = since_seq
+            chunks = await context_manager.get_chunks_since(session_id, **cursor_kwargs)
         else:
             # FM5 W6: oldest-first so the backlog drains in bounded pages.
             try:
@@ -304,21 +316,36 @@ class MemoryConsolidator:
             logger.debug("No chunks to consolidate for session %s", session_id)
             return ConsolidationResult("empty", [], None, 0)
 
-        # Checkpoint identity: the maximum (created_at, id) actually
-        # processed — never a positional guess. Initial newest-first windows
-        # (DESC) and ascending cursor continuations both resolve correctly.
+        # Checkpoint identity: the maximum (created_at, event_seq, id) actually
+        # processed — never a positional guess, and the SAME 3-key the window
+        # is ordered on (HELD-55 F1). A NULL event_seq (legacy row) sorts last
+        # via the bigint-max sentinel, matching `NULLS LAST` in the query.
+        # Initial newest-first windows (DESC) and ascending cursor
+        # continuations both resolve correctly.
+
         def _checkpoint_for(processed: list) -> dict:
             latest = max(
                 processed,
                 key=lambda c: (
                     c.created_at.isoformat() if getattr(c, "created_at", None) else "",
+                    (
+                        _SEQ_NULL_SENTINEL
+                        if getattr(c, "event_seq", None) is None
+                        else int(c.event_seq)
+                    ),
                     str(getattr(c, "id", "")),
                 ),
             )
-            return {
+            checkpoint = {
                 "id": str(latest.id),
                 "at": latest.created_at.isoformat() if latest.created_at else None,
             }
+            # Additive optional ordinal so the next run uses the exact 3-key
+            # predicate. Omitted for a legacy row (NULL seq) so that stored
+            # cursor keeps the legacy 2-key path.
+            if getattr(latest, "event_seq", None) is not None:
+                checkpoint["seq"] = int(latest.event_seq)
+            return checkpoint
 
         # Step 1: Format conversation for LLM
         conversation = self._format_conversation(chunks)
