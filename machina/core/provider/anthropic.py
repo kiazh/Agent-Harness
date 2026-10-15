@@ -84,7 +84,8 @@ class AnthropicProvider(LLMProvider):
         """Split OpenAI-style history into (system, anthropic messages).
 
         Handles the harness's shapes: plain role/content dicts, assistant
-        messages carrying OpenAI ``tool_calls``, and ``role: tool`` results.
+        messages carrying OpenAI ``tool_calls``, and coalesced ``role: tool``
+        results.
         """
         system_parts: list[str] = []
         out: list[dict[str, Any]] = []
@@ -94,18 +95,17 @@ class AnthropicProvider(LLMProvider):
                 system_parts.append(str(msg.get("content", "")))
                 continue
             if role == "tool":
-                out.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": msg.get("tool_call_id", ""),
-                                "content": str(msg.get("content", "")),
-                            }
-                        ],
-                    }
-                )
+                result: dict[str, Any] = {
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": str(msg.get("content", "")),
+                    **({"is_error": True} if msg.get("is_error") else {}),
+                }
+                prev = out[-1]["content"] if out else None
+                if isinstance(prev, list) and prev and prev[0].get("type") == "tool_result":
+                    prev.append(result)
+                else:
+                    out.append({"role": "user", "content": [result]})
                 continue
             tool_calls = msg.get("tool_calls")
             if role == "assistant" and tool_calls:
