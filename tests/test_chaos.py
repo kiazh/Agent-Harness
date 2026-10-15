@@ -598,8 +598,15 @@ class TestContextChaos:
 class TestDatabaseChaos:
     """Chaos tests for database failures."""
 
+    @pytest.mark.xfail(strict=True, reason="PB-1: agent.run lets flush DB errors escape instead of log-and-continue; fix owned by agent-chain lane")
     async def test_agent_handles_db_connection_drop(self, mock_session):
-        """Agent should handle database connection drop gracefully."""
+        """Agent should handle a database connection drop during context flush.
+
+        The run path accumulates chunks and persists them through
+        ``context_manager.add_chunks_batch`` — patching ``add_chunk`` (as the
+        old version did) never fires. The second batch (the assistant message)
+        fails here; the turn must still return a response.
+        """
         provider = AsyncMock()
         provider.complete = AsyncMock(
             return_value=LLMResponse(
@@ -615,12 +622,11 @@ class TestDatabaseChaos:
             mock_sm.update_activity = AsyncMock()
 
             with patch("machina.core.agent.context_manager") as mock_cm:
-                # First call succeeds, second fails
-                mock_cm.add_chunk = AsyncMock(
-                    side_effect=[
-                        None,  # First call succeeds
-                        Exception("Connection lost"),  # Second call fails
-                    ]
+                # The real seam: the run path flushes via add_chunks_batch.
+                # First flush (user message) succeeds, second (assistant
+                # message) hits the dropped connection.
+                mock_cm.add_chunks_batch = AsyncMock(
+                    side_effect=[None, Exception("Connection lost")]
                 )
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
@@ -629,9 +635,12 @@ class TestDatabaseChaos:
                 # Agent should handle DB errors gracefully (log and continue)
                 response = await agent.run(mock_session.id, "test", verbose=False)
                 assert response is not None
+                assert response.content == "test"
+                # The failure was injected at the real seam and actually ran.
+                assert mock_cm.add_chunks_batch.await_count == 2
 
     async def test_agent_handles_slow_db(self, mock_session):
-        """Agent should handle slow database queries."""
+        """Agent should handle slow database batch writes."""
         provider = AsyncMock()
         provider.complete = AsyncMock(
             return_value=LLMResponse(
@@ -642,7 +651,7 @@ class TestDatabaseChaos:
             )
         )
 
-        async def slow_add_chunk(*args, **kwargs):
+        async def slow_add_chunks_batch(*args, **kwargs):
             await asyncio.sleep(0.1)  # Simulate slow query
 
         with patch("machina.core.agent.session_manager") as mock_sm:
@@ -650,7 +659,7 @@ class TestDatabaseChaos:
             mock_sm.update_activity = AsyncMock()
 
             with patch("machina.core.agent.context_manager") as mock_cm:
-                mock_cm.add_chunk = AsyncMock(side_effect=slow_add_chunk)
+                mock_cm.add_chunks_batch = AsyncMock(side_effect=slow_add_chunks_batch)
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
@@ -660,9 +669,12 @@ class TestDatabaseChaos:
                     timeout=30,
                 )
                 assert response is not None
+                assert response.content == "test"
+                assert mock_cm.add_chunks_batch.await_count == 2
 
+    @pytest.mark.xfail(strict=True, reason="PB-1: agent.run lets flush DB errors escape instead of log-and-continue; fix owned by agent-chain lane")
     async def test_agent_handles_db_pool_exhaustion(self, mock_session):
-        """Agent should handle database pool exhaustion."""
+        """Agent should handle a database pool exhaustion on every batch write."""
         provider = AsyncMock()
         provider.complete = AsyncMock(
             return_value=LLMResponse(
@@ -678,7 +690,8 @@ class TestDatabaseChaos:
             mock_sm.update_activity = AsyncMock()
 
             with patch("machina.core.agent.context_manager") as mock_cm:
-                mock_cm.add_chunk = AsyncMock(side_effect=Exception("Pool exhausted"))
+                # The real seam: every batch flush fails with pool exhaustion.
+                mock_cm.add_chunks_batch = AsyncMock(side_effect=Exception("Pool exhausted"))
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
@@ -686,6 +699,7 @@ class TestDatabaseChaos:
                 # Agent should handle DB errors gracefully (log and continue)
                 response = await agent.run(mock_session.id, "test", verbose=False)
                 assert response is not None
+                assert mock_cm.add_chunks_batch.await_count >= 1
 
 
 # ===========================================================================

@@ -314,11 +314,14 @@ async def test_concurrent_context_writes_no_loss_or_duplication(
 @pytest.mark.load
 @pytest.mark.asyncio
 async def test_concurrent_context_mixed_read_write(load_db, clean_load_data, monkeypatch):
-    """Half the tasks write chunks while the other half read. After all
-    writes complete, a final read must see all chunks.
+    """Half the tasks write chunks while the other half read the SAME sessions.
 
-    This tests that the LRU cache invalidation works correctly under
-    concurrency — a stale cache must not cause missing chunks.
+    Each reader is paired with a writer's session, so reads genuinely overlap
+    the writes (the old version read reader-only sessions and could not
+    observe the write path at all). A concurrent read may see a prefix
+    (0..M chunks) but must never over-count; after all writers finish, a
+    fresh read must see exactly the M written chunks, with no loss and no
+    duplication.
     """
     from machina.core.context import ContextManager
     from machina.core.session import SessionManager
@@ -349,34 +352,42 @@ async def test_concurrent_context_mixed_read_write(load_db, clean_load_data, mon
         return M
 
     async def _reader(sid: uuid.UUID) -> int:
-        """Read chunks — may run concurrently with writes."""
+        """Read a writer's session — may run concurrently with its writes."""
         mgr = ContextManager()
         # Small delay to increase chance of overlapping with writes
         await asyncio.sleep(0.001)
         chunks = await mgr.get_chunks(sid, limit=M * 2)
         return len(chunks)
 
-    # Launch all tasks concurrently — half write, half read
+    # Launch all tasks concurrently — readers target the writer sessions.
     half = N // 2
+    writer_sessions = session_ids[:half]
     tasks = []
-    for i, sid in enumerate(session_ids):
-        if i < half:
-            tasks.append(_writer(sid, i))
-        else:
-            tasks.append(_reader(sid))
+    for i, sid in enumerate(writer_sessions):
+        tasks.append(_writer(sid, i))
+    for sid in writer_sessions:
+        tasks.append(_reader(sid))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     errors = [r for r in results if isinstance(r, Exception)]
     assert not errors, f"Mixed read/write errors: {errors}"
 
-    # After all tasks complete, verify final state
-    for i, sid in enumerate(session_ids):
+    write_counts = results[:half]
+    read_counts = results[half:]
+    assert write_counts == [M] * half
+    # Concurrent reads observe a prefix of the writes: never more than written.
+    assert all(0 <= count <= M for count in read_counts), (
+        f"Concurrent reads saw more chunks than were written: {read_counts}"
+    )
+
+    # After all tasks complete, every writer session holds exactly its M
+    # chunks — no loss, no duplication.
+    for i, sid in enumerate(writer_sessions):
         mgr = ContextManager()
         chunks = await mgr.get_chunks(sid, limit=M * 2)
-        if i < half:
-            # Writer sessions must have exactly M chunks
-            assert len(chunks) == M, f"Writer session {i}: expected {M}, got {len(chunks)}"
-        # Reader sessions may have 0..M chunks depending on timing — that's OK
+        assert len(chunks) == M, f"Writer session {i}: expected {M}, got {len(chunks)}"
+        payloads = sorted(c.payload["text"] for c in chunks)
+        assert payloads == sorted(f"writer-{i}-{j}" for j in range(M))
 
 
 @pytest.mark.load

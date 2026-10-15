@@ -267,14 +267,38 @@ def test_controller_source_imports_nothing_provider_related():
 
 
 def test_importing_controller_pulls_no_provider_modules():
+    """Import purity must hold in a fresh interpreter.
+
+    In-process module-set diffs are order-dependent: by the time this module
+    runs, earlier tests have already imported the provider stack, so the diff
+    can be empty (or omit the offender) no matter what the controller pulls.
+    A subprocess import is the only way to observe the real transitive set.
+    """
+    import subprocess
     import sys
+    import textwrap
 
-    before = set(sys.modules)
-    import machina.controller  # noqa: F401
-
-    new = [name for name in set(sys.modules) - before if "machina" in name]
-    for name in new:
-        lowered = name.lower()
-        assert not any(b in lowered.split(".") for b in BANNED_MODULES), (
-            f"controller import pulled banned module: {name}"
+    script = textwrap.dedent(
+        f"""
+        import sys
+        import machina.controller  # noqa: F401
+        assert "machina.controller" in sys.modules
+        banned = {BANNED_MODULES!r}
+        pulled = sorted(
+            name
+            for name in sys.modules
+            if name.startswith("machina.")
+            and any(part in banned for part in name.lower().split("."))
         )
+        print("\\n".join(pulled))
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, f"fresh import failed:\n{proc.stderr}"
+    report = proc.stdout.strip()
+    assert report == "", f"controller import pulled banned modules:\n{report}"

@@ -342,107 +342,89 @@ class TestAuthDisabledBypass:
 
 
 class TestRpcGatewayTTL:
-    """_RpcGateway._responses must not grow unboundedly."""
+    """_RpcGateway._responses must not grow unboundedly — via the call site.
 
-    async def test_responses_cleaned_up_after_timeout(self):
-        """Old entries in _responses should be cleaned up after a timeout."""
-        with patch("machina.api.app.Gateway") as mock_gateway_cls:
-            mock_gw_instance = MagicMock()
-            mock_gw_instance._db_ready = False
-            mock_gw_instance.close = AsyncMock()
-            mock_gateway_cls.return_value = mock_gw_instance
+    The cleanup runs at the top of ``_RpcGateway.call()``, so these tests
+    drive ``gw.call()`` and age the pending entries instead of poking
+    ``_cleanup_old_responses`` directly.
+    """
 
+    @staticmethod
+    def _build_gateway():
+        """Build a _RpcGateway whose backend Gateway is a scripted double."""
+        with patch("machina.api.app.Gateway") as gateway_cls:
+            fake = MagicMock()
+            fake._db_ready = False
+            fake.close = AsyncMock()
+            gateway_cls.return_value = fake
             gw = _RpcGateway()
+        return gw, fake
 
-            # Simulate a request that never gets a response
-            # We'll manually add an old entry to _responses
-            old_id = 999
-            gw._responses[old_id] = {"jsonrpc": "2.0", "id": old_id, "result": {}}
+    @staticmethod
+    def _age(entry_id: int, gw) -> None:
+        """Backdate a captured entry beyond the TTL."""
+        gw._response_timestamps[entry_id] = time.monotonic() - (gw._RESPONSE_TTL_SECONDS + 1)
 
-            # Manually set the timestamp to be old (simulate TTL expiration)
-            # The TTL cleanup should remove this entry
-            if hasattr(gw, "_response_timestamps"):
-                gw._response_timestamps[old_id] = time.monotonic() - 120  # 2 minutes ago
+    async def test_stale_entry_cleaned_up_by_next_call(self):
+        """An expired pending response is swept by the next call's cleanup."""
+        gw, fake = self._build_gateway()
+        stale_id = 999
+        gw._responses[stale_id] = {"jsonrpc": "2.0", "id": stale_id, "result": {}}
+        self._age(stale_id, gw)
 
-            # Trigger cleanup (if implemented) or verify the entry exists
-            # After the fix, the entry should be cleaned up
-            # For now, just verify the entry exists (this test will fail before the fix)
-            assert old_id in gw._responses  # Before fix: entry persists
+        async def handle_line(line):
+            frame = json.loads(line)
+            gw._capture({"jsonrpc": "2.0", "id": frame["id"], "result": {"ok": True}})
 
-            await gw.close()
+        fake.handle_line = handle_line
+
+        result = await gw.call("session.list", {})
+
+        assert result == {"ok": True}
+        assert stale_id not in gw._responses
+        assert stale_id not in gw._response_timestamps
+        await gw.close()
 
     async def test_responses_dict_does_not_grow_unboundedly(self):
-        """_responses dict should not grow without bound when responses never arrive."""
-        with patch("machina.api.app.Gateway") as mock_gateway_cls:
-            mock_gw_instance = MagicMock()
-            mock_gw_instance._db_ready = False
-            mock_gw_instance.close = AsyncMock()
-            mock_gateway_cls.return_value = mock_gw_instance
+        """Unanswered responses expire; 100 calls leave one aged entry, not 100."""
+        gw, fake = self._build_gateway()
 
-            gw = _RpcGateway()
+        async def handle_line(line):
+            frame = json.loads(line)
+            rid = frame["id"]
+            gw._capture({"jsonrpc": "2.0", "id": rid, "result": {"id": rid}})
+            # Simulate a response the caller never claimed: mismatched id,
+            # aged beyond the TTL by the time the next call's cleanup runs.
+            stray = rid + 1000
+            gw._responses[stray] = {"jsonrpc": "2.0", "id": stray, "result": {}}
+            self._age(stray, gw)
 
-            # Simulate many requests that never get responses
-            # by adding entries directly to _responses
-            for i in range(100):
-                gw._responses[1000 + i] = {"jsonrpc": "2.0", "id": 1000 + i, "result": {}}
-                if hasattr(gw, "_response_timestamps"):
-                    gw._response_timestamps[1000 + i] = time.monotonic() - 120
+        fake.handle_line = handle_line
 
-            # After the fix, the dict should be cleaned up
-            # For now, verify the entries exist (this test will fail before the fix)
-            assert len(gw._responses) == 100  # Before fix: all entries persist
+        for _ in range(100):
+            await gw.call("test.method", {})
 
-            await gw.close()
-
-    async def test_ttl_cleanup_removes_old_entries(self):
-        """TTL cleanup should remove entries older than the timeout."""
-        with patch("machina.api.app.Gateway") as mock_gateway_cls:
-            mock_gw_instance = MagicMock()
-            mock_gw_instance._db_ready = False
-            mock_gw_instance.close = AsyncMock()
-            mock_gateway_cls.return_value = mock_gw_instance
-
-            gw = _RpcGateway()
-
-            # Add an old entry
-            old_id = 999
-            gw._responses[old_id] = {"jsonrpc": "2.0", "id": old_id, "result": {}}
-
-            # If the fix is implemented, there should be a cleanup mechanism
-            # that removes old entries. Let's check if the cleanup method exists
-            # and if it removes old entries.
-            if hasattr(gw, "_cleanup_old_responses"):
-                # Set the timestamp to be old
-                gw._response_timestamps[old_id] = time.monotonic() - 120
-                gw._cleanup_old_responses()
-                assert old_id not in gw._responses
-            else:
-                # Before fix: no cleanup mechanism exists
-                assert old_id in gw._responses
-
-            await gw.close()
+        # Without call-site cleanup the dict would hold all 100 strays.
+        assert len(gw._responses) == 1
+        assert 1100 in gw._responses
+        await gw.close()
 
     async def test_ttl_cleanup_keeps_recent_entries(self):
-        """TTL cleanup should keep entries that are not yet expired."""
-        with patch("machina.api.app.Gateway") as mock_gateway_cls:
-            mock_gw_instance = MagicMock()
-            mock_gw_instance._db_ready = False
-            mock_gw_instance.close = AsyncMock()
-            mock_gateway_cls.return_value = mock_gw_instance
+        """Cleanup is TTL-bounded: a recent pending entry survives the call."""
+        gw, fake = self._build_gateway()
+        recent_id = 999
+        gw._responses[recent_id] = {"jsonrpc": "2.0", "id": recent_id, "result": {}}
+        gw._response_timestamps[recent_id] = time.monotonic()
 
-            gw = _RpcGateway()
+        async def handle_line(line):
+            frame = json.loads(line)
+            gw._capture({"jsonrpc": "2.0", "id": frame["id"], "result": {"ok": True}})
 
-            # Add a recent entry
-            recent_id = 999
-            gw._responses[recent_id] = {"jsonrpc": "2.0", "id": recent_id, "result": {}}
+        fake.handle_line = handle_line
 
-            if hasattr(gw, "_cleanup_old_responses"):
-                # Set the timestamp to be recent
-                gw._response_timestamps[recent_id] = time.monotonic()
-                gw._cleanup_old_responses()
-                assert recent_id in gw._responses
-            else:
-                # Before fix: no cleanup mechanism exists
-                assert recent_id in gw._responses
+        result = await gw.call("session.list", {})
 
-            await gw.close()
+        assert result == {"ok": True}
+        assert recent_id in gw._responses
+        assert recent_id in gw._response_timestamps
+        await gw.close()

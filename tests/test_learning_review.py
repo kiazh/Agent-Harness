@@ -855,16 +855,27 @@ async def test_claim_prevents_double_processing(db_pool, monkeypatch, tmp_path):
 
 
 async def test_review_cap_still_enforced_after_recovery(db_pool, monkeypatch, tmp_path):
-    """The MAX_PENDING_LEARNING_REVIEWS cap is preserved even with recovery."""
+    """The MAX_PENDING_LEARNING_REVIEWS cap is preserved even with recovery.
+
+    Learning review must be enabled for this test to exercise the cap at all:
+    with the default (disabled) config, ``_schedule_learning_review`` returns
+    before the cap check, so ``_learning_tasks == 0`` proves nothing. The
+    under-cap case first shows a task IS scheduled while stale ``reviewing``
+    rows exist, so the cap — not the disabled gate — is what blocks the
+    capped call.
+    """
     from machina.core.agent import MAX_PENDING_LEARNING_REVIEWS
+    from machina.core.config import config
 
     monkeypatch.setattr("machina.skills.learning.db", db_pool)
     monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr(config, "learning_review_enabled", True)
+
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     SkillRegistry(tmp_path / "skills")
 
-    # Fill up to the cap with 'reviewing' rows
+    # Fill the durable table with 'reviewing' rows (recovery scenario).
     import hashlib
 
     for i in range(MAX_PENDING_LEARNING_REVIEWS):
@@ -879,33 +890,50 @@ async def test_review_cap_still_enforced_after_recovery(db_pool, monkeypatch, tm
             digest,
         )
 
-    # Now try to schedule a new review — should be capped
     from machina.core.agent import _pending_learning_reviews
 
-    _pending_learning_reviews.clear()  # simulate fresh process
-    # Manually fill to cap
-    for _ in range(MAX_PENDING_LEARNING_REVIEWS):
-        _pending_learning_reviews.add(object())
+    class _CountingReviewer:
+        def __init__(self):
+            self.calls = 0
+
+        async def review_turn(self, *args, **kwargs):
+            self.calls += 1
+
+    reviewer = _CountingReviewer()
+    monkeypatch.setattr("machina.skills.learning.learning_reviewer", reviewer)
 
     from machina.core.agent import BaseReActAgent
     from machina.core.models import AgentResponse
 
-    agent = BaseReActAgent(provider=FakeProvider("null"), agent_id=agent_id)
-    session_id = uuid.uuid4()
-    agent._schedule_learning_review(
-        session_id,
-        "Document this workflow",
-        AgentResponse(
-            content="Check health and readiness before declaring completion.",
-            tool_calls=[],
-            tokens_used=12,
-            iterations=1,
-        ),
+    response = AgentResponse(
+        content="Check health and readiness before declaring completion.",
+        tool_calls=[],
+        tokens_used=12,
+        iterations=1,
     )
-    # Should not have scheduled — cap reached
-    assert len(agent._learning_tasks) == 0
+
+    try:
+        # Under the cap (enabled): scheduling works despite stale DB rows.
+        _pending_learning_reviews.clear()
+        agent = BaseReActAgent(provider=FakeProvider("null"), agent_id=agent_id)
+        agent._schedule_learning_review(session.id, "Document this workflow", response)
+        assert len(agent._learning_tasks) == 1, "enabled under-cap review must schedule"
+        await asyncio.gather(*tuple(agent._learning_tasks))
+        assert reviewer.calls == 1
+
+        # At the cap: the process-wide limit blocks the new review.
+        _pending_learning_reviews.clear()
+        for _ in range(MAX_PENDING_LEARNING_REVIEWS):
+            _pending_learning_reviews.add(object())
+
+        capped = BaseReActAgent(provider=FakeProvider("null"), agent_id=agent_id)
+        capped._schedule_learning_review(session.id, "Document this workflow", response)
+        assert len(capped._learning_tasks) == 0, "the cap must block new reviews"
+        assert reviewer.calls == 1, "no review may run past the cap"
+    finally:
+        _pending_learning_reviews.clear()
+
     # Clean up
-    _pending_learning_reviews.clear()
     await db_pool.execute("DELETE FROM sessions WHERE id = $1", session.id)
 
 

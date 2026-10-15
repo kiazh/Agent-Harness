@@ -237,6 +237,52 @@ class TestMemoryConsolidationTaskReference:
 # ---------------------------------------------------------------------------
 
 
+class TestConfigNotLoadedAtImport:
+    """Import-time laziness must be observed in a fresh interpreter.
+
+    An in-process assertion after a fixture that resets ``_config`` only
+    proves the reset worked. The property that matters — importing the
+    module does not load configuration — is only observable in a subprocess
+    that has never touched the singleton.
+    """
+
+    def test_importing_config_does_not_load_it(self):
+        import json
+        import subprocess
+        import textwrap
+
+        script = textwrap.dedent(
+            """
+            import json
+            import sys
+
+            import machina.core.config  # noqa: F401
+
+            module = sys.modules["machina.core.config"]
+            loaded_at_import = module._config is not None
+            first = module.get_config()
+            print(json.dumps({
+                "loaded_at_import": loaded_at_import,
+                "loaded_after_access": module._config is not None,
+                "same_instance": first is module.get_config(),
+            }))
+            """
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, f"fresh interpreter failed:\n{proc.stderr}"
+        state = json.loads(proc.stdout.strip().splitlines()[-1])
+        assert state["loaded_at_import"] is False, (
+            "importing machina.core.config must not call Config.load()"
+        )
+        assert state["loaded_after_access"] is True
+        assert state["same_instance"] is True
+
+
 class TestLazyConfigLoading:
     """Verify that Config.load() is deferred until first access."""
 
@@ -250,10 +296,6 @@ class TestLazyConfigLoading:
     def teardown_method(self):
         """Restore the config singleton after each test."""
         self._config_module._config = self._saved_config
-
-    def test_config_not_loaded_at_import(self):
-        """After reset, _config should be None (not yet loaded)."""
-        assert self._config_module._config is None
 
     def test_get_config_loads_and_caches(self):
         """get_config() must load the config and return the same object."""

@@ -468,9 +468,20 @@ def test_documented_prompt_route_registered():
 # ─── AH-018: caller scope for every tool ───────────────────────────────────
 
 
-async def test_agent_binds_scope_for_rag_tools():
+async def test_agent_binds_scope_for_rag_tools(monkeypatch):
+    """AH-018: the agent itself must bind caller scope around every tool call.
+
+    A RAG-style probe tool reads the REAL ``active_agent_scope()`` (including
+    its session-ownership gate; only the single DB read is stubbed). The agent
+    is instantiated and driven through its real ``_execute_tool_calls_stream``
+    with an LLM response invoking the probe — the ContextVars the probe
+    observes can only come from the agent's own binding code. The old version
+    set the vars in the test body and never invoked the probe.
+    """
+    import json
 
     from machina.core.agent import BaseReActAgent
+    from machina.core.models import LLMResponse
     from machina.tools import agents as agents_mod
     from machina.tools.base import Tool, registry
 
@@ -480,20 +491,36 @@ async def test_agent_binds_scope_for_rag_tools():
         agent_id, sid = await agents_mod.active_agent_scope()
         seen["agent"] = agent_id
         seen["session"] = sid
+        assert session_id == str(sid)
         return "ok"
 
-    registry._tools["scope_probe"] = Tool(
-        name="scope_probe",
-        description="probe",
-        parameters={
-            "type": "object",
-            "properties": {"session_id": {"type": "string"}},
-            "required": ["session_id"],
-        },
-        func=_probe,
-        is_async=True,
+    monkeypatch.setitem(
+        registry._tools,
+        "scope_probe",
+        Tool(
+            name="scope_probe",
+            description="probe",
+            parameters={
+                "type": "object",
+                "properties": {"session_id": {"type": "string"}},
+                "required": ["session_id"],
+            },
+            func=_probe,
+            is_async=True,
+        ),
     )
     registry._definitions_cache = None
+
+    async def _noop_add_chunk(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("machina.core.agent.context_manager.add_chunk", _noop_add_chunk)
+
+    class FakeDb:
+        async def fetchval(self, query, *args):
+            return "harness"
+
+    monkeypatch.setattr(agents_mod, "db", FakeDb())
 
     class _A(BaseReActAgent):
         def __init__(self):
@@ -501,22 +528,37 @@ async def test_agent_binds_scope_for_rag_tools():
             self.allowed_tools = None
             self.max_iterations = 1
 
-    # Simulate a RAG-style tool requiring scope (not in the old allowlist).
+    # Without scope bound, the probe's own gate refuses to run.
+    with pytest.raises(Exception, match="active agent session"):
+        await registry.execute("scope_probe", session_id=str(uuid.uuid4()))
+
     sid = uuid.uuid4()
-    # Seed the ContextVars as the agent loop now does for EVERY tool.
-    token_s = agents_mod.current_session_id.set(sid)
-    token_a = agents_mod.current_agent_id.set("harness")
-    try:
-        # Direct call without scope binding would fail; with binding it passes
-        # the ContextVar gate (DB ownership check mocked below).
-        assert agents_mod.current_session_id.get() == sid
-    finally:
-        agents_mod.current_agent_id.reset(token_a)
-        agents_mod.current_session_id.reset(token_s)
-    assert seen == {}  # probe not called; scope mechanics verified
-    # Cleanup
-    del registry._tools["scope_probe"]
-    registry._definitions_cache = None
+    agent = _A()
+    response = LLMResponse(
+        content="",
+        model="test-model",
+        tool_calls=[
+            {
+                "id": "call-1",
+                "function": {
+                    "name": "scope_probe",
+                    "arguments": json.dumps({"session_id": str(sid)}),
+                },
+            }
+        ],
+    )
+    messages: list[dict] = [{"role": "user", "content": "go"}]
+    made: list[dict] = []
+    events = []
+    async for event in agent._execute_tool_calls_stream(response, messages, made, sid):
+        events.append(event)
+
+    # The probe ran THROUGH the agent and observed the agent-bound scope.
+    assert seen == {"agent": "harness", "session": sid}, (
+        "scope binding never reached the tool — the agent did not bind it"
+    )
+    results = [e for e in events if e.type == "tool_result"]
+    assert len(results) == 1 and results[0].tool_result == "ok"
 
 
 # ─── AH-022: definition-aware factory restricts specialists ───────────────

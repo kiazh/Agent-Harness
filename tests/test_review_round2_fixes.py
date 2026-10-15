@@ -14,7 +14,7 @@ from __future__ import annotations
 import inspect
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -52,16 +52,33 @@ class TestNoHardcodedDatabasePassword:
 
     @pytest.mark.asyncio
     async def test_connect_without_dsn_uses_default(self):
-        """connect() with no DSN uses the default DSN rather than raising."""
+        """connect() with no DSN must actually connect using the fallback DSN.
+
+        The provider/network boundary (asyncpg.create_pool) is the only mock;
+        connect() itself runs for real, so a regression to "raise ValueError
+        when no DSN" or to a password-bearing fallback is caught here.
+        """
         from machina.db.connection import Database
 
-        with patch("machina.db.connection.config") as mock_config:
+        with (
+            patch("machina.db.connection.config") as mock_config,
+            patch.dict("os.environ", {"DATABASE_URL": ""}, clear=False),
+        ):
             mock_config.get.return_value = ""
             db = Database()
-            # With fallback DSN, connect() should NOT raise ValueError
-            # (it will try to connect to the default DSN)
-            # Just verify the DSN is set
-            assert db.dsn != ""
+        assert db.dsn == "postgresql://postgres@127.0.0.1:5432/machina"
+
+        pool = MagicMock()
+        pool.close = AsyncMock()
+        with patch(
+            "machina.db.connection.asyncpg.create_pool", new=AsyncMock(return_value=pool)
+        ) as create_pool:
+            await db.connect()  # must not raise ValueError without a DSN
+
+        assert db.connected
+        assert create_pool.await_args.kwargs["dsn"] == db.dsn
+        await db.close()
+        assert not db.connected
 
 
 # ===========================================================================

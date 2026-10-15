@@ -256,20 +256,31 @@ async def test_run_due_once_handles_cancelled_error(monkeypatch):
 
 
 async def test_keep_lease_renews_periodically(monkeypatch):
-    """_keep_lease calls renew_lease on a schedule."""
+    """_keep_lease must renew the lease on its cadence, repeatedly.
+
+    The production cadence is RUN_LEASE_SECONDS / 3 (100s by default, too slow
+    to observe). Compress the lease window so the periodic renewal actually
+    happens inside the test: 0.3s lease -> 0.1s cadence, observed for 0.45s,
+    which must contain at least two renewals. The await count is the proof the
+    loop re-arms after each renewal (the old test only proved it never ran).
+    """
+    monkeypatch.setattr("machina.core.scheduler.RUN_LEASE_SECONDS", 0.3)
     store = JobStore()
-    store.renew_lease = AsyncMock()
+    store.renew_lease = AsyncMock(return_value=True)
     runner = JobRunner(store=store)
     task = asyncio.create_task(runner._keep_lease(uuid.uuid4()))
-    await asyncio.sleep(0.15)  # RUN_LEASE_SECONDS / 3 = 100s, so we won't hit it naturally
-    task.cancel()
     try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    # With the default 100s sleep, renew_lease won't be called in 0.15s.
-    # This test verifies the loop structure without waiting 100s.
-    store.renew_lease.assert_not_awaited()
+        await asyncio.sleep(0.45)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert store.renew_lease.await_count >= 2, (
+        f"expected periodic renewals, saw {store.renew_lease.await_count}"
+    )
+    # Each renewal targets the job with no claim token (standalone call).
+    job_id = store.renew_lease.await_args.args[0]
+    assert isinstance(job_id, uuid.UUID)
 
 
 async def test_keep_lease_continues_after_renew_error(monkeypatch):

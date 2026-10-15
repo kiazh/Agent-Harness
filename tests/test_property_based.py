@@ -9,8 +9,11 @@ These tests verify invariants that should hold for all inputs:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
+from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
 from hypothesis import given, settings
@@ -467,30 +470,35 @@ class TestAsyncTokenBucketProperties:
         assert bucket.rate == rate
 
     @given(
-        rate=st.floats(min_value=1.0, max_value=100.0),
+        rate=st.floats(min_value=0.1, max_value=100.0),
         capacity=st.integers(min_value=1, max_value=50),
-        tokens=st.integers(min_value=1, max_value=10),
+        tokens=st.integers(min_value=1, max_value=50),
     )
     @settings(max_examples=50)
     def test_acquire_reduces_tokens(self, rate, capacity, tokens):
-        """Property: Acquiring tokens reduces available tokens."""
+        """Property: acquire() debits the bucket by exactly the requested amount.
+
+        A fresh bucket is full, so the refill clamps at capacity and the debit
+        is exact regardless of elapsed wall time. ``min`` keeps the request
+        within capacity so ``acquire`` never has to wait.
+        """
         bucket = AsyncTokenBucket(rate=rate, capacity=capacity)
+        amount = min(tokens, capacity)
         initial = bucket.tokens
-        # Directly manipulate tokens to simulate acquisition
-        bucket.tokens -= tokens
-        assert bucket.tokens <= initial
+        asyncio.run(bucket.acquire(amount))
+        assert bucket.tokens == initial - amount
 
     @given(
-        rate=st.floats(min_value=1.0, max_value=100.0),
+        rate=st.floats(min_value=0.1, max_value=100.0),
         capacity=st.integers(min_value=1, max_value=50),
     )
     @settings(max_examples=50)
     def test_acquire_within_capacity(self, rate, capacity):
-        """Property: Acquiring within capacity succeeds immediately."""
+        """Property: acquiring one token from a full bucket succeeds immediately."""
         bucket = AsyncTokenBucket(rate=rate, capacity=capacity)
-        # Simulate acquiring 1 token
-        bucket.tokens -= 1
-        assert bucket.tokens >= 0
+        asyncio.run(bucket.acquire(1))
+        # Refill is clamped at capacity before the debit, so the result is exact.
+        assert bucket.tokens == bucket.capacity - 1
 
     @given(
         rate=st.floats(min_value=0.1, max_value=10.0),
@@ -498,11 +506,30 @@ class TestAsyncTokenBucketProperties:
     )
     @settings(max_examples=30)
     def test_tokens_never_negative(self, rate, capacity):
-        """Property: Tokens never go negative."""
-        bucket = AsyncTokenBucket(rate=rate, capacity=capacity)
-        # Simulate acquiring all tokens
-        bucket.tokens = max(0, bucket.tokens - capacity)
-        assert bucket.tokens >= 0
+        """Property: the bucket drains to zero and then blocks instead of going negative.
+
+        The rate limiter's clock is frozen (its boundary dependency), so the
+        post-drain request cannot be satisfied by refill: ``acquire`` must
+        wait rather than debit below zero. ``wait_for`` fails the property if
+        the bucket would ever satisfy the request without waiting.
+        """
+        from machina.core.provider import rate_limit as rate_limit_module
+
+        class _FrozenClock:
+            def monotonic(self) -> float:
+                return 0.0
+
+        with patch.object(rate_limit_module, "time", _FrozenClock()):
+            bucket = AsyncTokenBucket(rate=rate, capacity=capacity)
+            asyncio.run(bucket.acquire(capacity))
+            assert bucket.tokens == 0.0
+
+            async def _over_acquire() -> None:
+                await asyncio.wait_for(bucket.acquire(1), timeout=0.05)
+
+            with pytest.raises(TimeoutError):
+                asyncio.run(_over_acquire())
+            assert bucket.tokens >= 0.0
 
 
 # ===========================================================================
@@ -603,7 +630,7 @@ class TestValidationProperties:
 
 
 class TestContextManagerProperties:
-    """Property-based tests for ContextManager with mocked DB."""
+    """Property-based tests for the real ContextManager (DB boundary mocked)."""
 
     @given(
         chunk_type=st.sampled_from(
@@ -620,36 +647,113 @@ class TestContextManagerProperties:
             ]
         ),
         payload=st.dictionaries(
-            keys=st.text(min_size=1, max_size=10),
+            keys=st.text(min_size=1, max_size=10).filter(lambda key: key not in ("images", "data")),
             values=st.text(min_size=0, max_size=200),
         ),
     )
     @settings(max_examples=50)
     def test_add_chunk_preserves_type(self, chunk_type, payload):
-        """Property: Added chunk preserves its type."""
-        # Just verify the chunk type is valid
-        assert chunk_type in [
-            "tool_call",
-            "result",
-            "memory",
-            "heartbeat",
-            "system",
-            "user",
-            "assistant",
-            "user_message",
-            "assistant_message",
-        ]
+        """Property: ``ContextManager.add_chunk`` round-trips type and payload.
+
+        Only the DB boundary is mocked: the row echoes back what the INSERT
+        args carried, so the real serialization (MessagePack pack/unpack) and
+        the returned chunk assembly both run.
+        """
+        from machina.core import context as context_module
+
+        session_id = uuid.uuid4()
+        agent_id = "property-agent"
+
+        async def fake_fetchrow(query: str, *args):
+            return {
+                "id": uuid.uuid4(),
+                "session_id": args[0],
+                "agent_id": args[1],
+                "chunk_type": args[2],
+                "payload_msgpack": args[3],
+                "token_count": args[4],
+                "embedding": args[5],
+                "created_at": datetime.now(UTC),
+                "accessed_at": None,
+                "document_source": args[7],
+            }
+
+        with patch("machina.core.context.db") as fake_db:
+            fake_db.fetchrow = fake_fetchrow
+            chunk = asyncio.run(
+                context_module.ContextManager().add_chunk(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    chunk_type=chunk_type,
+                    payload=payload,
+                )
+            )
+        assert chunk.chunk_type == chunk_type
+        assert chunk.payload == payload
+        assert chunk.session_id == session_id
+        assert chunk.agent_id == agent_id
 
     @given(
-        num_chunks=st.integers(min_value=0, max_value=50),
+        chunk_types=st.lists(
+            st.sampled_from(["tool_call", "result", "memory", "user_message"]),
+            min_size=0,
+            max_size=12,
+        ),
     )
     @settings(max_examples=30)
-    def test_batch_size_respected(self, num_chunks):
-        """Property: Batch insert handles variable number of chunks."""
-        from machina.core.context import ContextManager
+    def test_add_chunks_batch_preserves_every_chunk(self, chunk_types):
+        """Property: batch insert returns one chunk per input, in order, with
+        payloads intact. The fake DB echoes the UNNEST column arrays back as
+        rows, so the real batch preparation and row mapping run."""
+        from machina.core import context as context_module
 
-        cm = ContextManager(batch_size=10)
-        assert cm._batch_size == 10
+        session_id = uuid.uuid4()
+        agent_id = "property-agent"
+        chunks = [
+            {
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "chunk_type": chunk_type,
+                "payload": {"text": f"chunk-{i}", "seq": i},
+                "token_count": 1,
+            }
+            for i, chunk_type in enumerate(chunk_types)
+        ]
+
+        async def fake_fetch(query: str, *args):
+            (
+                ids,
+                session_ids,
+                agent_ids,
+                types,
+                payloads,
+                token_counts,
+                embeddings,
+                _search_texts,
+                doc_sources,
+            ) = args
+            return [
+                {
+                    "id": ids[i],
+                    "session_id": session_ids[i],
+                    "agent_id": agent_ids[i],
+                    "chunk_type": types[i],
+                    "payload_msgpack": payloads[i],
+                    "token_count": token_counts[i],
+                    "embedding": embeddings[i],
+                    "created_at": datetime.now(UTC),
+                    "accessed_at": None,
+                    "document_source": doc_sources[i],
+                }
+                for i in range(len(ids))
+            ]
+
+        with patch("machina.core.context.db") as fake_db:
+            fake_db.fetch = fake_fetch
+            out = asyncio.run(context_module.ContextManager().add_chunks_batch(chunks))
+        assert [chunk.chunk_type for chunk in out] == chunk_types
+        assert [chunk.payload for chunk in out] == [c["payload"] for c in chunks]
+        assert all(chunk.session_id == session_id for chunk in out)
 
 
 # ===========================================================================
