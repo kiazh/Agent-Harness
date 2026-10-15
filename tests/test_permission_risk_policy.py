@@ -281,6 +281,15 @@ async def test_project_test_runner_executes_without_card(workspace):
         "grep -d recurse REVIEW_TOKEN .",
         "grep -drecurse REVIEW_TOKEN .",
         "grep --directories=recurse REVIEW_TOKEN .",
+        # Final review F2: `-d` is a value-taking short option (`-d ACTION`);
+        # in a COMPACT cluster it may follow other boolean flags, and the
+        # exact/attached/= detectors above miss that position. `-id` matches
+        # the `-[A-Za-z0-9]+` compact shape so the fail-closed guard in
+        # commands.py never fires and grep is routine, yet the cluster still
+        # requests directory recursion.
+        "grep -id recurse REVIEW_TOKEN .",
+        "grep -sd recurse REVIEW_TOKEN .",
+        "grep -End recurse REVIEW_TOKEN .",
     ],
 )
 def test_recursive_search_commands_require_review(workspace, command):
@@ -297,6 +306,17 @@ def test_single_file_search_reads_stay_routine(workspace):
             tool="terminal", **action_for_tool("terminal", {"command": command})
         )
         assert decide(request).verdict == "allowed", command
+
+
+def test_grep_d_option_cluster_with_non_recurse_value_stays_routine(workspace):
+    # F2 boundary: a compact cluster containing `d` is only a directory walk
+    # when `d`'s ACTION value is `recurse`; `grep -id TOKEN file` consumes
+    # TOKEN as the value and must keep its routine classification.
+    (workspace / "file").write_text("TOKEN=docs\n", encoding="utf-8")
+    request = build_request(
+        tool="terminal", **action_for_tool("terminal", {"command": "grep -id TOKEN file"})
+    )
+    assert decide(request).verdict == "allowed", "grep -id TOKEN file"
 
 
 def test_sensitive_search_operand_requires_credential_access(workspace):
@@ -633,6 +653,19 @@ GIT_REVSPEC_CREDENTIAL_COMMANDS = [
     "git show HEAD:id_rsa",
     "git show HEAD:credentials.bak",
     "git show HEAD:.env-backup",
+    # Final review F1: git's index-stage revspec `:[<n>:]<path>` puts an
+    # EMPTY (or numeric) revision before `path`; a first-colon split leaves
+    # `0:credentials`, which matches no sensitive name, so the credential
+    # file was read as a routine git read. Both the `:path` and `:N:path`
+    # spellings must gate exactly like `HEAD:path`.
+    "git show :credentials",
+    "git show :0:credentials",
+    "git show :0:.netrc",
+    "git show :0:id_rsa",
+    "git show :2:id_rsa",
+    "git show :0:credentials.1",
+    "git show :0:deploy/.env",
+    "git show :0:sub/credentials",
 ]
 
 
@@ -645,7 +678,16 @@ def test_git_revspec_credential_operands_require_credential_access(workspace, co
 
 @pytest.mark.parametrize(
     "command",
-    ["git show HEAD:README.md", "git show HEAD:docs/notes.md"],
+    [
+        "git show HEAD:README.md",
+        "git show HEAD:docs/notes.md",
+        "git show :README.md",
+        "git show :0:README.md",
+        "git show :0:docs/notes.md",
+        # The documented `.env.example` template stays allowed through the
+        # index-stage spelling too.
+        "git show :0:.env.example",
+    ],
 )
 def test_git_revspec_benign_operands_stay_routine(workspace, command):
     (workspace / "README.md").write_text("docs\n", encoding="utf-8")
