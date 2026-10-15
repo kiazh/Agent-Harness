@@ -258,7 +258,7 @@ class Gateway:
             logger.debug("method already registered, overwriting: %s", name)
         self._methods[name] = handler
 
-    # Tests only; kept as a read-only turn probe (review 2026-10-14).
+    # Read-only turn probe; gateway tests assert turn lifecycle, no production caller. Kept (R4-106).
     def turn_running(self, session_id: uuid.UUID) -> bool:
         task = self._turns.get(str(session_id))
         return task is not None and not task.done()

@@ -331,7 +331,7 @@ class IdentityGate:
 
         return sum(drift_scores) / len(drift_scores)
 
-    # Tests only; kept as the drift-quarantine entry point (review 2026-10-14).
+    # Drift-quarantine entry point; identity-gate tests drive it, no production caller. Kept (R4-106).
     async def contain_drift(self, agent_id: str, memory_ids: list[uuid.UUID]) -> bool:
         """Quarantine affected memories when drift is detected.
 

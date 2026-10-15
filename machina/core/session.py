@@ -158,7 +158,7 @@ class SessionManager:
         await self._cache_put(session)
         return session
 
-    # Tests only; kept as a state-write test seam (review 2026-10-14).
+    # Raw session-state writer; production uses update_state_fields, session tests drive this. Kept (R4-106).
     async def update_state(self, session_id: uuid.UUID, state: dict) -> None:
         """Update session state (LangGraph checkpoint, etc.)."""
         state_msgpack = msgpack.packb(state, use_bin_type=True)

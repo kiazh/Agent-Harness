@@ -135,7 +135,7 @@ class UserProfile:
         if self.last_topics is None:
             self.last_topics = []
 
-    # Tests only; kept as the interaction-recording seam (review 2026-10-14).
+    # Profile interaction recorder; profile/research tests drive it, no production caller. Kept (R4-106).
     def record_interaction(self, topic: str | None = None) -> None:
         """Record a new interaction, optionally with a topic."""
         self.interaction_count += 1
@@ -356,7 +356,7 @@ class UserProfileStore:
         )
         return profile
 
-    # Tests only; kept as the interaction-recording seam (review 2026-10-14).
+    # Profile interaction recorder; profile/research tests drive it, no production caller. Kept (R4-106).
     async def record_interaction(
         self,
         profile_id: uuid.UUID,

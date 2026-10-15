@@ -65,6 +65,6 @@ class EvidenceMap:
         """Merged (start, end-exclusive) spans read so far for path."""
         return [(s.start, s.end) for s in self._spans.get(path, [])]
 
-    # Tests only; kept as the coverage probe (review 2026-10-14).
+    # Span-coverage query; repomap tests use it, no production caller. Kept (R4-106).
     def is_covered(self, path: str, start: int, end: int) -> bool:
         return any(s.start <= start and s.end >= end for s in self._spans.get(path, []))

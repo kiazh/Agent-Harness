@@ -100,7 +100,7 @@ class NativeApprovalTrial:
                 )
                 return status
 
-    # Tests only; kept as the effect-count probe (review 2026-10-14).
+    # Effect-count probe; workflow-trial tests count effects, no production caller. Kept (R4-106).
     async def effect_count(self, run_id: uuid.UUID) -> int:
         return int(
             await self.db.fetchval(

@@ -283,7 +283,7 @@ class ToolRegistry:
         """List all registered tool names."""
         return list(self._tools.keys())
 
-    # Tests only; kept as a lookup test seam (review 2026-10-14).
+    # Public registry lookup; tool tests read it back, no production caller. Kept (R4-106).
     def get_tool(self, name: str) -> Tool | None:
         """Get a tool by name."""
         return self._tools.get(name)
