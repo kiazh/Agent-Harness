@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import stat
 import tempfile
 from pathlib import Path
@@ -255,6 +256,142 @@ def _fsync_dir_best_effort(directory: Path) -> None:
             pass
 
 
+def _dir_fd_supported() -> bool:
+    """Whether this platform supports dir_fd-anchored file operations."""
+    try:
+        supported = os.supports_dir_fd
+    except AttributeError:
+        return False
+    return all(f in supported for f in (os.open, os.rename, os.stat, os.unlink))
+
+
+def _open_parent_dir_fd(parent: Path, *, display: str) -> int:
+    """Open the validated parent directory, returning a descriptor (R5-B).
+
+    Binds the descriptor to the validated directory object: the parent must
+    currently be a real directory inside the base (symlink leaves rejected),
+    and the opened descriptor's dev/ino must match the lstat identity,
+    closing the validate-then-use race on the directory itself. All
+    subsequent temp creation and replacement use this descriptor
+    (openat/renameat), so a concurrent rename of the workspace subdirectory
+    to a symlink cannot redirect the write outside the base.
+    """
+    _realpath_inside_base(parent)
+    try:
+        st_path = os.lstat(parent)
+    except OSError as e:
+        raise ValueError(f"Path '{display}' is not accessible") from e
+    if stat.S_ISLNK(st_path.st_mode):
+        raise ValueError(f"Path '{display}' traverses a symlink")
+    if not stat.S_ISDIR(st_path.st_mode):
+        raise ValueError(f"Path '{display}' traverses a non-directory")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        dir_fd = _os_open(parent, flags)
+    except OSError as e:
+        raise ValueError(f"Path '{display}' is not accessible (symlink?)") from e
+    try:
+        st_fd = os.fstat(dir_fd)
+    except OSError as e:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
+        raise ValueError(f"Path '{display}' is not accessible") from e
+    if (st_fd.st_ino, st_fd.st_dev) != (st_path.st_ino, st_path.st_dev):
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
+        raise ValueError(f"Path '{display}' changed during access (TOCTOU)")
+    return dir_fd
+
+
+def _verify_fd_at(fd: int, dir_fd: int, name: str, *, display: str) -> None:
+    """Verify an openat descriptor still refers to *name* under *dir_fd*.
+
+    Directory-fd-anchored counterpart of :func:`_verify_fd_matches_path`
+    for the atomic-write path (R5-B): the comparison stat never leaves the
+    pinned directory, so a concurrent ancestor swap fails closed instead of
+    redirecting the write.
+    """
+    try:
+        st_fd = os.fstat(fd)
+        st_path = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        if stat.S_ISLNK(st_path.st_mode):
+            raise ValueError(f"Path '{display}' is a symlink")
+        if (st_fd.st_ino, st_fd.st_dev) != (st_path.st_ino, st_path.st_dev):
+            raise ValueError(f"Path '{display}' changed during access (TOCTOU)")
+    except ValueError:
+        raise
+    except OSError as e:
+        raise ValueError(f"Path '{display}' changed during access (TOCTOU)") from e
+
+
+def _atomic_write_file_at(
+    dir_fd: int, leaf: str, content: str, *, mode: int | None = None, display: str = ""
+) -> None:
+    """Write *content* to *leaf* under the pinned *dir_fd* (R5-B).
+
+    Same temp + fsync + replace contract as :func:`_atomic_write_file`,
+    except every operation is relative to the validated directory
+    descriptor (openat/renameat): temp creation and replacement cannot
+    resolve through a concurrently swapped ancestor symlink.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    tmp_fd: int | None = None
+    tmp_name: str | None = None
+    for _ in range(8):
+        candidate = f".{leaf}.{secrets.token_hex(8)}.tmp"
+        try:
+            tmp_fd = _os_open(
+                candidate,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+                0o600,
+                dir_fd=dir_fd,
+            )
+        except FileExistsError:
+            continue
+        except OSError as e:
+            raise ValueError(f"Cannot write '{display}': {e}") from e
+        tmp_name = candidate
+        break
+    if tmp_fd is None or tmp_name is None:
+        raise ValueError(f"Cannot write '{display}': temp file unavailable")
+    try:
+        if mode is not None:
+            os.fchmod(tmp_fd, mode)
+        # os.fdopen takes ownership (same seam the legacy path uses, so the
+        # established ENOSPC fault-injection tests keep exercising this code).
+        handle = os.fdopen(tmp_fd, "w", encoding="utf-8")
+    except BaseException:
+        try:
+            os.close(tmp_fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp_name, dir_fd=dir_fd)
+        except OSError:
+            pass
+        raise
+    try:
+        with handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.rename(tmp_name, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except BaseException:
+        try:
+            os.unlink(tmp_name, dir_fd=dir_fd)
+        except OSError:
+            pass
+        raise
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+
+
 def _atomic_write_file(file_path: Path, content: str, *, mode: int | None = None) -> None:
     """Write *content* to *file_path* through temp + fsync + replace.
 
@@ -450,6 +587,84 @@ async def read_file(
         raise ToolError(f"Error reading file: {e}") from e
 
 
+def _write_anchored_inside(file_path: Path, content: str, display: str) -> str:
+    """Write *content* to an inside-base *file_path* via a pinned dir fd.
+
+    Directory-fd-anchored counterpart of the legacy probe + atomic-write
+    sequence in :func:`write_file` (R5-B finding 3). The parent directory is
+    opened and bound to its validated identity; the existence probe, temp
+    creation, and final replacement all run relative to that descriptor
+    (openat/renameat), so a concurrent rename of a workspace subdirectory to
+    a symlink cannot redirect temp creation or replacement outside the base.
+    Platforms without dir_fd support keep the legacy pathname sequence.
+    """
+    parent = file_path.parent
+    leaf = file_path.name
+    dir_fd = _open_parent_dir_fd(parent, display=display)
+    try:
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        try:
+            st_before = os.stat(leaf, dir_fd=dir_fd, follow_symlinks=False)
+        except OSError:
+            existed_before = False
+        else:
+            existed_before = True
+            if stat.S_ISLNK(st_before.st_mode):
+                raise ValueError(f"Path '{display}' is not accessible (symlink?)")
+        # Open WITHOUT O_TRUNC: the descriptor is validated before any
+        # content changes (same contract as the legacy probe).
+        flags = os.O_WRONLY | os.O_CREAT | nofollow
+        try:
+            fd = _os_open(leaf, flags, 0o600, dir_fd=dir_fd)
+        except OSError as e:
+            # ELOOP = symlink with O_NOFOLLOW; EEXIST races, etc.
+            raise ValueError(f"Path '{display}' is not accessible (symlink?)") from e
+        try:
+            _verify_fd_at(fd, dir_fd, leaf, display=display)
+            # Hard-link escape: an inside name with nlink > 1 may point at
+            # outside content via another name; refuse agent writes.
+            mode = None
+            try:
+                target_info = os.fstat(fd)
+                if target_info.st_nlink > 1:
+                    raise ValueError(f"Path '{display}' has multiple hard links; refusing write")
+                if existed_before:
+                    mode = stat.S_IMODE(target_info.st_mode)
+            except ValueError:
+                raise
+            except OSError:
+                pass
+            # Close the probe descriptor before the rename: Windows cannot
+            # replace a file that is still open.
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            fd = None
+            _atomic_write_file_at(dir_fd, leaf, content, mode=mode, display=display)
+        except BaseException:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            if not existed_before:
+                # Best-effort removal of an empty file O_CREAT may have
+                # created at a rejected target; never touches content.
+                try:
+                    if os.stat(leaf, dir_fd=dir_fd, follow_symlinks=False).st_size == 0:
+                        os.unlink(leaf, dir_fd=dir_fd)
+                except OSError:
+                    pass
+            raise
+        return f"Successfully wrote {len(content)} characters to {display}"
+    finally:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
+
+
 @registry.register(
     name="write_file",
     description="Write content to a file. Creates the file if it doesn't exist.",
@@ -481,6 +696,11 @@ async def write_file(path: str, content: str) -> str:
             if inside:
                 # Re-check after mkdir (a component could have been swapped).
                 _reject_symlink_components(file_path)
+            if inside and _dir_fd_supported():
+                # R5-B: anchor the probe, temp creation, and replacement to
+                # the validated parent directory descriptor so a concurrent
+                # ancestor rename cannot redirect the write outside.
+                return _write_anchored_inside(file_path, content, path)
             nofollow = getattr(os, "O_NOFOLLOW", 0)
             # Open first WITHOUT O_TRUNC: the descriptor is validated before
             # any content changes, and the content itself is written to a
