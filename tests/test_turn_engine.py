@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -686,3 +687,84 @@ async def test_resume_stream_emits_approval_resumed_and_reads_caller_context(mon
     assert events[0].payload == {"request_id": "req-9", "origin_turn_id": "origin-turn"}
     assert seen == {"request_id": "req-9", "arguments": {"path": "x"}}
     assert resume_approval_var.get() == before
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("exit_kind", ["stream_close", "engine_close", "error"])
+async def test_closure_reaches_source_before_provider_and_claim(monkeypatch, resume, exit_kind):
+    order = []
+
+    async def source(*args, **kwargs):
+        try:
+            yield StreamEvent(type="tool_result", tool_name="probe", tool_result="saved")
+        finally:
+            await asyncio.sleep(0)
+            order.append("records")
+
+    class Agent:
+        run_stream = staticmethod(source)
+        _execute_tool_calls_stream = staticmethod(source)
+
+    async def close_provider(agent):
+        order.append("provider")
+
+    async def release():
+        order.append("claim")
+        return False
+
+    monkeypatch.setattr(turn_engine_module, "join_agent_background_tasks", AsyncMock())
+    monkeypatch.setattr(turn_engine_module._agent_factory, "close_agent_provider", close_provider)
+    record = {"request_id": "approval", "proposal": {"tool": "probe"}}
+    engine = TurnEngine(_spec(resume=(record, {}) if resume else None))
+    engine.attach(Agent())
+    monkeypatch.setattr(engine, "_release_claim", release)
+    stream = engine.stream()
+    async for event in stream:
+        if event.kind == "tool_complete":
+            break
+    if exit_kind == "stream_close":
+        await stream.aclose()
+    elif exit_kind == "error":
+        with pytest.raises(RuntimeError, match="consumer"):
+            await stream.athrow(RuntimeError("consumer"))
+    await engine.close()
+    await stream.aclose()
+    assert order == ["records", "provider", "claim"]
+
+
+async def test_engine_close_joins_active_stream_before_releasing_claim(monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+    order = []
+
+    class Agent:
+        async def run_stream(self, *args, **kwargs):
+            try:
+                entered.set()
+                await asyncio.Event().wait()
+                yield StreamEvent(type="text", content="unreachable")
+            finally:
+                await release.wait()
+                order.append("records")
+
+    async def close_provider(agent):
+        order.append("provider")
+
+    async def release_claim():
+        order.append("claim")
+        return False
+
+    monkeypatch.setattr(turn_engine_module, "join_agent_background_tasks", AsyncMock())
+    monkeypatch.setattr(turn_engine_module._agent_factory, "close_agent_provider", close_provider)
+    engine = TurnEngine(_spec())
+    engine.attach(Agent())
+    monkeypatch.setattr(engine, "_release_claim", release_claim)
+    stream = engine.stream()
+    step = asyncio.create_task(anext(stream))
+    await entered.wait()
+    closing = asyncio.create_task(engine.close())
+    await asyncio.sleep(0)
+    assert order == []
+    release.set()
+    await closing
+    await asyncio.gather(step, return_exceptions=True)
+    assert order == ["records", "provider", "claim"]

@@ -165,6 +165,19 @@ async def _stream_session(
             boundary="app.create_app",
             renew_interval_s=_renew_interval,
         )
+        async def close_turn():
+            from machina.core.background_tasks import await_joined
+
+            async def finish():
+                try:
+                    if stream is not None:
+                        await stream.aclose()
+                finally:
+                    closed = await engine.close(cancelled=_stream_cancelled)
+                return closed
+
+            return await await_joined(finish())
+
         engine.start_renewal(ownership_lost=_ownership_lost)
         # R4-010: driver-owned turn scope — every `_owned_step` task runs in a
         # context that carries this scope (the stream steps share the armed
@@ -375,6 +388,8 @@ async def _stream_session(
             _stream_cancelled = True
             raise
         finally:
+            if isinstance(sys.exc_info()[1], (GeneratorExit, asyncio.CancelledError)):
+                _stream_cancelled = True
             end_turn_scope(turn_scope_token)
             _record_stage("cleanup_started")
             if resume_token is not None:
@@ -387,52 +402,37 @@ async def _stream_session(
                     # can run in a different task context; the resumed
                     # request context is already gone.
                     pass
-            active = _renew_state.get("active")
-            if active is not None and not active.done():
-                active.cancel()
-                await asyncio.wait({active}, timeout=0.1)
-            if active is not None and not active.done():
-                from machina.core.runtime import runtime_services
+            from machina.core.background_tasks import await_joined
 
-                async def retire_execution() -> None:
-                    # Keep ownership until the actual operation unwinds.
-                    # Runtime shutdown observes a bound and quarantines this
-                    # observer too; it cannot safely release a live execution.
-                    while not active.done():
+            async def cleanup():
+                active = _renew_state.get("active")
+                if active is not None and not active.done():
+                    active.cancel()
+                    await asyncio.wait({active}, timeout=0.1)
+                if active is not None and not active.done():
+                    from machina.core.runtime import runtime_services
+
+                    async def retire_execution():
                         try:
-                            await asyncio.shield(active)
+                            await await_joined(active)
                         except asyncio.CancelledError:
-                            continue
-                        except Exception as exc:
-                            record_failure("app.retire_execution", exc)
-                            break
-                    try:
-                        if stream is not None:
-                            await stream.aclose()
-                    finally:
-                        # W2: bounded cleanup contract owned by the engine —
-                        # join optional work -> provider close -> stop renewal
-                        # -> shielded bounded release -> renewal join. Runs
-                        # only after the resistant execution actually unwound.
-                        await engine.close(cancelled=True)
+                            pass
+                        except Exception as error:
+                            record_failure("app.retire_execution", error)
+                        await close_turn()
 
-                runtime_services.track(active)
-                runtime_services.track(asyncio.create_task(retire_execution()))
+                    runtime_services.track(active)
+                    runtime_services.track(asyncio.create_task(retire_execution()))
+                    return None
+                return await close_turn()
+
+            close = await await_joined(cleanup())
+            if close is None:
                 if not _stream_cancelled:
-                    yield frame(
-                        {
-                            "type": "turn.cleanup_pending",
-                            "sessionId": session_id,
-                            "turnId": turn_id,
-                        }
-                    )
+                    yield frame({
+                        "type": "turn.cleanup_pending", "sessionId": session_id, "turnId": turn_id,
+                    })
             else:
-                # H-01/H-02/H-03/H-06: the bounded cleanup contract is owned
-                # by the engine: join optional work -> provider close -> stop
-                # renewal -> shielded bounded claim release -> join renewal.
-                # Ordinary failures are reported inside close() and returned
-                # here; a release failure must not produce a terminal event.
-                close = await engine.close(cancelled=_stream_cancelled)
                 _release_failed = close.release_failed
                 # H-03: Auto-compaction is fire-and-forget background work.
                 # Never blocks [DONE] or holds the stream open.

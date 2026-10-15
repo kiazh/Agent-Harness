@@ -453,7 +453,11 @@ async def test_closing_run_stream_flushes_completed_tool_before_return(sleep_too
     from machina.core import agent as agent_module
     from machina.core.models import StreamEvent
 
-    agent = _StubAgent()
+    from machina.core.agent import ReActAgent
+
+    agent = ReActAgent.__new__(ReActAgent)
+    agent.agent_id = "test-agent"
+    agent.allowed_tools = None
     agent.provider = SimpleNamespace()
     response = LLMResponse(content="", model="test", tool_calls=[
         _tool_call("sleep_probe", {"delay": 0, "tag": "persisted"}, 0)
@@ -489,3 +493,53 @@ async def test_closing_run_stream_flushes_completed_tool_before_return(sleep_too
     assert len(records) == 1
     assert records[0]["payload"]["result"] == "done-persisted"
     assert any("interrupted" in chunk["payload"].get("content", "") for chunk in persisted)
+
+
+async def test_run_joins_post_tool_flush_during_repeated_cancellation(sleep_tool, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from machina.core import agent as agent_module
+    from machina.core.agent import ReActAgent
+
+    agent = ReActAgent.__new__(ReActAgent)
+    agent.agent_id = "test-agent"
+    agent.allowed_tools = None
+    agent.provider = SimpleNamespace()
+    response = LLMResponse(content="", model="test", tool_calls=[
+        _tool_call("sleep_probe", {"delay": 0, "tag": "persisted"}, 0)
+    ])
+    entered, release = asyncio.Event(), asyncio.Event()
+    persisted = []
+
+    async def prepare(*args, **kwargs):
+        return SimpleNamespace(), []
+
+    async def batch(chunks):
+        entered.set()
+        await release.wait()
+        persisted.extend(chunks)
+
+    async def marker(**kwargs):
+        persisted.append(kwargs)
+
+    monkeypatch.setattr(agent, "_prepare_context", prepare)
+    monkeypatch.setattr(agent, "_call_llm_with_retry", AsyncMock(return_value=response))
+    monkeypatch.setattr(agent, "_condense_history", lambda messages: None)
+    monkeypatch.setattr(agent, "_tool_defs", lambda: [])
+    monkeypatch.setattr(agent_module, "_effective_turn_budget", lambda *args: 1000)
+    monkeypatch.setattr(agent_module, "_request_context_tokens", lambda *args: 1)
+    monkeypatch.setattr(agent_module.context_manager, "add_chunks_batch", batch)
+    monkeypatch.setattr(agent_module.context_manager, "add_chunk", marker)
+    task = asyncio.create_task(agent.run(uuid.uuid4(), "run", verbose=False))
+    await asyncio.wait_for(entered.wait(), 5)
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    records = [chunk for chunk in persisted if chunk["chunk_type"] == "tool_call"]
+    assert len(records) == 1
+    assert records[0]["payload"]["result"] == "done-persisted"

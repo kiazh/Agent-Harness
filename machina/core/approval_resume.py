@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from typing import Any
 
 from machina.core.execution_context import resolve_execution_context
@@ -60,8 +61,9 @@ async def resume_action_stream(agent, session_id, record: dict, arguments: dict)
             }
         ],
     )
-    async for event in agent._execute_tool_calls_stream(response, [], made, session_id):
-        yield event
+    async with aclosing(agent._execute_tool_calls_stream(response, [], made, session_id)) as events:
+        async for event in events:
+            yield event
     pauses = [entry["needs_approval"] for entry in made if "needs_approval" in entry]
     if made:
         content = made[0].get("result_preview", "") or "continuation ended"
