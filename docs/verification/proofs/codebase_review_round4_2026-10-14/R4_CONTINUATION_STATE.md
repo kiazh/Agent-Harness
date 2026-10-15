@@ -4,6 +4,43 @@ Read this first after any context compaction. Source-of-truth order:
 `FIX_PLAN_ROUND4_TASKS.md` (tasks) → `R4_STAGE1_LEDGER.md` / `R4_STAGE2_LEDGER.md`
 (completed stages) → this file (live state) → `R4_SESSION_LEARNINGS.md` (how to work).
 
+## UPDATE — 2026-10-15 R5 wave complete, gates pending
+- ALL Round-5 lanes committed: R5-A/B/C/D/E/F/GH/J/LM/N/O/P/QR/S3, R5-F1/F2,
+  R4-025, R4-096, R4-106 (+residual), R4-094(h) parity fix, ratchet delta (a424c26).
+- In flight: HELD-44 (cancelled-write ownership), HELD-55 (history ordering).
+- Remaining after those: R4-131 ledger + R5-review ledger, final docs commit,
+  sequential stage-3 gate (backend then UI, alone), second push, then the full
+  review phase (adversarial-reviewer + code-reviewer + senior-security +
+  senior-architect + security-pen-testing + line-by-line diff pass) — user
+  ordered all of it AFTER every task is done.
+- Note: user asked then retracted test-untracking (`.gitignore`) — nothing
+  changed; tests stay tracked.
+
+## UPDATE — 2026-10-15 R5 wave in flight
+- R4-096, R5-S3, R5-J, R5-O, R4-025, R5-A/C/D/E/F/LM/N/P committed (see git log).
+- In flight on DeepSeek V4.1: R5-QR (ui affordances), R5-B (atomic write),
+  R5-GH (provider transport), F1 (consolidation cursor), F2 (chunk adjacency),
+  R4-106 (production seams). All others committed.
+- Known gate debt: god-file ceilings for agent.py (2064 vs 2057), provider
+  audit/rate_limit/etc files + package total (R5 lanes' additions; needs either
+  trims or a ratified ceiling-delta commit with the delta table).
+- After lanes: ratchet fix commit, R4-131 ledger, sequential stage-3 gate
+  (backend then UI), docs commit, second push, then the full review phase
+  (adversarial-reviewer + code-reviewer + senior-security + senior-architect +
+  security-pen-testing + line-by-line), ALL after every task is done.
+
+## UPDATE — pushed 2026-10-15
+- Branch `round4-fixes` pushed (rewritten history; tip `1b01d98`).
+  PR: https://github.com/kiazh/Machina-Harness/pull/new/round4-fixes
+- Rewrite scrubbed Gemini `GOCSPX-`/`681255809395-` values to `REDACTED` in all trees
+  from `d173bb6^..HEAD` + split the synthetic `sk_live_` corpus literal (same runtime
+  value). Local `main` reset --soft onto the rewritten tip; worktree untouched.
+- Committed since the series above: `eedcde1` R4-094 (F4 TUI) · `1b01d98` R4-016b (stripe
+  de-literal; corpus still 119 green).
+- Resumed on `opencode/muse-spark-1.3-contributor-free`: R4-DW, D1, D2, E1, F1, F2, F6,
+  G1, G2, G3 (same sessionIDs). Still owed: their commits, sequential stage-3 gate,
+  final docs commit, second push.
+
 ## UPDATE — commit series executed (latest state)
 15 commits on top of `cdc5232` (newest first):
 `6f0df5b` R4-022/023 UI honesty · `e2f42ce` R4-063/064 observability · `2929f88` vendor

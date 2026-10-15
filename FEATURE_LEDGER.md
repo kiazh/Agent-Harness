@@ -83,7 +83,7 @@ All with failing-first regressions in `tests/test_production_readiness_p1.py` (2
 | Feature | Implementation | Entry points | Dependency | Trigger | Config | Fallback | Lifecycle | Proof |
 |---|---|---|---|---|---|---|---|---|
 | Service graph | `machina/core/runtime.py::RuntimeServices` | CLI/TUI/HTTP/jobs/delegation via `startup()` | DB optional | process start | — | degraded capabilities, never crash | `shutdown()` closes audit+DB, cancels tracked tasks | `test_runtime_startup_never_raises` |
-| Agent factory | `machina/core/agent_factory.py::build_agent_for_session` | chat/gateway `_run_turn`/REST/jobs/delegation | provider key for chat | every turn | `model/provider/agent_id` + definition overrides (`max_iterations` is ignored legacy data) | raises provider error (chat only) | owned provider closed exactly once | `test_researcher_factory_blocks_write_tools` |
+| Agent factory | `machina/core/agent_factory.py::build_agent_for_session` | chat/gateway `_run_turn`/REST/jobs/delegation | provider key for chat | every turn | `model/provider/agent_id` + definition overrides | raises provider error (chat only) | owned provider closed exactly once | `test_researcher_factory_blocks_write_tools` |
 | Turn coordinator | `machina/core/turns.py::SessionTurnCoordinator` + fns | gateway submit/REST claim/scheduler/compress/delete | DB `running` claim or in-process | every turn/mutation | — | in-process-only (documented) | `end_turn` idempotent | existing 409 tests |
 | Approval-aware ownership | `TurnOwnership.wait_for_approval` | broker handler (gateway TUI) | none | permission wait | `approval_timeout` (compute timeout paused) | headless → structured pause | cancel stops waits, frees lease | `test_approval_timeout_distinct` |
 
@@ -199,12 +199,25 @@ v1.0.0 gate stays open until DB/Docker/staging verification per
 ## Docs-truth corrections (R4-120, 2026-10-14)
 
 Settled behavior only; each row verified against the current tree before writing.
-In-flight work (keys allowlist final shape, `max_iterations` decision, `minimal`
-catalog effort tier, provider-remove fallback persistence) is intentionally
-absent — see the PENDING list in the proof file.
+The items previously listed as in-flight (keys allowlist final shape,
+`max_iterations` decision, `minimal` catalog effort tier, provider-remove
+fallback persistence) are now settled and recorded in the R4-131 section below.
 
 | Item | Location | Settled behavior | Proof |
 |---|---|---|---|
-| Reasoning-effort vocabulary | `core/provider/reasoning.py:23-36`, `core/config.py` `reasoning_effort` validation | Wire tiers are `low\|medium\|high`; unset aliases `""\|none\|off\|default\|auto` normalize to `""` (provider default) and the value is only ever sent when explicitly set. Config additionally accepts `xhigh\|max`, which are catalog-validated per model (ChatGPT/Codex levels). Precedence: per-call argument > provider instance default > `reasoning_effort` config key; an invalid config value logs and falls back to provider default instead of failing calls. | `tests/test_providers_direct.py` (effort normalization), `tests/test_kimi_provider.py` (config plumbing) |
-| `/provider remove` | gateway `providers.remove` (`gateway/features/providers_feature.py`), UI `/provider remove` (`ui/src/features/settings.ts:188-262`) | Removes user-added providers only; built-in providers cannot be removed. Removal clears the store entry, the derived `.env` key line, the live env var, and registry membership. A session pinned to the removed provider re-pins to the shipped fallback and the response reports the cleanup plus fallback for a visible notice. | `tests/test_features_split.py:78` (`providers.remove` route) |
-| Keys allowlist (as-shipped) | `gateway/features/secrets.py:25-56`, `security/env_file.py` `PROVIDER_KEYS`, `ui/src/features/keys.ts:24` | `secrets.set` refuses anything outside the catalog allowlist: 10 `PROVIDER_KEYS` (OpenRouter/OpenAI/Anthropic/Google/Mistral/Groq/Together/DeepSeek/xAI/Cohere `*_API_KEY`) plus `MANAGED_ENV_KEYS` (`DATABASE_URL`, `SEARXNG_URL`, `MACHINA_MODEL`), plus derived `MACHINA_PROVIDER_<NAME>_API_KEY` rows for user-added providers. Control-plane names (PATH, tokens, `MACHINA_ENV_FILE`, …) are rejected so UI callers cannot redirect subprocess loading or gateway bootstrap. The UI `KNOWN_KEYS` menu mirrors the same catalog. | `tests/test_fm3_hardening.py:17-27` (RF4-W6: rejects control-plane keys) |
+| Reasoning-effort vocabulary | `core/provider/reasoning.py:23-36`, `core/config.py` `reasoning_effort` validation | Wire tiers are `low\|medium\|high`; unset aliases `""\|none\|off\|default\|auto` normalize to `""` (provider default) and the value is only ever sent when explicitly set. Config additionally accepts `xhigh\|max` (catalog-validated per model) and `minimal` (alias-normalized). Precedence: per-call argument > provider instance default > `reasoning_effort` config key; an invalid config value logs and falls back to provider default instead of failing calls. | `tests/test_providers_direct.py` (effort normalization), `tests/test_kimi_provider.py` (config plumbing) |
+| `/provider remove` | gateway `providers.remove` (`gateway/features/providers_feature.py`), UI `/provider remove` (`ui/src/features/settings.ts:188-262`) | Removes user-added providers only; built-in providers cannot be removed. Removal clears the store entry, the derived `.env` key line, the live env var, and registry membership; the cleanup+fallback is persisted (gateway parity with CLI) and the response reports it for a visible notice. | `tests/test_features_split.py:78` (`providers.remove` route) |
+| Keys allowlist (as-shipped) | `gateway/features/secrets.py:25-56`, `security/env_file.py` `PROVIDER_KEYS`, `ui/src/features/keys.ts:24` | `secrets.set` refuses anything outside the catalog allowlist: 13 `PROVIDER_KEYS` (the 10 original plus `OPENCODE_API_KEY`, `KIMI_API_KEY`, `CUSTOM_API_KEY`) plus `MANAGED_ENV_KEYS` (`DATABASE_URL`, `SEARXNG_URL`, `MACHINA_MODEL`, `CUSTOM_BASE_URL`), plus derived `MACHINA_PROVIDER_<NAME>_API_KEY` rows for user-added providers. Control-plane names (PATH, tokens, `MACHINA_ENV_FILE`, …) are rejected so UI callers cannot redirect subprocess loading or gateway bootstrap. The UI `KNOWN_KEYS` menu mirrors the same catalog and a parity test reads the Python allowlist from source. | `tests/test_fm3_hardening.py:17-27` (RF4-W6), `ui/test/r4-094-tui.test.ts` (parity) |
+
+## R4-131 fix-status ledger (2026-10-15)
+
+| Decision/change | Resolution | Commit |
+|---|---|---|
+| `max_iterations` | REMOVED (owner decision): field, config key, soulspec mapping, DB column (idempotent DROP); PB-1 flush log-and-continue landed in the same file | `bceadb4`; UI surface dropped in `978aab8` |
+| `minimal` catalog effort tier | accepted + alias-normalized | `3130a7a` |
+| Provider-remove fallback persistence | persisted, restart-surviving | `3130a7a` |
+| Keys allowlist final shape | widened (OPENCODE/KIMI/CUSTOM) + parity test | `b1794be`, `011f1ba` |
+| Full-grant disclosure semantics | policy fast-path STANDS (comment-pinned); copy corrected to no-approval semantics | `22081dd`, `8b50144` |
+
+Round-5 review fixes: see `docs/verification/CODEBASE_REVIEW_CURRENT_2026-10-14.md`
+"Fix status" table.
