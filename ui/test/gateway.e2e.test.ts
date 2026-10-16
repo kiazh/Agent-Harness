@@ -3,6 +3,7 @@
 
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -17,11 +18,15 @@ const dsn = process.env.MACHINA_TEST_DATABASE_URL;
 const skip = !python || !dsn ? "MACHINA_TEST_PYTHON / MACHINA_TEST_DATABASE_URL not set" : false;
 
 function startClient(extraEnv: NodeJS.ProcessEnv = {}) {
+	const testHome = extraEnv.HOME ?? mkdtempSync(join(tmpdir(), "machina-gateway-test-"));
+	const envFile = extraEnv.MACHINA_ENV_FILE ?? join(testHome, ".env");
+	writeFileSync(envFile, "", { flag: "a", mode: 0o600 });
 	const token = `ui-e2e-${Math.random().toString(36).slice(2)}`;
 	const client = new GatewayClient({
 		python: python!,
 		token,
-		env: { DATABASE_URL: dsn!, MACHINA_GATEWAY_NO_SCHEDULER: "1", MACHINA_GATEWAY_TOKEN: token, ...extraEnv },
+		env: { HOME: testHome, MACHINA_HOME: join(testHome, ".machina"), MACHINA_ENV_FILE: envFile,
+			DATABASE_URL: dsn!, MACHINA_GATEWAY_NO_SCHEDULER: "1", MACHINA_GATEWAY_TOKEN: token, ...extraEnv },
 	});
 	let crashed = false;
 	client.onExit = () => {

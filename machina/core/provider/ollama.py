@@ -136,6 +136,13 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
             resp = await self.client.post("/api/chat", json=payload)
             resp.raise_for_status()
             data = resp.json()
+            # HTTP 200 can still contain an error or omit the required message.
+            if isinstance(data, dict) and "error" in data:
+                raise ProviderError(f"Ollama error: {data['error']}")
+            message = data.get("message") if isinstance(data, dict) else None
+            if not isinstance(message, dict):
+                detail = data if isinstance(data, dict) else "empty response"
+                raise ProviderError(f"Ollama returned no message for {model or self.model}: {detail}")
         except Exception as e:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_llm_call(
@@ -149,48 +156,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
             audit_log("llm_call_error", provider="ollama", model=model or self.model, error=str(e))
             raise
 
-        # Ollama can return 200 with an error body (e.g. model not found).
-        if isinstance(data, dict) and "error" in data:
-            duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_llm_call(
-                session_id="",
-                model=model or self.model,
-                duration_ms=duration_ms,
-                is_error=True,
-            )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
-            audit_log(
-                "llm_call_error",
-                provider="ollama",
-                model=model or self.model,
-                error=data["error"],
-            )
-            raise ProviderError(f"Ollama error: {data['error']}")
-
         duration_ms = (time.monotonic() - start) * 1000
-        # A 200 body without a message (e.g. {"done": true}) must fail like the
-        # other providers instead of a bare KeyError that strands the usage
-        # reservation and bypasses metrics/audit.
-        message = data.get("message") if isinstance(data, dict) else None
-        if not isinstance(message, dict):
-            metrics.record_llm_call(
-                session_id="",
-                model=model or self.model,
-                duration_ms=duration_ms,
-                is_error=True,
-            )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
-            audit_log(
-                "llm_call_error",
-                provider="ollama",
-                model=model or self.model,
-                error="no_message",
-            )
-            detail = data if isinstance(data, dict) else "empty response"
-            raise ProviderError(f"Ollama returned no message for {model or self.model}: {detail}")
-
         content = message.get("content", "")
         tool_calls = message.get("tool_calls", []) or []
 

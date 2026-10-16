@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -43,8 +45,6 @@ async def export_persona(
     spec = await effective_persona(agent_id, include_learned=include_learned)
     # Identity ownership remains the runtime agent_id. Portable package names
     # obey the standard's kebab-case grammar, including legacy agent names.
-    import re
-
     spec.name = re.sub(r"[^a-z0-9]+", "-", agent_id.lower()).strip("-") or "machina-agent"
     spec.write_package(directory, author="Machina user")
     return spec
@@ -80,8 +80,6 @@ async def import_persona(
         # The registry and growth store share one connection for atomic restore.
         stored = await AgentRegistry().save_on_connection(definition, conn, identity_only=True)
         stored.soul_spec = MachinaAdapter.to_soulspec(stored).to_storage_dict()
-        import json
-
         await conn.execute(
             "UPDATE agents SET soul_spec = $2::jsonb WHERE name = $1",
             agent_id,

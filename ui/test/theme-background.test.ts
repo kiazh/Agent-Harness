@@ -13,14 +13,17 @@ test("theme background fills alternate-screen clears and survives nested resets"
 		const painter = new ThemeBackground();
 		const opened = painter.paint("\x1b[?1049h\x1b[2J");
 		// eslint-disable-next-line no-control-regex
+		const fg = opened.match(/\x1b\[38;[^m]+m/)?.[0];
+		assert.ok(fg, "screen clear carries explicit theme ink");
+		// eslint-disable-next-line no-control-regex
 		const bg = opened.match(/\x1b\[48;[^m]+m/)?.[0];
 		assert.ok(bg, "screen clear carries the theme background");
 		const frame = painter.paint("\x1b[2Khello\x1b[0m world\x1b[49m padding");
-		assert.ok(frame.includes(`\x1b[0m${bg} world`));
+		assert.ok(frame.includes(`\x1b[0m${fg}${bg} world`));
 		assert.ok(frame.includes(`\x1b[49m${bg} padding`));
 		assert.ok(frame.endsWith("\x1b[0m"), "writes never leak active attributes");
 		for (const fill of ["\x1b[48;2;0;20;0m", "\x1b[48;5;0m", "\x1b[0;48;2;0;20;0m"]) {
-			assert.ok(painter.paint(`${fill}panel`).includes(`${fill}panel`), "explicit panel colours survive");
+			assert.ok(painter.paint(`${fill}panel`).split(fg).join("").includes(`${fill}panel`), "explicit panel colours survive");
 		}
 	} finally { setSkin(previous); }
 });

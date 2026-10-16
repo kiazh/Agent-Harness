@@ -748,12 +748,12 @@ def fork(
     """Fork a session — create a new session with copied state and context."""
 
     async def _fork():
+        sid = _parse_uuid(session_id)
+        if sid is None:
+            output.error(f"Invalid session ID: {session_id}")
+            raise typer.Exit(1)
         await db.connect()
         try:
-            sid = _parse_uuid(session_id)
-            if sid is None:
-                output.error(f"Invalid session ID: {session_id}")
-                raise typer.Exit(1)
             try:
                 new_session = await session_manager.fork(sid, title=title)
             except ValueError as error:

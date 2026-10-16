@@ -343,11 +343,12 @@ test("selected rows paint an accent background pill", async () => {
 	assert.ok(row.includes("\x1b[48;2;") || row.includes("\x1b[48;5;"), "selection carries a background fill in the terminal's color mode");
 });
 
-test("selection bars recognize and replace truecolor and indexed backgrounds", async () => {
-	const { isSelectionRow, selectionBar } = await import("../src/theme.ts");
+test("selection bars recognize the active selection and preserve foreground styling", async () => {
+	const { isSelectionRow, selectionBar, selectListTheme } = await import("../src/theme.ts");
 	for (const fill of ["\x1b[48;2;1;2;3m", "\x1b[48;5;123m"]) {
 		const row = `${fill}\x1b[38;5;7malpha\x1b[49m`;
-		assert.equal(isSelectionRow(row), true);
+		assert.equal(isSelectionRow(row), false, "ordinary filled menu rows are not selections");
+		assert.equal(isSelectionRow(selectListTheme.selectedText("alpha")), true);
 		const bar = selectionBar(row, 40);
 		assert.equal(visibleWidth(bar), 40);
 		assert.equal(stripTerminalSequences(bar), `alpha${" ".repeat(35)}`);

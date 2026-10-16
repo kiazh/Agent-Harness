@@ -30,6 +30,7 @@ import logging
 import threading as _threading
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from machina.core.metrics import metrics
 from machina.observability.diagnostics import record_failure
@@ -187,8 +188,6 @@ async def _live_claim(session_id: uuid.UUID, kinds: tuple[str, ...]) -> bool:
     if exp is None:
         return True
     try:
-        from datetime import UTC, datetime
-
         now = datetime.now(UTC)
         if exp.tzinfo is None:
             exp = exp.replace(tzinfo=UTC)
@@ -290,8 +289,6 @@ async def owns_claim(session_id: uuid.UUID, token: str | None) -> bool:
     if exp is None:
         return True
     try:
-        from datetime import UTC, datetime
-
         now = datetime.now(UTC)
         if exp.tzinfo is None:
             exp = exp.replace(tzinfo=UTC)

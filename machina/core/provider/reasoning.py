@@ -6,21 +6,7 @@ from machina.core.config import REASONING_EFFORTS, REASONING_UNSET_EFFORTS, conf
 from machina.core.exceptions import ValidationError
 from machina.core.provider._log import logger
 
-# ---------------------------------------------------------------------------
-# Reasoning effort — per-provider reasoning depth (low|medium|high).
-# The vocabulary is single-sourced in machina.core.config (imported below).
-#
-# Each provider family exposes this differently, so the mapping lives here
-# next to the transport code:
-#   openai/deepseek/xai/groq/together .. top-level ``reasoning_effort``
-#   openrouter ........................ ``reasoning: {"effort": ...}``
-#   anthropic ......................... ``thinking`` budget in tokens
-#   ollama ............................ boolean ``think`` flag
-#   mistral/google .................... no API knob (model choice expresses it)
-# The value is only ever sent when explicitly set (per-call argument or the
-# ``reasoning_effort`` config key); unset means "provider default", so existing
-# behavior is unchanged.
-# ---------------------------------------------------------------------------
+# Explicit effort overrides provider defaults; each transport maps its wire format.
 
 # Anthropic thinking budgets per effort level (tokens reserved for thinking).
 ANTHROPIC_THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": 10000}

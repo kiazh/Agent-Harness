@@ -402,7 +402,9 @@ def _named_models_cmd(provider: str, *, refresh: bool, json_output: bool) -> Non
             f"[yellow]No models for {escape(provider)}"
             f"{f' ({escape(str(fetch_error))})' if fetch_error else ''}.[/yellow]"
         )
-        raise typer.Exit(EXIT_FAILED)
+        if fetch_error:
+            raise typer.Exit(EXIT_FAILED)
+        return
     table = Table(title=f"{provider} models")
     table.add_column("Model")
     table.add_column("Context", justify="right")

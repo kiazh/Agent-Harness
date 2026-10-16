@@ -6,6 +6,9 @@ user-facing message); callers decide how to present it.
 
 from __future__ import annotations
 
+import asyncio as _asyncio
+import inspect as _inspect
+import logging as _logging
 from pathlib import Path
 from typing import Any
 
@@ -274,15 +277,10 @@ async def compress_session_with_status(
             close = getattr(llm_provider, "close", None)
             if callable(close):
                 try:
-                    import asyncio as _asyncio
-                    import inspect as _inspect
-
                     r = close()
                     if _inspect.isawaitable(r):
                         await _asyncio.wait_for(r, timeout=5)
                 except Exception as e:
-                    import logging as _logging
-
                     _logging.getLogger(__name__).warning(
                         "compression provider close failed: %s", e, exc_info=True
                     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from copy import deepcopy
@@ -697,8 +698,6 @@ class SoulSpec:
         return render_persona(self, can_learn=can_learn, rsi_choice=rsi_choice)
 
     def to_storage_dict(self) -> dict[str, Any]:
-        import base64
-
         return {
             "spec": self.to_dict(),
             "manifest": deepcopy(self.package_manifest),
@@ -710,8 +709,6 @@ class SoulSpec:
 
     @classmethod
     def from_storage_dict(cls, data: dict[str, Any]) -> SoulSpec:
-        import base64
-
         spec = cls.from_dict(data["spec"])
         spec.package_manifest = deepcopy(data.get("manifest", {}))
         spec.package_files = {
