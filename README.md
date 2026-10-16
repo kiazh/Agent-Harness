@@ -60,7 +60,16 @@ The base install runs **keyword-only** retrieval: dense embeddings and cross-enc
 [install.sh](install.sh) reuses a checkout or clones one, creates a Python virtual environment, installs backend and UI dependencies, creates/fills `.env`, runs `machina init`, and installs a `machina` launcher on your `PATH`. On `init` failure it tries to provision local pgvector Postgres (Docker, then Homebrew on macOS) unless told otherwise.
 
 ```bash
-# From a checkout:
+# Zero-friction install from anywhere (clones the repo, creates .venv, installs
+# backend + UI deps, fills .env, runs init, bootstraps local Postgres if needed,
+# and puts `machina` on your PATH):
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash
+
+# With options (the `--` separates bash's args from the script's flags):
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --dir ~/machina --dev
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --interactive
+
+# From a checkout you already have:
 bash install.sh
 
 # Options (see `bash install.sh --help`):
