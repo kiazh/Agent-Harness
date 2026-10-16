@@ -189,6 +189,19 @@ This document keeps current evidence separate from historical baseline logs. Nev
 
 - `docs/design/WORKSPACE.md`: layout, commands, keys + fallbacks, language-server setup/trust, save/conflict semantics, agent privacy contract, persistence, troubleshooting, rollout flag.
 
+### T11 evidence — real PTY sessions (plan §24F)
+
+- Harness: `ui/test/support/pty-driver.py` (real pty, controlled winsize, pyte screen snapshots, JSON action scripts) + local PostgreSQL 16 (`machina_test`) providing a live gateway database; runs use a scratch HOME/`MACHINA_HOME`.
+- Scenario (160×48, fixture workspace `main.py`/`util.py`/`src/config.ts`), captured frames:
+  - `01-boot`: split layout — chat left with composer, divider, editor pane `No open files`; `workspace open: ws-fixture` notice; shared footer.
+  - `02-quickopen`: Ctrl+P overlay — query `main`, result `❯ main.py`, footer `1 results · excluded: .git, node_modules, …`.
+  - `03-file-open`: Enter opened `main.py` — tab `[main.py]`, breadcrumb, gutter lines 1–4, status `Ln 1, Col 1 · UTF-8 · LF · python`.
+  - `04-chat-max`: Ctrl+Right — chat uses the full 160 columns.
+  - `05-restored`: Ctrl+Left — split restored with the same tab open (state preserved).
+  - `06-explorer`: Ctrl+T — docked right-edge tree (`▸ src`, `main.py`, `README.md`, `util.py`), `workspace [h] hidden off` header, `excluded: .cache · .git ·…` disclosure.
+- **Bug found by this evidence (fixed)**: the app fed `initialize.cwd` (a redacted basename) into `workspace.open`, and the backend resolved it relative to its own cwd (`.../ws-fixture/ws-fixture` → refused). Fix: `initialize` now discloses `cwdFull` (absolute) only to token-authenticated handshakes; the UI prefers it, falls back to `init.cwd` only when absolute, and otherwise stays chat-only (older backends). Tests: DevTools `test_initialize_cwd_redaction.py` 4/4 (with live DB); UI integration tests for preference + basename-only fallback (20/20 suite).
+- Also verified live in the same run: quick open ranking/disclosure, editor open + status, chat maximize/restore with retained tab, explorer docking with exclusion disclosure.
+
 ## Task record template (from plan §26)
 
 ```text
