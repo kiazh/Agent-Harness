@@ -525,6 +525,7 @@ class ContextCompressor:
                     tools=[],
                     max_tokens=500,
                     temperature=0.3,
+                    purpose="compression_summary",
                 )
             except UsageBudgetExceededError:
                 logger.warning("Summarization skipped: budget exhausted, using truncation")

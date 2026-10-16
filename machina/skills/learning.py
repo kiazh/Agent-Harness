@@ -321,6 +321,7 @@ class LearningReviewer:
                     [{"role": "user", "content": prompt}],
                     max_tokens=512,
                     temperature=0,
+                    purpose="skill_learning",
                 ),
                 timeout=20,
             )

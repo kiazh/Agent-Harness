@@ -193,7 +193,12 @@ class DocumentMirrorStore:
         self._check_epoch(epoch)
         if not isinstance(version, int) or isinstance(version, bool) or version < 0:
             raise WorkspaceError("denied", "document version must be a non-negative integer")
-        size = len(text.encode("utf-8"))
+        try:
+            size = len(text.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise WorkspaceError(
+                "unsupported-encoding", "text contains code points that are not valid UTF-8"
+            ) from error
         existing = self._mirrors.get(uri)
         if existing is not None and version <= existing.version:
             return DocumentOpenResult(
@@ -248,7 +253,12 @@ class DocumentMirrorStore:
             updated = apply_changes(mirror.text, changes)
         except (TypeError, ValueError):
             return DocumentChangeResult(accepted_version=mirror.version, resync=True)
-        size = len(updated.encode("utf-8"))
+        try:
+            size = len(updated.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise WorkspaceError(
+                "unsupported-encoding", "text contains code points that are not valid UTF-8"
+            ) from error
         self._enforce_budgets(uri, size, replacing=mirror.byte_size)
         mirror.text = updated
         mirror.byte_size = size

@@ -17,6 +17,7 @@ from machina.core.assembler import get_token_count
 from machina.core.config import config
 from machina.core.exceptions import DatabaseError, UsageBudgetExceededError, ValidationError
 from machina.core.metrics import metrics
+from machina.core.pricing import estimate_cost, parse_overrides
 from machina.db.lazy import LazyDb, parse_command_count
 
 logger = logging.getLogger(__name__)
@@ -84,9 +85,15 @@ class UsageStore:
         *,
         tools: list[Any] | None = None,
         max_tokens: int = 4096,
+        purpose: str = "agent",
         **kwargs: Any,
     ) -> Any:
-        """Call a provider once, accounting for auxiliary and agent requests."""
+        """Call a provider once, accounting for auxiliary and agent requests.
+
+        ``purpose`` labels the call's role in the task (agent loop, context
+        summary, memory rerank, ...) so the ledger can attribute auxiliary
+        spend. It is accounting metadata only — never sent to the provider.
+        """
         reservation = None
         if session_id is not None:
             model = str(getattr(provider, "model", "unknown"))
@@ -106,6 +113,7 @@ class UsageStore:
                     messages,
                     tools or [],
                     reservation_max_tokens,
+                    purpose=purpose,
                 )
             except UsageBudgetExceededError:
                 raise
@@ -147,6 +155,8 @@ class UsageStore:
         messages: list[dict[str, Any]],
         tools: list[Any],
         max_tokens: int,
+        *,
+        purpose: str = "agent",
     ) -> uuid.UUID | None:
         limits = _limits()
         if not db.connected:
@@ -216,13 +226,14 @@ class UsageStore:
                     )
                 row = await conn.fetchrow(
                     "INSERT INTO llm_usage "
-                    "(session_id, agent_id, provider, model, status, reserved_tokens, accounted_tokens, "
-                    "ancestor_session_ids, ancestor_agent_ids) "
-                    "VALUES ($1, $2, $3, $4, 'reserved', $5, $5, $6, $7) RETURNING id",
+                    "(session_id, agent_id, provider, model, requested_model, purpose, status, "
+                    "reserved_tokens, accounted_tokens, ancestor_session_ids, ancestor_agent_ids) "
+                    "VALUES ($1, $2, $3, $4, $4, $5, 'reserved', $6, $6, $7, $8) RETURNING id",
                     session_id,
                     agent_id,
                     provider,
                     model,
+                    purpose,
                     reserved,
                     ancestor_sessions,
                     ancestor_agents,
@@ -254,6 +265,11 @@ class UsageStore:
 
         The WHERE status='reserved' guard prevents a late finish from
         overwriting a row already cleaned up or completed by another path.
+
+        Cache categories are stored exactly as the provider reported them
+        (``cache_reported`` False leaves them NULL — unknown, never zero).
+        Cost is a dated estimate: NULL whenever the price snapshot cannot
+        cover the used categories.
         """
         if reservation_id is None:
             return False
@@ -276,16 +292,72 @@ class UsageStore:
             and (prompt + completion > 0 or total > 0)
         )
         accounted = max(prompt + completion, total) if known else None
+
+        def _token(name: str) -> int | None:
+            value = usage.get(name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return None
+            return value
+
+        cache_reported = bool(usage.get("cache_reported")) and known
+        cache_read = _token("cache_read_tokens") if cache_reported else None
+        cache_write = _token("cache_write_tokens") if cache_reported else None
+        uncached = _token("uncached_input_tokens") if known else None
+        if known and uncached is None and cache_read is None and cache_write is None:
+            # No split was reported: the whole logical input is uncached
+            # (conservative upper bound for cost).
+            uncached = prompt
+
+        if failed:
+            basis: str | None = "failed"
+        elif known:
+            basis = str(usage.get("usage_basis") or "provider")
+        elif usage.get("estimated", False):
+            basis = "local_estimate"
+        else:
+            basis = "missing"
+
+        cost_usd: float | None = None
+        price_version: str | None = None
+        if known and uncached is not None:
+            try:
+                row_provider = await db.fetchval(
+                    "SELECT provider FROM llm_usage WHERE id = $1", reservation_id
+                )
+                overrides_raw = config.get("pricing_table_json")
+                cost_usd, price_version = estimate_cost(
+                    row_provider if isinstance(row_provider, str) else None,
+                    model,
+                    uncached_input_tokens=uncached,
+                    cache_read_tokens=cache_read or 0,
+                    cache_write_tokens=cache_write or 0,
+                    output_tokens=completion,
+                    overrides=parse_overrides(
+                        overrides_raw if isinstance(overrides_raw, str) else ""
+                    ),
+                )
+            except Exception:
+                # Cost is additive information; a pricing failure must never
+                # block the durable accounting write.
+                cost_usd, price_version = None, None
+
         result = await db.execute(
             "UPDATE llm_usage SET status = $2, prompt_tokens = $3, completion_tokens = $4, "
             "accounted_tokens = COALESCE($5, reserved_tokens), model = COALESCE($6, model), "
-            "completed_at = now() WHERE id = $1 AND status = 'reserved'",
+            "cache_read_tokens = $7, cache_write_tokens = $8, usage_basis = $9, "
+            "cost_usd = $10, price_version = $11, completed_at = now() "
+            "WHERE id = $1 AND status = 'reserved'",
             reservation_id,
             "error" if failed else "complete",
             prompt if known else None,
             completion if known else None,
             accounted,
             model,
+            cache_read,
+            cache_write,
+            basis,
+            cost_usd,
+            price_version,
         )
         # S2 observe-only hook: record the exact persisted figures onto the
         # owning turn span. Only rows actually written are attributed.
@@ -322,26 +394,56 @@ class UsageStore:
                 pass
         return written
 
+    async def mark_accepted(self, session_id: uuid.UUID, agent_id: str) -> bool:
+        """Mark the newest completed agent call for this session as accepted.
+
+        Called by the agent loop only when a turn produced its final answer
+        (no pending tool calls and no pause). Retried, summarization, and
+        failed calls are never marked; the 30-minute window bounds the match
+        to the live turn window (the turn timeout is far shorter), so a
+        stale unaccepted row from an aborted turn can never be promoted.
+        Returns False when there is nothing to mark.
+        """
+        try:
+            result = await db.execute(
+                "UPDATE llm_usage SET accepted = true WHERE id = ("
+                "SELECT id FROM llm_usage WHERE session_id = $1 AND agent_id = $2 "
+                "AND status = 'complete' AND accepted IS NULL "
+                "AND purpose = 'agent' "
+                "AND completed_at > now() - interval '30 minutes' "
+                "ORDER BY completed_at DESC NULLS LAST, created_at DESC, id DESC LIMIT 1) "
+                "AND status = 'complete'",
+                session_id,
+                agent_id,
+            )
+        except Exception as e:
+            raise DatabaseError("usage accounting unavailable") from e
+        return parse_command_count(result) > 0
+
     async def summary(self, session_id: uuid.UUID, agent_id: str) -> dict[str, Any]:
         limits = _limits()
-        session = await db.fetchrow(
+        _AGG = (
             "SELECT COUNT(*) FILTER (WHERE status = 'complete') AS requests, "
             "COALESCE(SUM(accounted_tokens) FILTER (WHERE status = 'complete'), 0) AS tokens, "
             "COUNT(*) AS charged_requests, COALESCE(SUM(accounted_tokens), 0) AS charged_tokens, "
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
             "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
-            "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls "
-            "FROM llm_usage WHERE session_id = $1 OR ancestor_session_ids @> ARRAY[$1::uuid]",
+            "COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens, "
+            "COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens, "
+            "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls, "
+            "COUNT(*) FILTER (WHERE usage_basis = 'local_estimate') AS estimated_calls, "
+            "COUNT(*) FILTER (WHERE accepted) AS accepted_completions, "
+            "COALESCE(SUM(cost_usd), 0) AS known_cost_usd, "
+            "COUNT(*) FILTER (WHERE status = 'complete' AND cost_usd IS NULL) "
+            "AS unknown_cost_calls "
+            "FROM llm_usage WHERE "
+        )
+        session = await db.fetchrow(
+            _AGG + "session_id = $1 OR ancestor_session_ids @> ARRAY[$1::uuid]",
             session_id,
         )
         agent = await db.fetchrow(
-            "SELECT COUNT(*) FILTER (WHERE status = 'complete') AS requests, "
-            "COALESCE(SUM(accounted_tokens) FILTER (WHERE status = 'complete'), 0) AS tokens, "
-            "COUNT(*) AS charged_requests, COALESCE(SUM(accounted_tokens), 0) AS charged_tokens, "
-            "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
-            "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
-            "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls "
-            "FROM llm_usage WHERE agent_id = $1 OR ancestor_agent_ids @> ARRAY[$1::text]",
+            _AGG + "agent_id = $1 OR ancestor_agent_ids @> ARRAY[$1::text]",
             agent_id,
         )
 
@@ -349,8 +451,13 @@ class UsageStore:
             requests, tokens = int(row["requests"]), int(row["tokens"])
             charged_requests = int(row["charged_requests"])
             charged_tokens = int(row["charged_tokens"])
+            accepted = int(row["accepted_completions"])
+            known_cost = float(row["known_cost_usd"])
             request_limit = limits[f"usage_{prefix}_request_limit"]
             token_limit = limits[f"usage_{prefix}_token_limit"]
+            # Cost per accepted completion includes every recorded call
+            # (failures, retries, summaries) divided by completed turns the
+            # loop marked accepted. No accepted completions -> no figure.
             return {
                 "requests": requests,
                 "accountedTokens": tokens,
@@ -358,7 +465,14 @@ class UsageStore:
                 "chargedTokens": charged_tokens,
                 "knownPromptTokens": int(row["prompt_tokens"]),
                 "knownCompletionTokens": int(row["completion_tokens"]),
+                "cacheReadTokens": int(row["cache_read_tokens"]),
+                "cacheWriteTokens": int(row["cache_write_tokens"]),
                 "unknownCalls": int(row["unknown_calls"]),
+                "estimatedCalls": int(row["estimated_calls"]),
+                "acceptedCompletions": accepted,
+                "knownCostUsd": known_cost,
+                "unknownCostCalls": int(row["unknown_cost_calls"]),
+                "costPerAcceptedCompletionUsd": (known_cost / accepted) if accepted else None,
                 "requestLimit": request_limit or None,
                 "tokenLimit": token_limit or None,
                 "requestsRemaining": max(0, request_limit - charged_requests)
@@ -402,11 +516,15 @@ class UsageStore:
     async def totals(self) -> dict[str, int]:
         row = await db.fetchrow(
             "SELECT COUNT(*) AS requests, COALESCE(SUM(accounted_tokens), 0) AS tokens, "
+            "COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens, "
+            "COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens, "
             "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls FROM llm_usage"
         )
         return {
             "requests": int(row["requests"]),
             "accounted_tokens": int(row["tokens"]),
+            "cache_read_tokens": int(row["cache_read_tokens"]),
+            "cache_write_tokens": int(row["cache_write_tokens"]),
             "unknown_calls": int(row["unknown_calls"]),
         }
 

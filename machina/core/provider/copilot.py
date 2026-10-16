@@ -52,6 +52,7 @@ from machina.core.provider.transport import (
     _validate_messages,
     _validate_params,
 )
+from machina.core.provider.usage_map import parse_openai_usage
 from machina.core.usage import _estimate_tokens, usage_store
 from machina.security import copilot_auth
 
@@ -358,14 +359,8 @@ class CopilotProvider(LLMProvider, RateLimitBinding):
 
         tool_calls = accumulator.result()
         full_content = "".join(content_parts)
-        usage = {
-            "prompt_tokens": int(stream_usage.get("prompt_tokens") or 0),
-            "completion_tokens": int(stream_usage.get("completion_tokens") or 0),
-            "total_tokens": int(stream_usage.get("total_tokens") or 0),
-        }
-        if not usage["total_tokens"]:
-            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-        if not usage["prompt_tokens"] and not usage["completion_tokens"]:
+        usage = parse_openai_usage(stream_usage)
+        if not usage.get("prompt_tokens") and not usage.get("completion_tokens"):
             usage = {
                 "prompt_tokens": _estimate_tokens(messages, tools or [], 0),
                 "completion_tokens": _estimate_tokens(
@@ -375,7 +370,10 @@ class CopilotProvider(LLMProvider, RateLimitBinding):
                 ),
                 "estimated": True,
             }
-            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        usage["total_tokens"] = max(
+            usage.get("total_tokens", 0),
+            usage["prompt_tokens"] + usage["completion_tokens"],
+        )
         duration_ms = (time.monotonic() - start) * 1000
         metrics.record_llm_call(
             session_id="",

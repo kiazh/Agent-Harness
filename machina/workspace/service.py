@@ -26,8 +26,10 @@ Ordering invariants encoded here:
 * ``intelligence`` flushes the document's pending sync chain before issuing
   its request, so the server always observes ``didChange`` before the request
   that depends on it;
-* ``save`` order: confirmed disk save → ``didSave`` (includeText per server
-  capabilities) → ``workspace.fileChanged``;
+* ``save`` order: confirmed disk save → pending ``didChange`` flush →
+  ``didSave`` (includeText per server capabilities); the RPC returns at the
+  commit and the flush runs detached when a chain is in flight, while
+  ``workspace.fileChanged`` follows the confirmed commit;
 * diagnostics from a generation other than the live one are never served; a
   crashed server's last set is surfaced as ``stale`` (kept, not silently
   cleared and never presented as current).
@@ -214,6 +216,9 @@ class WorkspaceService:
         self._open_records: dict[str, _OpenRecord] = {}
         self._sync_tasks: dict[str, asyncio.Task[None]] = {}
         self._sync_locks: dict[str, asyncio.Lock] = {}
+        # Detached flush-then-didSave chains for confirmed saves (never awaited
+        # by the save RPC; cancelled only when the workspace epoch resets).
+        self._save_tasks: set[asyncio.Task[None]] = set()
         self._diagnostics = DiagnosticsStore()
         self._stop_task: asyncio.Task[None] | None = None
         # The manager close() retired: stop_all closes it permanently, so a
@@ -323,16 +328,29 @@ class WorkspaceService:
         return {"closed": True}
 
     async def wait_stopped(self) -> None:
-        """Await the bounded manager stop requested by :meth:`close` (if any)."""
+        """Await the bounded manager stop requested by :meth:`close` (if any).
+
+        The wait is bounded and never cancels the stop: a shutdown that
+        exceeds the deadline keeps running in the retained task.
+        """
         task = self._stop_task
-        if task is not None:
-            await task
+        if task is None:
+            return
+        done, _pending = await asyncio.wait({task}, timeout=self._manager_stop_timeout)
+        if not done:
+            logger.warning(
+                "language-server stop exceeded %.1fs; continuing in background",
+                self._manager_stop_timeout,
+            )
 
     def _reset_lsp_state(self) -> None:
         for task in list(self._sync_tasks.values()):
             task.cancel()
         self._sync_tasks.clear()
         self._sync_locks.clear()
+        for task in list(self._save_tasks):
+            task.cancel()
+        self._save_tasks.clear()
         self._connections.clear()
         self._open_records.clear()
         self._diagnostics.clear()
@@ -347,20 +365,23 @@ class WorkspaceService:
         except RuntimeError:
             return  # no event loop: there is no async transport to stop here
         self._stop_task = loop.create_task(
-            self._stop_manager_bounded(manager), name="workspace-lsp-stop"
+            self._stop_manager_detached(manager), name="workspace-lsp-stop"
         )
 
-    async def _stop_manager_bounded(self, manager: Any) -> None:
+    async def _stop_manager_detached(self, manager: Any) -> None:
+        """Run the manager's ``stop_all`` to completion in a retained task.
+
+        Never cancels the stop: the bounded observation (and its timeout log)
+        lives in :meth:`wait_stopped`, so a hanging shutdown keeps running and
+        stays observable through ``self._stop_task``.
+        """
         stop_all = getattr(manager, "stop_all", None)
         if not callable(stop_all):
             return
         try:
-            await asyncio.wait_for(_await_if_needed(stop_all()), timeout=self._manager_stop_timeout)
-        except TimeoutError:
-            logger.warning(
-                "language-server stop exceeded %.1fs; processes may still be running",
-                self._manager_stop_timeout,
-            )
+            await _await_if_needed(stop_all())
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.warning("language-server stop failed", exc_info=True)
 
@@ -482,11 +503,12 @@ class WorkspaceService:
         result = await files.save_text(rel, text, expected_revision, ui_version=ui_version)
         if result.ok and result.revision is not None and self._identity is not None:
             # Defined order (plan §11 step 8): the disk commit is confirmed
-            # first, pending didChange frames for this document flush next,
-            # didSave follows (includeText only when the server asked), and the
-            # fileChanged event is emitted last.
-            await self._flush_document(canonical)
-            self._did_save_if_open(canonical, text)
+            # first, pending didChange frames for this document flush next and
+            # didSave follows (includeText only when the server asked). The
+            # flush runs detached when a chain is in flight, so a parked sync
+            # chain can never hold this RPC for the sync deadline; the
+            # fileChanged event is emitted once the commit is confirmed.
+            self._schedule_save_notification(canonical, text)
             self._emit(
                 file_changed_event(
                     self._identity.workspace_id,
@@ -631,6 +653,10 @@ class WorkspaceService:
         rel = self._uri_to_rel(uri)
         canonical = self._rel_to_uri(rel)
         closed = store.close_document(canonical, epoch=self._check_epoch(epoch))
+        # A reopen starts a fresh mirror at version 0: the retained version
+        # gates for this URI must go with the mirror, or every later publish
+        # for it is rejected as "older" forever.
+        self._diagnostics.clear_uri(canonical)
         record = self._open_records.pop(canonical, None)
         if record is not None:
             connection = self._tracked_connection(record.language)
@@ -713,10 +739,9 @@ class WorkspaceService:
                 subscribe_state(self._handle_connection_state)
             subscribe_notifications = getattr(connection, "on_notification", None)
             if callable(subscribe_notifications):
-                epoch = self._epoch
 
                 def _notification(method: str, params: Any) -> None:
-                    self._handle_connection_notification(connection, epoch, method, params)
+                    self._handle_connection_notification(connection, method, params)
 
                 subscribe_notifications(_notification)
         if connection.state == STATE_READY:
@@ -954,6 +979,38 @@ class WorkspaceService:
         except LspError as error:
             logger.debug("didSave could not be queued: %s", error)
 
+    def _schedule_save_notification(self, uri: str, text: str) -> None:
+        """Deliver ``didSave`` after the document's pending sync chain, detached.
+
+        The disk commit is already confirmed when this runs. With no sync work
+        in flight the notification is queued inline (zero added latency, the
+        defined commit → flush → didSave order holds); with a chain in flight
+        the flush plus ``didSave`` run in a bounded background task so a parked
+        chain cannot hold the save RPC for the sync deadline.
+        """
+        pending = self._sync_tasks.get(uri)
+        if pending is None or pending.done():
+            self._did_save_if_open(uri, text)
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no event loop: nothing async can be in flight either
+        task = loop.create_task(
+            self._save_notification_chain(uri, text), name=f"workspace-lsp-save:{uri}"
+        )
+        self._save_tasks.add(task)
+        task.add_done_callback(self._save_tasks.discard)
+
+    async def _save_notification_chain(self, uri: str, text: str) -> None:
+        try:
+            await self._flush_document(uri)
+            self._did_save_if_open(uri, text)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("didSave after save could not be delivered", exc_info=True)
+
     # ─── intelligence ───────────────────────────────────────────────────────
     async def intelligence(
         self,
@@ -973,6 +1030,8 @@ class WorkspaceService:
         bounded payload; malformed server data is dropped, never guessed.
         """
         self._require_files()
+        if not self.trusted:
+            raise WorkspaceError("denied", "workspace is not trusted for code intelligence")
         if operation not in INTELLIGENCE_OPERATIONS:
             raise WorkspaceError("denied", f"unsupported intelligence operation: {operation}")
         workspace_epoch = self._check_epoch(epoch)
@@ -1376,7 +1435,7 @@ class WorkspaceService:
 
     # ─── diagnostics notifications (plan §16) ───────────────────────────────
     def _handle_connection_notification(
-        self, connection: Any, epoch: int, method: str, params: Any
+        self, connection: Any, method: str, params: Any
     ) -> None:
         """Store ``textDocument/publishDiagnostics`` per (uri, producer).
 
@@ -1385,11 +1444,19 @@ class WorkspaceService:
         and older-version publications are rejected. Diagnostics for URIs
         outside the authorized root are dropped, and an event is emitted for
         every accepted publish (including clears) with epoch and generation.
+
+        The epoch is resolved from the live tracking table at delivery time
+        (never captured at subscription time): a connection re-tracked after a
+        workspace reopen publishes under the new epoch, while a connection
+        that is no longer live in this epoch is dropped.
         """
         if method != "textDocument/publishDiagnostics":
             return
-        if self._identity is None or epoch != self._epoch:
-            return  # an old workspace's server never writes into the new one
+        if self._identity is None:
+            return
+        entry = self._tracked_entry(connection)
+        if entry is None:
+            return  # not live in this epoch: an old server never writes in
         if not isinstance(params, Mapping):
             return
         uri = params.get("uri")
@@ -1412,14 +1479,14 @@ class WorkspaceService:
             diagnostics=list(raw_diagnostics),
             version=version,
             generation=int(connection.generation),
-            epoch=epoch,
+            epoch=entry.epoch,
         )
         if outcome is None:
             return  # older-version results never replace newer ones
         self._emit(
             diagnostics_event(
                 self._identity.workspace_id,
-                epoch,
+                entry.epoch,
                 outcome.generation,
                 canonical,
                 outcome.version,
@@ -1430,8 +1497,11 @@ class WorkspaceService:
 
     # ─── language-server status and control ─────────────────────────────────
     async def lsp_status(self) -> dict[str, Any]:
-        """Server rows when a manager is attached; empty list otherwise."""
+        """Server rows when a manager is attached; empty list when trusted
+        without a manager; refuses (denied) for an untrusted workspace."""
         self._require_files()
+        if not self.trusted:
+            raise WorkspaceError("denied", "workspace is not trusted for language-server status")
         manager = self._lsp_manager
         if manager is None:
             return {"servers": []}

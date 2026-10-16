@@ -1,6 +1,6 @@
 # Unified audit memory and retrieval resolutions
 
-Source: `/Users/shadow/Desktop/Machina_Unified_Static_Bug_Audit.md`, findings F-04, F-08, F-12, F-16, F-17, F-18, F-19. Changes were reviewed statically; no application modules were imported, tests added/run, runtime probes performed, database/migration calls made, or network accessed.
+Source: the Machina unified static bug audit (`Machina_Unified_Static_Bug_Audit.md`), findings F-04, F-08, F-12, F-16, F-17, F-18, F-19. Changes were reviewed statically; no application modules were imported, tests added/run, runtime probes performed, database/migration calls made, or network accessed.
 
 ## F-04 — FTS outage visibility
 

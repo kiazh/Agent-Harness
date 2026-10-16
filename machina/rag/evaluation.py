@@ -10,6 +10,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from machina.rag.pipeline import RAGPipeline
@@ -111,7 +112,6 @@ async def benchmark_documents(
     Documents are rooted at the checkout; report hashes make corpus drift visible.
     """
     import hashlib
-    from pathlib import Path
 
     from machina.db.connection import db
 
@@ -152,20 +152,41 @@ async def benchmark_documents(
         await db.execute("DELETE FROM sessions WHERE id = $1", sid)
 
 
+def _devtools_dataset_path() -> Path | None:
+    """Default dataset inside the Machina-DevTools checkout, or None.
+
+    The labelled corpus lives with the DevTools harnesses (single source of
+    truth); reuse the benchmark's resolver so ``MACHINA_DEVTOOLS`` and sibling
+    checkouts behave identically here.
+    """
+    from machina.research.benchmark import _devtools_root_or_none
+
+    devtools = _devtools_root_or_none()
+    if devtools is None:
+        return None
+    return devtools / "tests" / "data" / "rag" / "machina_docs_v1.json"
+
+
 def main() -> None:
     """Run a keyword-only benchmark by default; models require explicit opt-in."""
     import argparse
     import asyncio
     import json
     import os
-    from pathlib import Path
 
     from machina.db.connection import db
     from machina.rag.pipeline import RAGConfig
     from machina.tools.rag import _build_shared_pipeline
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", type=Path, default=Path("tests/data/rag/machina_docs_v1.json"))
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=None,
+        help=(
+            "labelled dataset JSON (default: Machina-DevTools tests/data/rag/machina_docs_v1.json)"
+        ),
+    )
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument(
@@ -175,6 +196,15 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.dataset is None:
+        args.dataset = _devtools_dataset_path()
+        if args.dataset is None:
+            parser.error(
+                "no --dataset given and the Machina-DevTools checkout was not found "
+                "next to this repository; clone it or point MACHINA_DEVTOOLS at it"
+            )
+    if not args.dataset.is_file():
+        parser.error(f"dataset not found: {args.dataset} (pass --dataset PATH)")
     dsn = os.environ.get("MACHINA_TEST_DATABASE_URL")
     if not dsn:
         parser.error("Set MACHINA_TEST_DATABASE_URL to an isolated initialized evaluation database")

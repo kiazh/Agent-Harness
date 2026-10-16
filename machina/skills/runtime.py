@@ -8,60 +8,26 @@ import weakref
 from collections import Counter
 
 import machina.skills.registry as skills_module
+import machina.skills.search as search_module
 from machina.core.assembler import get_token_count, truncate_to_tokens
 from machina.skills.registry import Skill, SkillRegistry
 
-_STOP = frozenset(
-    "a an the to of for and or in on with using use me my please can could would should help i we you it this that is are be do does how want need write build create make implement review code task when".split()
-)
-_SYNONYMS = {
-    "postgresql": "postgres",
-    "py": "python",
-    "js": "javascript",
-    "ts": "typescript",
-    "k8s": "kubernetes",
-    "golang": "go",
-    "a11y": "accessibility",
-    "auth": "authentication",
-    "tests": "testing",
-    "test": "testing",
-    "pytest": "python testing",
-    "unittest": "python testing",
-    "reactjs": "react",
-    "vuejs": "vue",
-    "django": "django python",
-    "nextjs": "nextjs react",
-    "springboot": "springboot java",
-    "optimise": "optimize",
-    "animate": "motion animation",
-    "animation": "motion animation",
-    "animations": "motion animation",
-}
 _INDEXES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
-_TECHNOLOGIES = frozenset(
-    "python rust go react vue angular django laravel kotlin swift swiftui java springboot quarkus perl cpp csharp fsharp dotnet rails redis postgres mysql clickhouse kubernetes docker fastapi nestjs nuxt4 vite bun flutter dart android nextjs pytorch prisma netmiko cisco evm".split()
-)
-_SPECIALTIES = frozenset("celery native exposed ktor turbopack keccak256 installer motion".split())
+# Alias normalization (stopwords, synonyms, C++/C#/.NET folding) now lives in
+# ``machina.skills.search`` so the ranking and the explanations it builds use
+# one home; these names stay re-exported because workflow.py imports them.
+_TECHNOLOGIES = search_module.TECHNOLOGY_MARKERS
+_SPECIALTIES = search_module.SPECIALTY_MARKERS
 
 
 def _words(text: str) -> list[str]:
-    text = (
-        text.casefold()
-        .replace("c++", "cpp")
-        .replace("c#", "csharp")
-        .replace("f#", "fsharp")
-        .replace(".net", "dotnet")
-    )
-    words = re.findall(r"[a-z0-9]+", text.casefold())
-    result = []
-    for word in words:
-        result.extend(_SYNONYMS.get(word, word).split())
-    return [w for w in result if w not in _STOP and len(w) > 1]
+    """Canonical tokens; single home in :mod:`machina.skills.search`."""
+    return search_module.normalize_tokens(text)
 
 
 class SkillIndex:
-    def __init__(self, skills: list[Skill]):
-        self.skills = [s for s in skills if s.enabled]
+    def __init__(self, skills: list[Skill], *, include_disabled: bool = False):
+        self.skills = list(skills) if include_disabled else [s for s in skills if s.enabled]
         self.docs = []
         self.names = []
         df: Counter = Counter()
@@ -72,6 +38,8 @@ class SkillIndex:
             self.docs.append(terms)
             self.names.append(name)
             df.update(terms.keys())
+        self.df = df
+        self.doc_count = len(self.skills)
         self.idf = {
             word: math.log(1 + (len(self.skills) - count + 0.5) / (count + 0.5))
             for word, count in df.items()
@@ -136,6 +104,50 @@ def rank_skills(
         cached = (signature, SkillIndex(skills.list_skills()))
         _INDEXES[skills] = cached
     return cached[1].rank(query, weights=weights)
+
+
+def search_skills(
+    skills: SkillRegistry,
+    query: str,
+    *,
+    weights: dict[str, float] | None = None,
+    limit: int = 10,
+    cursor: str | None = None,
+    include_excluded: bool = False,
+    available_tools: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+    typo_tolerance: bool = False,
+) -> search_module.SearchResult:
+    """Typed, deterministic skill search (spec §9) over this registry.
+
+    Reuses the cached lexical index as the fast baseline path (``rank_skills``
+    and this function share ``_INDEXES``; behavior of ``rank_skills`` is
+    unchanged). Auto mode excludes disabled skills entirely; the browsing path
+    (``include_excluded=True``, used by catalog UIs) keeps them in the data
+    flagged ``excluded``. Scores are ranking signals with named components —
+    never calibrated probabilities. ``typo_tolerance`` is OFF by default.
+    """
+    skills.load_all()
+    all_skills = skills.list_skills()
+    # Registry replaces its objects on reload; telemetry changes retain them.
+    signature = tuple((s.name, s.description, tuple(s.triggers), s.enabled) for s in all_skills)
+    cached = _INDEXES.get(skills)
+    if cached is None or cached[0] != signature:
+        cached = (signature, SkillIndex(all_skills))
+        _INDEXES[skills] = cached
+    index = cached[1]
+    if include_excluded and any(not skill.enabled for skill in all_skills):
+        # Browsing is a rare, user-triggered path: build a one-shot full index
+        # instead of growing the per-turn cache the automatic path shares.
+        index = SkillIndex(all_skills, include_disabled=True)
+    return search_module.execute_search(
+        index,
+        query,
+        weights=weights,
+        limit=limit,
+        cursor=cursor,
+        available_tools=available_tools,
+        typo_tolerance=typo_tolerance,
+    )
 
 
 def automatic_skill_context(

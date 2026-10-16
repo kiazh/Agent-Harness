@@ -6,6 +6,7 @@ Environment variables: MACHINA_<KEY> override file values.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import tempfile
@@ -55,6 +56,11 @@ WORKSPACE_UI_STATE_MAX_BYTES = 64 * 1024
 # (editor prefs such as syntax highlighting / soft wrap / tab width). Small by
 # construction; the bound keeps a runaway client from growing config.yaml.
 UI_PREFERENCES_MAX_BYTES = 16 * 1024
+
+# Upper bound (UTF-8 bytes) for pricing_table_json (optional per-provider
+# price overrides used by cost estimates). Must parse as a JSON object when
+# set; the bound keeps a runaway client from growing config.yaml.
+PRICING_TABLE_MAX_BYTES = 32 * 1024
 
 # Secrets live in the environment (.env), never in config.yaml.
 SECRET_KEYS = frozenset(
@@ -113,6 +119,7 @@ __all__ = [
     "MAX_TOKENS",
     "WORKSPACE_UI_STATE_MAX_BYTES",
     "UI_PREFERENCES_MAX_BYTES",
+    "PRICING_TABLE_MAX_BYTES",
     "REASONING_EFFORTS",
     "REASONING_CATALOG_EFFORTS",
     "REASONING_UNSET_EFFORTS",
@@ -254,6 +261,37 @@ DEFAULTS: dict[str, Any] = {
     "compression_target_ratio": 0.5,
     "compression_preserve_recent": 3,
     "compression_llm_summarize": True,
+    # ── Token-efficiency policy (2026-10-16) ─────────────────────────────
+    # Durable tool artifacts: oversized tool results are retained verbatim
+    # (session-scoped, re-authorized reads via artifact_read/search/describe)
+    # so bounded views stay recoverable. Store failure, oversize refusal, or
+    # quota falls back to the legacy append cap — a lossy view is never
+    # published without a stored original.
+    "artifacts_enabled": True,
+    # 0 disables expiry (artifacts live until the session is deleted).
+    "artifact_retention_days": 30,
+    # 0 disables the per-session quota (quotas refuse new stores; they never
+    # evict live evidence).
+    "artifact_max_per_session": 500,
+    # Hard per-artifact size cap; larger results keep legacy truncation.
+    "artifact_max_chars": 2000000,
+    # Deterministic format reducers (tests/logs/JSON/CSV/diff/code/head+tail)
+    # for oversized results. Disabled returns to blind truncation only.
+    "reducers_enabled": True,
+    # Evidence projection: exact-duplicate removal plus token-budgeted
+    # coverage selection across memory/RAG/archive excerpts; omissions are
+    # disclosed in the prompt section. 0 tokens disables the budget.
+    "retrieval_selection_enabled": True,
+    "retrieval_token_budget": 6000,
+    # Output policy: "legacy" keeps the existing brevity sentence; "concise"
+    # appends an explicit answer-first policy that preserves requirements,
+    # caveats, negations, numbers, code, commands, and paths.
+    "output_policy": "legacy",
+    # Optional JSON price overrides for cost estimates (USD per million
+    # tokens), keyed by provider or "provider/model", e.g.
+    # {"anthropic": {"input_per_mtok": 3.0, "output_per_mtok": 15.0}}.
+    # Unknown models keep NULL cost — estimates are never presented as bills.
+    "pricing_table_json": "",
     # ask is risk-based: routine project tools proceed; risky actions ask.
     # Execution modes: ask | workspace | sandbox | full.
     "execution_mode": "ask",
@@ -280,6 +318,12 @@ DEFAULTS: dict[str, Any] = {
     # 16 KiB by validate_value (UI_PREFERENCES_MAX_BYTES); never holds source
     # text or secrets.
     "ui_preferences": "",
+    # Pinned now-playing bar (TUI): shows what is playing on this computer —
+    # any app (browser video, Spotify, Music, …) — via the gateway's
+    # nowplaying.get detection. Local-only: metadata never leaves the
+    # machine, and the feature degrades to one honest text line when the OS
+    # provides nothing. The bar hides only when this is false.
+    "nowplaying_enabled": True,
 }
 
 # Map config keys to their legacy environment variable names
@@ -355,6 +399,26 @@ def validate_value(key: str, value: Any) -> Any:
         if normalized not in ("auto", "cohere", "local", "http", "none"):
             raise ValueError("reranker_backend must be auto|cohere|local|http|none")
         return normalized
+    if key == "output_policy":
+        normalized = str(value).strip().lower()
+        if normalized not in ("legacy", "concise"):
+            raise ValueError("output_policy must be legacy|concise")
+        return normalized
+    if key == "pricing_table_json":
+        if not isinstance(value, str):
+            raise ValueError("pricing_table_json must be a string")
+        if len(value.encode("utf-8")) > PRICING_TABLE_MAX_BYTES:
+            raise ValueError(
+                f"pricing_table_json is too long (max {PRICING_TABLE_MAX_BYTES} bytes)"
+            )
+        if value.strip():
+            try:
+                parsed = json.loads(value)
+            except ValueError as exc:
+                raise ValueError("pricing_table_json must be valid JSON") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError("pricing_table_json must be a JSON object")
+        return value
     if key == "workspace_ui_state":
         # Versioned UI layout JSON (plan §21): a plain string, but typed and
         # byte-bounded here so config.set and every transport coercion path
@@ -425,6 +489,10 @@ def _check_int_bounds(key: str, val: int) -> None:
         "learning_review_max_per_session": (0, 100),
         "learning_review_auto_apply_per_day": (0, 100),
         "eviction_max_tokens": (0, None),
+        "artifact_retention_days": (0, 3650),
+        "artifact_max_per_session": (0, 100_000),
+        "artifact_max_chars": (1000, 100_000_000),
+        "retrieval_token_budget": (0, 1_000_000),
     }
     if key in bounds:
         lo, hi = bounds[key]
@@ -534,6 +602,16 @@ class Config:
     compression_target_ratio: float = 0.5
     compression_preserve_recent: int = 3
     compression_llm_summarize: bool = True
+    # ── Token-efficiency policy (2026-10-16); see DEFAULTS for contracts ──
+    artifacts_enabled: bool = True
+    artifact_retention_days: int = 30
+    artifact_max_per_session: int = 500
+    artifact_max_chars: int = 2000000
+    reducers_enabled: bool = True
+    retrieval_selection_enabled: bool = True
+    retrieval_token_budget: int = 6000
+    output_policy: str = "legacy"
+    pricing_table_json: str = ""
     # Execution modes (Phase 5)
     execution_mode: str = "ask"
     workspace_root: str = ""
@@ -546,6 +624,8 @@ class Config:
     memory_consolidation_enabled: bool = True
     auto_compaction_enabled: bool = True
     eviction_max_tokens: int = 0
+    # Pinned now-playing bar: show what is playing on this computer.
+    nowplaying_enabled: bool = True
     # Versioned, non-sensitive workspace UI state (plan §21); see DEFAULTS for
     # the document contract and WORKSPACE_UI_STATE_MAX_BYTES for the bound.
     workspace_ui_state: str = ""

@@ -24,17 +24,14 @@ from machina.core.provider.caches import (
     _cache_put,
     _caller_identity,
 )
+from machina.core.provider.prompt_cache import openrouter_cache_wiring
 from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.reasoning import _resolve_effort, normalize_reasoning_effort
 from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
     _is_free_model,
     _log_prompt_cache_breakpoints,
-    _mark_last_tool_breakpoint,
-    _openrouter_anthropic_model,
-    _openrouter_wire_messages,
     _post_with_retry,
-    _prompt_cache_breakpoints_enabled,
     _stream_error_message,
     _stream_with_retry,
     _tools_payload,
@@ -42,6 +39,7 @@ from machina.core.provider.transport import (
     _validate_messages,
     _validate_params,
 )
+from machina.core.provider.usage_map import parse_openai_usage
 from machina.core.usage import usage_store
 
 # Fallback chain when the requested free model keeps 429ing/404ing.
@@ -110,27 +108,22 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         await self._rate_limiter.acquire()
 
         model = model or self.model
-        cache_breakpoints = _prompt_cache_breakpoints_enabled() and _openrouter_anthropic_model(
-            model
-        )
-        wire_messages, system_marked = _openrouter_wire_messages(messages, cache_breakpoints)
+        tool_payload = _tools_payload(tools) if tools else None
+        wire_messages, tool_payload, marks = openrouter_cache_wiring(messages, tool_payload, model)
         payload: dict[str, Any] = {
             "model": model,
             "messages": wire_messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        tools_marked = False
-        if tools:
-            tool_payload = _tools_payload(tools)
-            if cache_breakpoints:
-                tool_payload = _mark_last_tool_breakpoint(tool_payload)
-                tools_marked = True
+        if tool_payload is not None:
             payload["tools"] = tool_payload
         effort = _resolve_effort(reasoning_effort, self._default_effort)
         if effort:
             payload["reasoning"] = {"effort": effort}
-        _log_prompt_cache_breakpoints("openrouter", model, system=system_marked, tools=tools_marked)
+        _log_prompt_cache_breakpoints(
+            "openrouter", model, system=marks[0], tools=marks[1], tail=marks[2]
+        )
 
         # Check cache before making any HTTP request
         if _is_free_model(model):
@@ -277,7 +270,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         message = choice.get("message") or {}
         content = message.get("content", "")
         tool_calls = message.get("tool_calls", []) or []
-        usage = data.get("usage", {})
+        usage = parse_openai_usage(data.get("usage", {}))
 
         metrics.record_llm_call(
             session_id="",
@@ -308,11 +301,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         response = LLMResponse(
             content=content,
             model=data.get("model", model),
-            usage={
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-                "total_tokens": usage.get("total_tokens", 0),
-            },
+            usage=usage,
             raw=data,
             tool_calls=tool_calls,
         )
@@ -358,10 +347,8 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                     candidates.append(fb)
         else:
             payload_max = max_tokens
-        cache_breakpoints = _prompt_cache_breakpoints_enabled() and _openrouter_anthropic_model(
-            model
-        )
-        wire_messages, system_marked = _openrouter_wire_messages(messages, cache_breakpoints)
+        tool_payload = _tools_payload(tools) if tools else None
+        wire_messages, tool_payload, marks = openrouter_cache_wiring(messages, tool_payload, model)
         payload: dict[str, Any] = {
             "model": model,
             "messages": wire_messages,
@@ -374,17 +361,14 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         if not _is_free_model(model):
             # Ask for a final usage chunk so streamed turns report real token counts
             payload["stream_options"] = {"include_usage": True}
-        tools_marked = False
-        if tools:
-            tool_payload = _tools_payload(tools)
-            if cache_breakpoints:
-                tool_payload = _mark_last_tool_breakpoint(tool_payload)
-                tools_marked = True
+        if tool_payload is not None:
             payload["tools"] = tool_payload
         effort = _resolve_effort(reasoning_effort, self._default_effort)
         if effort:
             payload["reasoning"] = {"effort": effort}
-        _log_prompt_cache_breakpoints("openrouter", model, system=system_marked, tools=tools_marked)
+        _log_prompt_cache_breakpoints(
+            "openrouter", model, system=marks[0], tools=marks[1], tail=marks[2]
+        )
 
         audit_log(
             "llm_stream_start", provider="openrouter", model=model, message_count=len(messages)
@@ -579,11 +563,16 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
             )
 
         full_content = "".join(content_parts)
-        usage = {
-            "prompt_tokens": stream_usage.get("prompt_tokens", 0),
-            "completion_tokens": stream_usage.get("completion_tokens", 0),
-            "total_tokens": stream_usage.get("total_tokens", 0),
-        }
+        usage = parse_openai_usage(stream_usage)
+        if not usage.get("prompt_tokens") and not usage.get("completion_tokens"):
+            # This transport never estimated streamed usage; report the
+            # missing figures honestly instead of fabricating counts. The
+            # ledger keeps the conservative reservation for missing usage.
+            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        usage["total_tokens"] = max(
+            usage.get("total_tokens", 0),
+            usage["prompt_tokens"] + usage["completion_tokens"],
+        )
 
         # Finish usage reservation
         if reservation_id is not None:

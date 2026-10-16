@@ -862,3 +862,39 @@ test("budget constants match the plan's published limits", () => {
 	assert.equal(DEFAULT_TOTAL_TEXT_BUDGET_BYTES, 16 * 1024 * 1024); // 16 MiB total open text
 	assert.equal(DEFAULT_UNDO_BUDGET_BYTES, 32 * 1024 * 1024); // 32 MiB undo data
 });
+
+test("multi-edit caret follows the composed primary edit, not pre-transaction offsets", () => {
+	const store = new EditorStore();
+	const record = open(store, "file:///w/tx-caret.ts", "abcdefghij");
+	const result = store.applyEdit(record.id, [edit(0, 0, "XX"), edit(8, 8, "Y")]);
+	assert.ok(result.ok);
+	assert.equal(doc(store, record.id).text, "XXabcdefghYij");
+	const view = store.getViewState(record.id);
+	assert.equal(view?.cursorOffset, 11, "the caret lands after the composed Y insert");
+	assert.equal(view?.selectionAnchorOffset, undefined, "the transaction still collapses the selection");
+});
+
+test("multi-edit caret composes replacement deltas before the primary edit", () => {
+	const store = new EditorStore();
+	const record = open(store, "file:///w/tx-caret-2.ts", "abcdefghij");
+	// The leading replacement shrinks the text; the primary replacement keeps
+	// pre-transaction offsets and would otherwise overshoot to the old clamp.
+	const result = store.applyEdit(record.id, [edit(1, 4, "M"), edit(6, 8, "PPPP")]);
+	assert.ok(result.ok);
+	assert.equal(doc(store, record.id).text, "aMefPPPPij");
+	assert.equal(store.getViewState(record.id)?.cursorOffset, 8, "the caret sits after the primary replacement");
+
+	// Same-position inserts keep caller order: the caret follows the last one.
+	const stacked = open(store, "file:///w/tx-caret-3.ts", "ab");
+	const stackedResult = store.applyEdit(stacked.id, [edit(0, 0, "X"), edit(0, 0, "Y")]);
+	assert.ok(stackedResult.ok);
+	assert.equal(doc(store, stacked.id).text, "XYab");
+	assert.equal(store.getViewState(stacked.id)?.cursorOffset, 2, "the last insert composed at the same position is primary");
+
+	// The primary stays the last edit in caller order even when it sits first.
+	const reversed = open(store, "file:///w/tx-caret-4.ts", "abcdefghij");
+	const outcome = store.applyEdit(reversed.id, [edit(8, 8, "Y"), edit(0, 0, "XX")]);
+	assert.ok(outcome.ok);
+	assert.equal(doc(store, reversed.id).text, "XXabcdefghYij");
+	assert.equal(store.getViewState(reversed.id)?.cursorOffset, 2, "caller order picks the primary edit");
+});

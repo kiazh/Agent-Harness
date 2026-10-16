@@ -53,6 +53,8 @@ __all__ = [
     "build_capability_section",
     "build_skill_section",
     "build_system_prompt",
+    "output_policy_section",
+    "_output_policy_section",
     "assemble_turn_prompt",
     "wrap_prompt_with_images",
     "build_turn_messages",
@@ -73,6 +75,13 @@ _TOOL_RESULT_STALE_CAP = TOOL_RESULT_STALE_CAP
 # Positionally addressed skill pages must keep resolving their offsets.
 SKILL_PAGE_RE = re.compile(r"^(Skill \S+|ECC resource \S+) \[\d+:\d+/\d+\]:")
 _SKILL_PAGE_RE = SKILL_PAGE_RE
+# Reducer-produced views are already curated to a deliberate size with their
+# own omission/recovery disclosure; blind head+tail condensation would
+# mutilate the structure and hide the artifact handle. The disclosure is
+# always the FINAL element of a reduced view, so the exemption matches only
+# the trailing disclosure — a tool result that merely quotes the marker in
+# its body stays eligible for condensation.
+_REDUCED_VIEW_TAIL_RE = re.compile(r"\n\[machina view: reduced by [a-z_]+[^\]\n]*\]\s*\Z")
 # Provider-native content blocks ride on ``LLMResponse.raw`` under this key and
 # are copied onto the assistant message by :func:`append_tool_messages` so the
 # next tool-continuation request can replay them verbatim (Anthropic extended
@@ -199,7 +208,9 @@ def condense_history(messages: list[dict[str, Any]]) -> None:
     Heads preserve listings, tails preserve verdicts ("1 passed"); the
     marker points back at the tool for the full output. Positionally
     addressed skill pages (``Skill name [o:e/n]`` / ``ECC resource``)
-    are never condensed — offsets into them must keep resolving.
+    are never condensed — offsets into them must keep resolving — and
+    reducer-produced views (``[machina view:``) are left intact: they are
+    already bounded and carry their own omission/recovery disclosure.
     Context storage keeps a separate 500-character result preview, not
     the full output. Re-run the tool when more output is needed.
     """
@@ -215,6 +226,7 @@ def condense_history(messages: list[dict[str, Any]]) -> None:
             isinstance(content, str)
             and len(content) > TOOL_RESULT_STALE_CAP
             and not SKILL_PAGE_RE.match(content)
+            and not _REDUCED_VIEW_TAIL_RE.search(content)
             and "\n…[earlier output condensed to " not in content
         ):
             message["content"] = stale_tool_preview(content)
@@ -326,6 +338,35 @@ _TRIAGE_HINTS: dict[str, str] = {
     ),
 }
 
+# Output policies (T6). "legacy" keeps the existing single brevity sentence
+# embedded in SYSTEM_PROMPT/personas. "concise" appends an answer-first policy
+# that still preserves requested detail and exact technical payloads — visible
+# brevity never trades away safety, caveats, or requested depth.
+_CONCISE_OUTPUT_POLICY = (
+    "Answer directly. Avoid greetings, repeated plans, redundant recaps, and "
+    "routine narration between tool calls.\n"
+    "Preserve requirements, caveats, negations, numbers, units, exact code, "
+    "commands, paths, and errors.\n"
+    "Match the user's requested detail. Explain fully when needed for safety, "
+    "ambiguity, teaching, or complex implementation."
+)
+
+
+def output_policy_section() -> str:
+    """Policy block for the configured ``output_policy`` ("" for legacy)."""
+    try:
+        from machina.core.config import config
+
+        policy = str(config.get("output_policy") or "legacy").strip().lower()
+    except Exception:
+        return ""
+    if policy == "concise":
+        return _CONCISE_OUTPUT_POLICY
+    return ""
+
+
+_output_policy_section = output_policy_section
+
 
 def build_system_prompt(
     soul_spec,
@@ -367,6 +408,9 @@ def build_system_prompt(
         system_base,
     )
     composed = system_base + skill_text
+    policy_text = output_policy_section()
+    if policy_text:
+        composed = f"{composed}\n\n{policy_text}"
     hint = _TRIAGE_HINTS.get(triage) if triage else None
     if hint:
         composed = f"{composed}\n\n{hint}"
@@ -380,6 +424,8 @@ def assemble_turn_prompt(
     recent,
     retrieved_chunks,
     query: str,
+    *,
+    omitted_evidence: int = 0,
 ) -> str:
     """Assemble the turn prompt via ``PromptAssembler`` (verbatim move)."""
     return assembler.assemble(
@@ -388,6 +434,7 @@ def assemble_turn_prompt(
         recent_chunks=recent,
         retrieved_chunks=retrieved_chunks,
         query=query,
+        omitted_evidence=omitted_evidence,
     )
 
 

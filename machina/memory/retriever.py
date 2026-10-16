@@ -581,6 +581,7 @@ Return ONLY the JSON array, no other text."""
                         {"role": "user", "content": rerank_prompt},
                     ],
                     tools=[],
+                    purpose="memory_rerank",
                 ),
                 timeout=10.0,
             )

@@ -54,7 +54,7 @@ async function boot(columns = 80, rows = 24, responses: Record<string, unknown> 
 			requests.push(method);
 			if (method in responses) return responses[method];
 			if (method === "initialize") return { version: "test", model: "m", cwd: "/tmp" };
-			if (method === "config.get") return { config: {} };
+			if (method === "config.get") return { config: { nowplaying_enabled: false } };
 			if (method === "session.create") return { session: { id: "s", title: "test", model: "m", provider: "p", status: "active", lastActivity: null } };
 			return {};
 		},

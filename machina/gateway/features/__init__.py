@@ -94,6 +94,7 @@ from machina.gateway.features.mode import (
     mode_revoke,
     mode_set,
 )
+from machina.gateway.features.nowplaying import nowplaying_command, nowplaying_get
 from machina.gateway.features.providers_feature import (
     models_list,
     models_set_effort,
@@ -218,6 +219,8 @@ METHODS: dict[str, Handler] = {
     "learning.reject": learning_reject,
     "learning.revert": learning_revert,
     "config.get": config_get,
+    "nowplaying.get": nowplaying_get,
+    "nowplaying.command": nowplaying_command,
     "secrets.list": secrets_list,
     "secrets.set": secrets_set,
     "secrets.clear": secrets_clear,

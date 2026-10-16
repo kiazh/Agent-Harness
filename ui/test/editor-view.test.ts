@@ -557,3 +557,29 @@ test("toolkit parity: decodePrintableKey and CURSOR_MARKER contracts are pinned"
 	assert.equal(decodePrintableKey("\x1b[97u"), "a", "Kitty CSI-u plain key");
 	assert.equal(CURSOR_MARKER, "\x1b_pi:c\x07");
 });
+
+test("mouse caret placement clears the vertical preferred column", () => {
+	const { store, doc } = freshStore("0123456789\n0123456789\nab\n0123456789");
+	store.setSelection(doc.id, { cursorOffset: 8 });
+	const harness = makeView(store, doc.id);
+	harness.view.setViewportRows(6);
+	harness.view.render(40); // four lines -> gutter of 1 digit + 2 padding cells
+	// Vertical motion keeps its column preference across the short third line.
+	assert.equal(harness.view.handleInput("\x1b[B"), true, "down to the second line");
+	assert.equal(store.getViewState(doc.id)?.cursorOffset, 19);
+	assert.equal(harness.view.handleInput("\x1b[B"), true, "down onto the short third line, clamped");
+	assert.equal(store.getViewState(doc.id)?.cursorOffset, 24);
+	assert.equal(harness.view.handleInput("\x1b[B"), true, "down to the fourth line reuses column 8");
+	assert.equal(store.getViewState(doc.id)?.cursorOffset, 33);
+	// A mouse press on the short third line re-anchors the caret at column 1...
+	const press = harness.view.handleMouse(mouseEvent({ type: "press", x: 4, y: 2 }));
+	assert.equal(press?.handled, true);
+	assert.equal(store.getViewState(doc.id)?.cursorOffset, 23);
+	// ...so the next Down uses the clicked column, not the stale preference.
+	assert.equal(harness.view.handleInput("\x1b[B"), true, "down from the clicked offset");
+	assert.equal(
+		store.getViewState(doc.id)?.cursorOffset,
+		26,
+		"the stale column-8 preference must not survive the mouse move",
+	);
+});

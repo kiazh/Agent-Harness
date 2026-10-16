@@ -15,7 +15,7 @@ never color alone; borders are structure, not decoration.
 |---|---|---|
 | didOpen sent profile language, not the document's protocol id (.tsx/.js grammar family) | major | **FIXED** (service.py uses `language_id_for`; regression added to integration suite; 31/31) |
 | Problems duplicates: push keyed `pyright`, pull keyed `Pyright` | major | **FIXED at root** (backend tags each row with producer; TS narrowing parses producer objects + rows; refresh groups by producer key; 2 new tests) |
-| Runbook personal absolute paths | minor | **FIXED** (env vars + setup note; zero /Users/shadow paths) |
+| Runbook personal absolute paths | minor | **FIXED** (env vars + setup note; no personal absolute paths remain) |
 | Ctrl+Left/Right maximize before region gate | minor | **FIXED** (closing pass 6f3131c; composer keeps word motion; RED-evidenced test) |
 | Flush pending edit sync before intelligence request | major | **FIXED** (closing pass; RED-evidenced order test; this unblocked live completion) |
 | Ctrl+V in editor region pastes into the composer | minor | **FIXED** (closing pass; region-aware routing; RED-evidenced) |

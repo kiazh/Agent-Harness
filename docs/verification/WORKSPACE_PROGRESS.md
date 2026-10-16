@@ -34,7 +34,7 @@ This document keeps current evidence separate from historical baseline logs. Nev
   - pi-tui `Editor` is prompt-grade only (no selection/redo, 30% height cap) → custom editor adapter required by plan §3.
   - Gateway RPC is newline-JSON; LSP framing is a separate Content-Length implementation.
   - Workspace events must not enter the chat event schema (no fabricated turn IDs): separate hand-written family.
-  - Python tests run from `/Users/shadow/Machina-DevTools` (symlinked `machina/` + `ui/`).
+  - Python tests run from the sibling `Machina-DevTools` checkout (symlinked `machina/` + `ui/`).
 
 ## Wave plan (already-frozen interfaces are authoritative)
 
@@ -234,6 +234,13 @@ This document keeps current evidence separate from historical baseline logs. Nev
 | Integration test asserted on a pre-retry record log | minor | **FIXED** (records re-read after the retried document_open) |
 
 - Evidence after fixes: full UI gate 893 tests / 887 pass / 6 skip / 0 fail; DevTools 56 passed across the four affected suites; ruff clean. Commits: main `2c4fb73`; DevTools `a8b4542`.
+
+### Forward seams (docs-honesty pass: built but not production-reachable)
+
+- Deferred (verified against `ui/src`):
+  - Hover: `HoverSession` and `HoverPopup` are built and tested but never instantiated outside tests — nothing mounts the hover popup, so no key (or mouse) path reaches it.
+  - Jump history: `JumpHistory` has no keybinding and no production caller.
+  - Workspace edits: only single-file completion reaches `applyWorkspaceEdit`; multi-file staging, rename-preview apply and the format/code-action producers are unused (`new RenameSession` is constructed without `requestRename`, so `start()` always reports unavailable; `codeActionsFromPayload` has no callers).
 
 ## Task record template (from plan §26)
 

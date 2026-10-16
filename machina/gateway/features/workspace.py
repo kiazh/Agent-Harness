@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError
@@ -66,6 +68,90 @@ def _service(gw: Gateway) -> WorkspaceService:
     return service
 
 
+def _retired_stop_tasks(gw: Gateway) -> set[asyncio.Task[Any]]:
+    """Per-gateway set of in-flight retired-manager stops (lazily created)."""
+    tasks = getattr(gw, "_workspace_lsp_stop_tasks", None)
+    if not isinstance(tasks, set):
+        tasks = set()
+        gw._workspace_lsp_stop_tasks = tasks
+    return tasks
+
+
+async def _await_if_needed(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _run_manager_stop(stop_all: Callable[[], Any]) -> None:
+    try:
+        await _await_if_needed(stop_all())
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("retired language-server manager stop failed", exc_info=True)
+
+
+def _retire_manager(gw: Gateway, manager: Any) -> asyncio.Task[Any] | None:
+    """Detach a retired manager's ``stop_all``; retained for the shutdown drain.
+
+    The task runs to completion on its own; nothing here cancels it.
+    """
+    stop_all = getattr(manager, "stop_all", None)
+    if not callable(stop_all):
+        return None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None  # no event loop: there is no async transport to stop
+    task = loop.create_task(_run_manager_stop(stop_all), name="workspace-lsp-retire")
+    tasks = _retired_stop_tasks(gw)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+    return task
+
+
+async def _retire_manager_bounded(gw: Gateway, manager: Any) -> None:
+    """Observe a retired manager's stop, bounded, without ever cancelling it.
+
+    On timeout the stop keeps running in the background and stays retained on
+    the gateway so :func:`drain_retired_lsp_managers` can join it at shutdown.
+    """
+    task = _retire_manager(gw, manager)
+    if task is None:
+        return
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(asyncio.shield(task), timeout=MANAGER_STOP_TIMEOUT)
+    if not task.done():
+        logger.warning(
+            "language-server stop exceeded %.1fs; continuing in background",
+            MANAGER_STOP_TIMEOUT,
+        )
+
+
+async def drain_retired_lsp_managers(
+    gw: Gateway, *, timeout: float = MANAGER_STOP_TIMEOUT
+) -> None:
+    """Bounded, non-cancelling join of retired managers' stops (shutdown hook).
+
+    A stop still running when the bound elapses is left detached and logged,
+    never cancelled mid-shutdown.
+    """
+    tasks = [task for task in _retired_stop_tasks(gw) if not task.done()]
+    if not tasks:
+        return
+    try:
+        _done, pending = await asyncio.wait(tasks, timeout=timeout)
+    except Exception:
+        logger.warning("language-server retirement drain failed", exc_info=True)
+        return
+    if pending:
+        logger.warning(
+            "language-server retirement still running after %.1fs; leaving it detached",
+            timeout,
+        )
+
+
 async def _attach_lsp_manager(gw: Gateway, service: WorkspaceService, identity: Any) -> None:
     """Composition seam for the real LspManager (T7 integration point).
 
@@ -79,10 +165,10 @@ async def _attach_lsp_manager(gw: Gateway, service: WorkspaceService, identity: 
     previous = getattr(gw, "_workspace_lsp_manager", None)
     if previous is not None:
         # Bound the retirement: a hanging stop_all must never block a reopen
-        # indefinitely. The old manager's shutdown continues in its own task;
-        # the new generation attaches regardless (status stays truthful).
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(previous.stop_all(), timeout=MANAGER_STOP_TIMEOUT)
+        # indefinitely, but it must also never be cancelled — the stop keeps
+        # running in a detached task retained on the gateway for the shutdown
+        # drain (the new generation attaches regardless; status stays truthful).
+        await _retire_manager_bounded(gw, previous)
         gw._workspace_lsp_manager = None
     if not identity.trusted:
         service.set_lsp_manager(None)

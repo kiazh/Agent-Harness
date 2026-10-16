@@ -237,12 +237,15 @@ export class WorkspaceGatewayAdapter implements WorkspaceGateway {
 	}
 
 	async close(): Promise<WorkspaceCloseResult | WorkspaceReadRefusal> {
-		if (!this.currentIdentity) return { closed: false };
+		const identity = this.currentIdentity;
+		if (!identity) return { closed: false };
 		const result = await this.request<WorkspaceCloseResult | WorkspaceReadRefusal>(
 			"workspace.close",
-			this.bound(),
+			{ workspaceId: identity.workspaceId, epoch: identity.epoch },
 		);
-		if (!isWorkspaceRefusal(result)) this.currentIdentity = undefined;
+		// Only clear the binding the close was issued for: a close that resolves
+		// after a newer `open` must never orphan the new workspace identity.
+		if (!isWorkspaceRefusal(result) && this.currentIdentity === identity) this.currentIdentity = undefined;
 		return result;
 	}
 

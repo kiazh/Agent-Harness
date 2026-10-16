@@ -96,7 +96,7 @@ test("saved theme arriving after the first launch frame repaints the entire view
 		clearScreen() {}, setTitle() {}, setProgress() {},
 		write(data: string) { writes.push(painter.paint(data, this.columns)); },
 	} as Terminal;
-	let loadTheme!: (value: { config: { theme: string } }) => void;
+	let loadTheme!: (value: { config: { theme: string; nowplaying_enabled: boolean } }) => void;
 	const config = new Promise(resolve => { loadTheme = resolve; });
 	let requestedTheme = false;
 	const client = {
@@ -119,7 +119,7 @@ test("saved theme arriving after the first launch frame repaints the entire view
 		tui.renderNow(true);
 		assert.equal(getSkin(), "codex", "first frame precedes saved configuration");
 		writes.length = 0;
-		loadTheme({ config: { theme: "gruvbox" } });
+		loadTheme({ config: { theme: "gruvbox", nowplaying_enabled: false } });
 		await starting;
 		tui.renderNow();
 		assert.equal(getSkin(), "gruvbox");

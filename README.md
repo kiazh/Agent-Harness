@@ -139,6 +139,7 @@ Type `/` for commands. Management commands open pickers or forms; `?` on empty i
 | `/jobs` | Schedule and manage background jobs |
 | `/theme` | Preview and save a theme; Escape restores the previous theme |
 | `/output` | Inspect retained tool output without rerunning it |
+| `/music` | Show what's playing on this computer in the pinned bar; play/pause, next/previous |
 | `/mcp` | Add servers, review connection launches and inspect/disconnect them |
 | `/mode`, `/approvals` | Manage execution mode and pending approvals |
 | `/status`, `/usage`, `/config` | Feature availability, token usage, non-secret settings |
@@ -147,6 +148,7 @@ Type `/` for commands. Management commands open pickers or forms; `?` on empty i
 ## What is included
 
 - Streaming agent execution through the CLI, TUI/gateway and HTTP API, with cancellation, session ownership and bounded cleanup.
+- Token-efficiency infrastructure: normalized cache-aware usage ledger with dated cost estimates, durable tool artifacts with authorized recovery, deterministic format reducers, deduplicated/budgeted evidence selection, and capability-gated prompt caching (see [token efficiency](docs/TOKEN_EFFICIENCY.md)).
 - Persistent conversations, context compaction, memory search and document retrieval. Semantic retrieval runs through an OpenAI-compatible endpoint or an optional zero-API local runtime (`pip install 'Machina[embeddings-onnx]'` for in-process ONNX, or `'Machina[embeddings-local]'` for static model2vec; backend `auto` is local-first). Optional local cross-encoder reranking (`'Machina[rerank]'`, or a llama.cpp `/v1/rerank` server) keeps query and candidate text on-host. Both remain opt-in by measurement: the LoCoMo replay set the defaults to keyword-only (`embedding_backend=off`) and no reranker (`reranker_backend=none`), since the dense and reranked variants missed their default-on bars.
 - File, shell, web, memory and document tools, subject to the permission broker and the selected execution backend.
 - Deterministic directory learning: the read-only `learn_directory` tool builds a bounded, cached repository digest (totals, largest modules, entry points, tests, import hubs) with **no model calls**; repeat calls are served from the content-hash cache.
@@ -854,7 +856,7 @@ Machina-Harness/
 ├── ui/src/               # TypeScript shell, transcript, widgets, features and themes
 ├── ui/test/              # node:test interaction and integration coverage
 ├── skills/               # bundled playbooks and curated ECC skill resources
-├── tests/                # Python regressions, integration tests and SDK fixtures
+├── tests/                # Python regressions, integration tests and SDK fixtures (the suite lives in Machina-DevTools)
 ├── tools/                # installer helpers, E2E gate, pilot runners, vendoring and artifact verification
 ├── docs/                 # feature guides, plans, evidence and handoff
 ├── communications/       # versioned UI/gateway protocol

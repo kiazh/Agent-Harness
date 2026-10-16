@@ -1235,6 +1235,9 @@ export class EditorView implements Component, Focusable {
 		if (cursorOffset === state.cursorOffset && anchor === state.selectionAnchorOffset) return true;
 		state.cursorOffset = cursorOffset;
 		state.selectionAnchorOffset = anchor;
+		// Non-vertical placement (mouse, Home/End, line moves) drops the
+		// vertical column preference; moveVertical re-arms it after the move.
+		state.preferredColumn = undefined;
 		this.store.setSelection(documentId, { cursorOffset, anchorOffset: anchor });
 		this.followCaret = true;
 		this.onCursorMoveCallback?.();

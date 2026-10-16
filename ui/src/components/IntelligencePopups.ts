@@ -6,8 +6,9 @@
 // - `CompletionPopup.handleInput` NEVER mutates machine state. It returns a
 //   semantic action (`accept`/`next`/`prev`/`close`/`insert-text`/`unhandled`)
 //   and the parent owns the interpretation (consume or fall through). Mouse
-//   interaction is self-contained: press selects, click accepts through the
-//   `onAction` callback, hover only highlights.
+//   interaction is self-contained: press selects, click reports the clicked
+//   row (`onSelect`) and then accepts through the `onAction` callback, hover
+//   only highlights.
 // - Everything renders bounded: at most 8 item rows (plus a `+N more`
 //   disclosure), and every line is truncated to the viewport width.
 // - Selection is text, never color-only: the selected row starts with `▶`.
@@ -135,11 +136,14 @@ export class CompletionPopup implements Component {
 	onAction: ((action: PopupKeyAction) => void) | undefined;
 
 	private readonly maxVisibleRows: number;
+	/** Clicked-index sink: lets the parent's machine selection follow the click. */
+	private readonly onSelectCallback: ((index: number) => void) | undefined;
 	private modelValue: CompletionPopupModel | undefined;
 	private hoverIndex: number | undefined;
 
-	constructor(options: { maxVisibleRows?: number } = {}) {
+	constructor(options: { maxVisibleRows?: number; onSelect?: (index: number) => void } = {}) {
 		this.maxVisibleRows = Math.max(1, options.maxVisibleRows ?? COMPLETION_POPUP_VISIBLE_ROWS);
+		this.onSelectCallback = options.onSelect;
 	}
 
 	setModel(model: CompletionPopupModel | undefined): void {
@@ -217,8 +221,13 @@ export class CompletionPopup implements Component {
 			this.selectIndex(index);
 			return { handled: true, focus: true };
 		}
+		// Completed left clicks only (a press falls through to the renderer's
+		// click synthesis, mirroring the explorer grip): the parent hears the
+		// clicked index first so its own selection matches the row the user
+		// clicked, then accepts.
 		if (event.type === "click") {
 			this.selectIndex(index);
+			this.onSelectCallback?.(index);
 			this.onAction?.({ kind: "accept" });
 			return { handled: true, focus: true };
 		}

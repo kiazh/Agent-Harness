@@ -5,6 +5,7 @@ Importing this package registers every built-in tool with ``registry``.
 
 from machina.tools import (
     agents,  # noqa: F401 — delegate, list_agents
+    artifacts,  # noqa: F401 — artifact_read, artifact_search, artifact_describe
     builtins,  # noqa: F401 — web_search, web_extract, search_files
     code_intelligence,  # noqa: F401 — read-only workspace code intelligence
     file,  # noqa: F401 — read_file, write_file, list_files
@@ -27,6 +28,7 @@ __all__ = [
     "ToolRegistry",
     "registry",
     "builtins",
+    "artifacts",
     "code_intelligence",
     "file",
     "harness",

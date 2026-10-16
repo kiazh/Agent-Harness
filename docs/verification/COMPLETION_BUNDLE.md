@@ -1,6 +1,6 @@
 # Completion Bundle — incident remediation + deterministic-first program
 
-Date: 2026-10-13 · Repo: `/Users/shadow/machina` · Verified at HEAD `6a1131a` (plus user snapshots
+Date: 2026-10-13 · Repo: `machina` checkout · Verified at HEAD `6a1131a` (plus user snapshots
 `a7d53d4`, `1814eb2`, `e74ed2a`). Full-suite number recorded below from the final quiescence run.
 
 ## 1. Commit chain (this program)
@@ -182,7 +182,7 @@ Found by running the system live (all numbers observed, not estimated):
   entry (`firecrawl-mcp` over stdio), `FIRECRAWL_API_URL` via env_allowlist (never in JSON),
   `trusted_read` allowlist for scrape/map/crawl/check_crawl_status.
 - **Self-hosted SearXNG** (operator setup, not committed, 2026-10-14): private metasearch
-  backend for `web_search` at `/Users/shadow/Projects/searxng` in the lima docker VM
+  backend for `web_search` at a local `~/Projects/searxng` checkout in the lima docker VM
   (`searxng/searxng:2026.10.13-22c64b8d3`, host :8088, `restart: unless-stopped`, limiter off,
   `format: json` on, no telemetry/auxiliary outbound calls). `SEARXNG_URL=http://localhost:8088`
   in `.env`; the security probe now accepts an explicitly configured loopback SearXNG instance

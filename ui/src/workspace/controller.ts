@@ -90,6 +90,8 @@ export interface OpenUriOptions {
 	preview?: boolean;
 	/** Suppress per-file notices (reopenRecent emits one summary instead). */
 	quiet?: boolean;
+	/** Focus the editor after a successful open (default true; restore passes false). */
+	focus?: boolean;
 }
 
 export type OpenUriOutcome =
@@ -372,8 +374,8 @@ export class WorkspaceController {
 
 	// Save conflicts awaiting an explicit decision.
 	private readonly conflicts = new Map<string, SaveConflictDescriptor>();
-	/** Documents with a save request in flight (their own fileChanged echo). */
-	private readonly savesInFlight = new Set<string>();
+	/** Outstanding save count per document; their own fileChanged echoes are ignored. */
+	private readonly savesInFlight = new Map<string, number>();
 	// Soft external-change notices for clean buffers (never auto-reloaded).
 	private readonly externalNotices = new Map<string, ExternalChangeNotice>();
 
@@ -622,7 +624,7 @@ export class WorkspaceController {
 			if (options.preview !== true) this.tabs.pin(existing.id);
 			this.schedulePersist();
 			this.requestRenderSafe();
-			this.focusEditor();
+			if (options.focus !== false) this.focusEditor();
 			return { status: "focused", documentId: existing.id, uri: existing.uri };
 		}
 
@@ -681,7 +683,7 @@ export class WorkspaceController {
 		}
 		this.schedulePersist();
 		this.requestRenderSafe();
-		this.focusEditor();
+		if (options.focus !== false) this.focusEditor();
 		return { status: "opened", documentId: document.id, uri: document.uri };
 	}
 
@@ -797,14 +799,14 @@ export class WorkspaceController {
 		}
 		const token = begun.token;
 		let result;
-		this.savesInFlight.add(documentId);
+		this.beginSaveFlight(documentId);
 		try {
 			result = await this.gateway.save(document.uri, token.savedRevision, token.text, token.version);
 		} catch (error) {
 			this.notifySafe("error", `save failed for ${displayName(document.uri)}: ${messageOf(error)}`);
 			return { status: "failed", documentId, message: messageOf(error) };
 		} finally {
-			this.savesInFlight.delete(documentId);
+			this.completeSaveFlight(documentId);
 		}
 		if (result.refused) {
 			this.notifySafe("warning", `save refused for ${displayName(document.uri)}: ${result.refused.message}`);
@@ -1117,7 +1119,8 @@ export class WorkspaceController {
 		let opened = 0;
 		let skipped = 0;
 		for (const uri of uris) {
-			const outcome = await this.openUri(uri, { quiet: true });
+			// Restoring remembered files must not steal focus from the composer.
+			const outcome = await this.openUri(uri, { quiet: true, focus: false });
 			if (outcome.status === "opened" || outcome.status === "focused") opened += 1;
 			else skipped += 1;
 		}
@@ -1219,19 +1222,8 @@ export class WorkspaceController {
 		}
 	}
 
-	private async evictReplaced(documentId: string): Promise<void> {
-		const state = this.sync.get(documentId);
-		if (state) {
-			this.clearSyncTimer(state);
-			this.sync.delete(documentId);
-		}
-		const record = this.store.getDocument(documentId);
-		this.store.closeDocument(documentId);
-		if (record) await this.bounded(this.tryDocumentClose(record.uri));
-		this.requestRenderSafe();
-	}
-
-	private async finishClose(documentId: string, uri: string | undefined): Promise<void> {
+	/** Drop per-document bookkeeping (sync, conflicts, notices) before retiring it. */
+	private retireDocument(documentId: string): void {
 		const state = this.sync.get(documentId);
 		if (state) {
 			this.clearSyncTimer(state);
@@ -1239,6 +1231,18 @@ export class WorkspaceController {
 		}
 		this.conflicts.delete(documentId);
 		this.externalNotices.delete(documentId);
+	}
+
+	private async evictReplaced(documentId: string): Promise<void> {
+		const record = this.store.getDocument(documentId);
+		this.retireDocument(documentId);
+		this.store.closeDocument(documentId);
+		if (record) await this.bounded(this.tryDocumentClose(record.uri));
+		this.requestRenderSafe();
+	}
+
+	private async finishClose(documentId: string, uri: string | undefined): Promise<void> {
+		this.retireDocument(documentId);
 		if (uri !== undefined) await this.bounded(this.tryDocumentClose(uri));
 		this.store.closeDocument(documentId);
 		this.schedulePersist();
@@ -1446,6 +1450,22 @@ export class WorkspaceController {
 
 	// ─── internals: save/conflict ───────────────────────────────────────────
 
+	/** Register one outstanding save; echoes stay suppressed until the last settles. */
+	private beginSaveFlight(documentId: string): void {
+		this.savesInFlight.set(documentId, (this.savesInFlight.get(documentId) ?? 0) + 1);
+	}
+
+	/** Release one outstanding save; the entry drops only when none remain. */
+	private completeSaveFlight(documentId: string): void {
+		const remaining = (this.savesInFlight.get(documentId) ?? 0) - 1;
+		if (remaining > 0) this.savesInFlight.set(documentId, remaining);
+		else this.savesInFlight.delete(documentId);
+	}
+
+	private hasSaveInFlight(documentId: string): boolean {
+		return (this.savesInFlight.get(documentId) ?? 0) > 0;
+	}
+
 	private recordSaveConflict(
 		documentId: string,
 		uri: string,
@@ -1524,7 +1544,7 @@ export class WorkspaceController {
 		}
 		const token = begun.token;
 		let result;
-		this.savesInFlight.add(documentId);
+		this.beginSaveFlight(documentId);
 		try {
 			// The DISK revision is the explicit expectation; "" means the user
 			// accepted that the file currently does not exist on disk.
@@ -1533,7 +1553,7 @@ export class WorkspaceController {
 			this.notifySafe("error", `overwrite failed for ${displayName(uri)}: ${messageOf(error)}`);
 			return { status: "failed", documentId, message: messageOf(error) };
 		} finally {
-			this.savesInFlight.delete(documentId);
+			this.completeSaveFlight(documentId);
 		}
 		if (result.refused) {
 			this.notifySafe("warning", `overwrite refused for ${displayName(uri)}: ${result.refused.message}`);
@@ -1644,7 +1664,7 @@ export class WorkspaceController {
 	private applyFileChanged(uri: string, revision: string, origin: "save" | "external" | "agent"): void {
 		const document = this.findDocumentByUri(uri);
 		if (!document) return;
-		if (origin === "save" && this.savesInFlight.has(document.id)) {
+		if (origin === "save" && this.hasSaveInFlight(document.id)) {
 			// Our own save echo can race ahead of the save response; the
 			// handshake settles savedRevision, so never treat it as external.
 			return;

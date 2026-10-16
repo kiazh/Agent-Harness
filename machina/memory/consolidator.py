@@ -697,6 +697,7 @@ class MemoryConsolidator:
                     {"role": "user", "content": conversation},
                 ],
                 tools=[],
+                purpose="memory_consolidation",
             )
             # Parse LLM response as JSON array
             content = response.content.strip()

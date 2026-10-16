@@ -72,7 +72,7 @@ class FakeClient {
 			case "initialize":
 				return { version: "test", model: "m", provider: "p", cwd: "/tmp", branch: "main" } as T;
 			case "config.get":
-				return { config: {} } as T;
+				return { config: { nowplaying_enabled: false } } as T;
 			case "mode.get": {
 				// Session authority: MAIN runs full, everything else (and the
 				// session-less query) falls back to the global default ask.

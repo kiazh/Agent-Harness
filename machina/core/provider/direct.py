@@ -32,6 +32,7 @@ from machina.core.provider.transport import (
     _validate_messages,
     _validate_params,
 )
+from machina.core.provider.usage_map import parse_openai_usage
 from machina.core.usage import _estimate_tokens, usage_store
 
 
@@ -166,7 +167,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
         message = choice.get("message") or {}
         content = message.get("content", "")
         tool_calls = message.get("tool_calls", []) or []
-        usage = data.get("usage", {})
+        usage = parse_openai_usage(data.get("usage", {}))
 
         metrics.record_llm_call(
             session_id="",
@@ -189,11 +190,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
         response = LLMResponse(
             content=content,
             model=data.get("model", model),
-            usage={
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-                "total_tokens": usage.get("total_tokens", 0),
-            },
+            usage=usage,
             raw=data,
             tool_calls=tool_calls,
         )
@@ -315,11 +312,8 @@ class DirectProvider(LLMProvider, RateLimitBinding):
                 }
             )
         full_content = "".join(content_parts)
-        usage = {
-            "prompt_tokens": int(stream_usage.get("prompt_tokens", 0)),
-            "completion_tokens": int(stream_usage.get("completion_tokens", 0)),
-        }
-        if not usage["prompt_tokens"] and not usage["completion_tokens"]:
+        usage = parse_openai_usage(stream_usage)
+        if not usage.get("prompt_tokens") and not usage.get("completion_tokens"):
             # Estimates support turn accounting and display, but must never
             # release the conservative durable reservation as vendor usage.
             usage = {

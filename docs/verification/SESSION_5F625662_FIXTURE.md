@@ -29,7 +29,7 @@ Source export: `docs/verification/fixtures/session-5f625662.md` (12,176 lines / 
 ## Replay harness usage
 
 ```bash
-/Users/shadow/machina/.venv/bin/python -m pytest tests/test_replay_harness.py -v
+.venv/bin/python -m pytest tests/test_replay_harness.py -v
 ```
 
 `tests/test_replay_harness.py` holds the harness: it loads the fixtures,

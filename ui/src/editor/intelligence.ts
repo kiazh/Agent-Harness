@@ -1206,9 +1206,11 @@ function compareRows(a: ProblemRow, b: ProblemRow): number {
 
 /**
  * Display identity for the dedupe (finding 4): everything the pane shows
- * except the producer label. `code` stringifies so 0 stays distinct from
+ * except the producer label — including the version and display source the
+ * row prints as `[unversioned]` / `(source)`, so rows that render differently
+ * never collapse into one. `code` stringifies so 0 stays distinct from
  * undefined; the full range participates so same-start/different-span rows
- * stay distinct.
+ * stay distinct; `version` normalizes null to an empty field.
  */
 function problemRowKey(row: ProblemRow): string {
 	const { start, end } = row.range;
@@ -1222,6 +1224,8 @@ function problemRowKey(row: ProblemRow): string {
 		code,
 		String(row.severity),
 		row.message,
+		row.version === null ? "" : String(row.version),
+		row.source ?? "",
 	].join("\u0000");
 }
 

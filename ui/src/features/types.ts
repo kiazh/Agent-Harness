@@ -2,6 +2,7 @@
 
 import type { AutocompleteItem, SelectItem, SlashCommand } from "@earendil-works/pi-tui";
 import type { ConfigResult, GatewayEvent, HistoryEntry, SessionInfo } from "../protocol.ts";
+import type { NowPlayingState } from "../components/NowPlayingBar.ts";
 import type { WorkspaceController } from "../workspace/controller.ts";
 import type { UiPreferences } from "../workspace/preferences.ts";
 import type { ChatSide, WorkspaceMode } from "../workspace/state.ts";
@@ -116,6 +117,25 @@ export interface FeatureHost {
 	 * `/settings` menu. Optional: hosts without it fall back to the text dump.
 	 */
 	uiSettings?(): UiSettingsHost | undefined;
+	/**
+	 * Music surface (pinned now-playing bar): playback control, library
+	 * rescanning and folder/enabled persistence. Optional: hosts without it
+	 * report one honest notice instead of failing.
+	 */
+	music?(): MusicHost | undefined;
+}
+
+/** Now-playing surface for the /music command (implemented by App). */
+export interface MusicHost {
+	status(): NowPlayingState | undefined;
+	isEnabled(): boolean;
+	/** Persist the bar on/off; returns whether it saved. */
+	setEnabled(enabled: boolean): Promise<boolean>;
+	/** Re-read what is playing right now. */
+	refresh(): Promise<void>;
+	toggle(): Promise<void>;
+	next(): Promise<void>;
+	previous(): Promise<void>;
 }
 
 export interface Command extends SlashCommand {

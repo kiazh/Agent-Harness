@@ -42,6 +42,32 @@ state, approval, output, ui, dialogs, layout, features, app).
   return-to-end. Composer caps multiline input around the visible cursor
   (max 8 rows full density); empty and one-line states share a baseline.
 
+## Music bar
+
+- A pinned now-playing bar sits above the transcript in the chat column
+  (chat-only and split layouts alike): it is a sibling of the retained
+  transcript `ScrollView`, so it never scrolls away and never rebuilds scroll
+  state. It shows **what is playing on this computer** — any app (a browser
+  video, Spotify, Music, …) — not a library of its own. Density budgets:
+  three rows (title / artist · source / transport + progress) at ≥24 rows,
+  two rows at full density, one compact line at reduced, hidden at
+  compact/degraded. A click sends play/pause to the detected source when
+  that source accepts transport commands.
+- Detection is a gateway concern (`nowplaying.get`, `nowplaying.command`):
+  layered, local-only, and best-effort — system media APIs (MediaRemote)
+  first, then nowplaying-cli/media-control when installed, then Spotify/Music
+  via AppleScript, then the front YouTube tab of a running Chromium-family
+  browser or Safari. macOS Automation prompts are reported honestly
+  ("allow it in System Settings → Privacy & Security → Automation"), a
+  browser tab's playback state is `unknown` rather than guessed, and the bar
+  never invents a title. Elapsed time interpolates between 2 s polls while
+  playing; the transport line and equalizer advance at 250 ms; reduced
+  motion keeps the glyph static. `/music` is the keyboard surface
+  (play/pause, next/previous, status, on/off) and `nowplaying_enabled=false`
+  hides the bar entirely.
+- Whatever the OS provides stays on this machine: detection reads local app
+  state and never uploads metadata.
+
 ## Honest states
 
 - Tools: `running`, `awaiting_approval`, `success`, `error`, `interrupted`,

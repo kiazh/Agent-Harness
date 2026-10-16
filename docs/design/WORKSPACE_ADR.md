@@ -23,7 +23,7 @@ focus, cursor, mouse and resize support, then decide between adapting the existi
 | Hardware cursor in right-hand component | Supported | `CURSOR_MARKER` (`\x1b_pi:c\x07`) emitted in a line; `extractCursorPosition` maps through composited layout; components must implement `Focusable` and only emit the marker when focused (`dist/tui.js`) |
 | Mouse coordinates to local origin | Supported | `dispatchMouseToLayout` hit-tests retained frame geometry; handlers receive component-local `x/y` plus `screenX/screenY`, `width/height`; `press → {capture:true}` streams drag/release to the owner; synthesized `click` with `clickCount` (`dist/tui-alt-screen.js`) |
 | Resize without state loss | Supported | Components are never recreated on resize; `ScrollView.updateLayout` clamps and preserves `followingEnd`; leaf components see a new width in `render()`; no resize callback is delivered (components observe widths) |
-| Composer docked only in chat | Composition decision | Left pane = `VStack([ScrollView(transcript), composer dock])`; right pane has no composer |
+| Composer placement across modes | Composition decision | The composer is a full-width row beneath the panes in split/editor modes (beneath the transcript in chat-only), never inside a pane; the approval dock is a full-width row as well (`AppShell`/`WorkspaceShell` header comments) |
 | Line numbers + editable content without ANSI/cursor leakage | Supported via custom component | Leaf/scroll-node contract: `render(width): string[]`, every line ≤ width; cursor via marker; gutter is our own column |
 | Selection, undo/redo, bracketed paste | Must be built | Toolkit `Editor` has no selection model, undo-only (no redo), expands tabs, caps height at 30% of terminal, adds its own border; paste arrives as one bracketed string and needs no upstream change |
 
@@ -54,12 +54,12 @@ the workspace components).
 
 | Sequence | Toolkit owner | App/region policy | Verdict |
 |---|---|---|---|
-| `ctrl+w` | **composer Editor: delete-word-backward** | close-tab policy must be EDITOR-REGION-ONLY; composer keeps delete-word | fix required if bound globally |
-| `ctrl+left`/`ctrl+right` | **composer Editor: word motion** (`tui.editor.cursorWordLeft/Right`) | panes toggle must be EDITOR-REGION-ONLY (as of the audit it fires pre-gate: queue fix) | **fix required** |
+| `ctrl+w` | **composer Editor: delete-word-backward** | close-tab is gated to "not the chat composer" (fires while the editor, explorer or problems region owns focus); composer keeps delete-word | ok — gate implemented |
+| `ctrl+left`/`ctrl+right` | **composer Editor: word motion** (`tui.editor.cursorWordLeft/Right`) | panes toggle is EDITOR-REGION-GATED: the handler returns before the branch unless the editor region owns focus | ok — gate implemented |
 | `ctrl+t` | free in toolkit | explorer toggle global (composer does not use it) | ok |
 | `ctrl+p` | free in toolkit | Quick Open global | ok |
 | `ctrl+s` | free in toolkit (raw mode disables XOFF) | save (editor-gated today) | ok |
-| `ctrl+space` | NUL legacy; not in TUI_KEYBINDINGS | completion (editor-gated); **macOS input-source switch may eat it** | ok + document; `/editor complete` fallback queued |
+| `ctrl+space` | NUL legacy; not in TUI_KEYBINDINGS | completion (editor-gated); **macOS input-source switch may eat it** | ok + document; `/editor complete` fallback implemented (`features/workspace.ts`) |
 | `f12`, `shift+f12`, `f2` | free in toolkit | navigation/rename (editor-gated) | ok |
 | `f6`, `shift+f6` | free in toolkit (shift+F-keys need the legacy sequence decode — already handled) | focus cycle (global) | ok |
 | `ctrl+shift+a` | free in toolkit; Kitty-only CSI-u | attach selection (editor-gated); legacy ctrl+a stays select-all | ok |
@@ -72,39 +72,40 @@ the workspace components).
   keys may never reach the terminal. Fallbacks: `/workspace split|chat|editor`, F6 focus
   cycle, and the footer workspace hints.
 - **macOS input-source switch** defaults to Ctrl+Space: completion fallback is the
-  command/palette path (`/editor complete`, queued).
+  command/palette path (`/editor complete`).
 - Some terminals map Ctrl+T (new tab) or Ctrl+Shift+W/Ctrl+W (close tab); `/explorer`
-  and the notch grip remain the fallbacks. Ctrl+W is never bound globally: it stays
-  editor-region-only so the composer's delete-word is intact.
+  and the notch grip remain the fallbacks. Ctrl+W is never bound in the chat composer:
+  the close-tab binding fires only while another region owns focus, so the composer's
+  delete-word stays intact.
 - Shift+F-keys and Ctrl+Shift+A only arrive fully under the Kitty keyboard protocol;
   legacy terminals keep Ctrl+A (select all) and get the attach command instead.
 
 ## 5. Source map (integration seams, verified)
 
 UI:
-- `ui/src/main.ts:52-59` — per-launch token, `TuiAltScreen` (hardware cursor off by default), `GatewayClient`, `App`.
-- `ui/src/app.ts` — `App` (1711 lines): `onKey` 945–1045 (global funnel), `submit`/`submitTurn` 1047–1170, `onEvent` 1282–1474 (turn router; `onGatewayEvent`/`featureEventHandlers` at 183/406–411 is the workspace-event seam), `switchTo` 432–477 (session switch must not discard workspace docs), `openDialog` 819–851 (overlay system), approval dock via `shell.setDock` 1569–1578.
-- `ui/src/components/AppShell.ts` — retained `transcriptScroll` (line 21/38), `viewportRoot` `[LAYOUT_NODE]` wrapper 41–50, `build()` 122–134, `densityFor` 142–147. T2 replaces only the root composition.
-- `ui/src/components/AssistantTurn.ts` 55–61 + `ToolPanel.ts` 23–49 — the fixed 110/104 width caps replaced by `design/responseLayout.ts` (T1). `renderToolPanel`/`panelContentWidth` stay untouched.
-- `ui/src/transcript.ts` — `Transcript.apply` 176–310; workspace events do NOT enter this reducer.
+- `ui/src/main.ts` — per-launch token, `TuiAltScreen` (hardware cursor off by default), `GatewayClient`, `App`.
+- `ui/src/app.ts` — `App`: `onKey` (global funnel; workspace keys routed by `handleWorkspaceKey`), `submit`/`submitTurn`, `onEvent` (turn router; `onGatewayEvent`/`featureEventHandlers` is the workspace-event seam), `switchTo` (session switch must not discard workspace docs), `openDialog` (overlay system), approval dock via `shell.setDock`.
+- `ui/src/components/AppShell.ts` — retained `transcriptScroll`, `viewportRoot` `[LAYOUT_NODE]` wrapper, `build()`/`densityFor`; the workspace composition rebuilds the root around the same component instances (panes row, then full-width dock/composer/footer).
+- `ui/src/components/AssistantTurn.ts` + `ToolPanel.ts` — assistant sizing moved to `design/responseLayout.ts` (`responseGeometry`, T1); `assistantPanelContentWidth` is now a delegating legacy seam; `renderToolPanel`/`panelContentWidth`/`TOOL_PANEL_MAX_WIDTH` remain the tool-frame seam.
+- `ui/src/transcript.ts` — `Transcript.apply`; workspace events do NOT enter this reducer.
 - `ui/src/design/text.ts` — `sanitizeDisplay`/`displayWidth`/`wrapDisplay`/`countRenderedLines`; `spacing.ts` — `transcriptInset`/`panelInset`; `theme.ts` — semantic slots + `repairFill`.
-- `ui/src/gateway.ts` — `JsonRpcChannel`/`GatewayClient` (token attached per request, line 161); `protocol.ts` hand-written result types; `events.ts` generated from `machina/protocol/events.json` (do not hand-edit).
+- `ui/src/gateway.ts` — `JsonRpcChannel`/`GatewayClient` (token attached per request); `protocol.ts` hand-written result types; `events.ts` generated from `machina/protocol/events.json` (do not hand-edit).
 - `ui/src/clipboard.ts` — real clipboard (`pbcopy`/`Set-Clipboard`/`wl-copy`/`xclip`).
 - Commands: `features/index.ts` `COMMANDS`/`SLASH_COMMANDS`, `commandDispatch.ts` conflict table, `commands.ts` parsing/help.
 
 Python:
-- `machina/gateway/server.py` — newline-JSON-RPC, `add_method` 255–261, dispatch 301–355, auth token gate, event push pattern (`features/auth_chatgpt.py:127-139`), `Gateway.close` ordering 357–408.
-- `machina/gateway/features/__init__.py` — `METHODS` 143–233 + `register()` 236–239; add `workspace.py`.
+- `machina/gateway/server.py` — newline-JSON-RPC, `add_method`, `handle_line` dispatch, auth token gate, event push pattern (`features/auth_chatgpt.py`), `Gateway.close` ordering.
+- `machina/gateway/features/__init__.py` — `METHODS` + `register()`; add `workspace.py`.
 - `machina/protocol/events.json` — chat event schema only; workspace events are a separate hand-written family (`machina/workspace/models.py` ↔ `ui/src/workspace/protocol.ts`) that never carry turn IDs.
-- `machina/core/runtime.py` — `RuntimeServices` (lazy service getter idiom + `shutdown` 189–297) — WorkspaceService/LspManager live here.
+- `machina/core/runtime.py` — `RuntimeServices` (lazy service getter idiom + `shutdown`) — WorkspaceService/LspManager live here.
 - `machina/core/child_process.py` — `sanitized_env`, `group_members`, `kill_tree`, `run_bounded` — reuse for LSP spawn/kill.
-- `machina/tools/file.py` — containment primitives (`resolve_path` 114–187, `_open_secure_read`, `_open_parent_dir_fd`, `_atomic_write_file_at`); extract a shared leaf for the workspace service.
+- `machina/tools/file.py` — containment primitives (`resolve_path`, `_open_secure_read`, `_open_parent_dir_fd`, `_atomic_write_file_at`); extract a shared leaf for the workspace service.
 - `machina/core/self_knowledge.py` — `FEATURES` + `configuration()` + `harness_status` (tokens pinned by DevTools tests).
 - `machina/permissions/` — broker/user vs agent authorization (workspace methods answer to the gateway token; agent tool requests flow through the broker).
 
 Tests:
 - UI: `ui/test/*.test.ts` (flat; support files excluded by glob), harness patterns per `test/support/reference.ts`, `test/layout.test.ts` boot, `test/ui.test.ts` widget render swarms.
-- Python: `/Users/shadow/Machina-DevTools/tests` via `run-tests.sh` (`MACHINA_REPO`), ruff/bandit gates in main-repo CI.
+- Python: the sibling `Machina-DevTools` checkout's `tests` via `run-tests.sh` (`MACHINA_REPO`); ruff/bandit gates in main-repo CI.
 
 ## 6. Consequences
 

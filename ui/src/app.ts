@@ -31,6 +31,10 @@ import {
 	completionPopupModelFrom,
 } from "./components/IntelligencePopups.ts";
 import { AnimationCoordinator } from "./design/motion.ts";
+import type { AnimationSubscription } from "./design/motion.ts";
+import { NowPlayingBar } from "./components/NowPlayingBar.ts";
+import { NowPlayingController } from "./nowplaying/controller.ts";
+import type { MusicHost } from "./features/types.ts";
 import { type FamilySession, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS, type WorkspaceHost } from "./features/index.ts";
 import type { WorkspaceAttachmentHost } from "./features/workspace.ts";
 import { guardSubmit } from "./commandDispatch.ts";
@@ -73,6 +77,7 @@ import { editorTheme, getSkin, setSkin, SKIN_NAMES, skinDescription } from "./th
 import { Transcript } from "./transcript.ts";
 import {
 	WorkspaceController,
+	type ConflictResolution,
 	type DirtyCloseChoice,
 	type IntelligenceOutcome,
 	type SaveConflictDescriptor,
@@ -204,6 +209,22 @@ function fenceLanguage(languageId: string): string {
 	return languageId.replace(/[^A-Za-z0-9_+.#-]/g, "");
 }
 
+/** Completion-prefix characters: the identifier run the list is filtered by. */
+const COMPLETION_PREFIX_CHAR = /[A-Za-z0-9_$]/;
+
+/**
+ * Word prefix before the caret (finding 6): the trailing identifier run at
+ * `cursorOffset`, used to refilter an open completion list after a typed
+ * character. Punctuation/whitespace end the run, so the filter never spans
+ * tokens.
+ */
+function completionPrefixBefore(text: string, cursorOffset: number): string {
+	const offset = Math.max(0, Math.min(cursorOffset, text.length));
+	let start = offset;
+	while (start > 0 && COMPLETION_PREFIX_CHAR.test(text[start - 1] ?? "")) start -= 1;
+	return text.slice(start, offset);
+}
+
 /** True when an untrusted `workspace.open` payload carries a usable binding. */
 function isWorkspaceIdentity(value: unknown): boolean {
 	if (typeof value !== "object" || value === null) return false;
@@ -265,6 +286,9 @@ export class App implements FeatureHost {
 	 * recomputes density budgets from actual terminal dimensions.
 	 */
 	private readonly shell: AppShell;
+	private readonly nowPlayingBar: NowPlayingBar;
+	private nowPlayingController: NowPlayingController | undefined;
+	private nowPlayingAnim: AnimationSubscription | undefined;
 	private lastPrompt = "";
 	private lastEscAt = 0;
 	private version = "";
@@ -373,6 +397,10 @@ export class App implements FeatureHost {
 	private activeRegion: FocusRegion = "chat-composer";
 	private problemsOpen = false;
 	private completionSession: CompletionSession | undefined;
+	/** Mounted completion popup for the open session (refilter setModel seam). */
+	private completionPopup: CompletionPopup | undefined;
+	/** Orders deferred completion refilters; a newer pass supersedes older ones. */
+	private completionRefilterSeq = 0;
 	private quickOpenPane: QuickOpenPane | undefined;
 	private quickOpenHandle: OverlayHandle | undefined;
 	/** Re-entrancy guard for the dirty-exit review. */
@@ -436,6 +464,8 @@ export class App implements FeatureHost {
             return true;
         };
 		this.shell = new AppShell(tui, this.transcriptView, this.composer, this.footer);
+		this.nowPlayingBar = new NowPlayingBar(this.coordinator);
+		this.shell.setPinnedBar(this.nowPlayingBar);
 		this.editor.setAutocompleteProvider(new ArgumentAwareAutocompleteProvider(SLASH_COMMANDS, process.cwd()));
 		this.editor.setAutocompleteMaxVisible(8);
 		this.editor.onSubmit = (text) => void this.submit(text);
@@ -470,6 +500,10 @@ export class App implements FeatureHost {
 
 		let initializedCwd: string | undefined;
 		let initializedCwdFull: string | undefined;
+		// Music detection can stall for seconds (including a blocking macOS
+		// Automation prompt); it is joined at the end of start() but MUST NOT
+		// delay session creation (finding 8).
+		let nowPlayingReady: Promise<void> | undefined;
 		try {
 			const init = await this.client.request<InitializeResult>(
 				"initialize",
@@ -488,6 +522,13 @@ export class App implements FeatureHost {
 					// cache invalidation/full redraw as live theme selection.
 					this.restyle();
 				}
+				// Kick off the pinned now-playing bar here, but never await it
+				// before the session exists (finding 8). start() joins the
+				// promise before returning, so the bar still lands on the first
+				// frame while session creation stays unblocked.
+				nowPlayingReady = this.startNowPlaying(config).catch(() => {
+					// The music bar is optional; detection failures never block chat.
+				});
 			} catch {
 				// Saved skin is best-effort; the default applies otherwise.
 			}
@@ -542,6 +583,9 @@ export class App implements FeatureHost {
 			const root = initializedCwdFull ?? (initializedCwd !== undefined && isAbsolute(initializedCwd) ? initializedCwd : undefined);
 			if (root !== undefined) this.startWorkspace(root);
 		}
+		// Join the music-detection chain now that the session exists: the bar
+		// belongs to the first frame, but must never block session creation.
+		await nowPlayingReady;
 		this.tui.requestRender();
 	}
 
@@ -652,6 +696,58 @@ export class App implements FeatureHost {
 				await this.integration?.controller.lspStatus();
 			},
 		};
+	}
+
+	// ─── music (pinned now-playing bar) ─────────────────────────────────────
+
+	/**
+	 * FeatureHost: playback surface for `/music`. Undefined until the startup
+	 * config loads (or when the host never received one), so commands report
+	 * one honest notice instead of failing.
+	 */
+	music(): MusicHost | undefined {
+		return this.nowPlayingController;
+	}
+
+	/**
+	 * Start the pinned now-playing bar: config gate, first reading, and the
+	 * shared-coordinator subscriptions (poll always; 250 ms animation only
+	 * while audio is actually playing).
+	 */
+	private async startNowPlaying(config: Record<string, unknown>): Promise<void> {
+		this.nowPlayingController = new NowPlayingController({
+			bar: this.nowPlayingBar,
+			request: (method, params) => this.client.request(method, params ?? {}, 30_000),
+			onChange: () => {
+				this.syncNowPlayingTicks();
+				this.tui.requestRender();
+			},
+		});
+		await this.nowPlayingController.initialize(config);
+	}
+
+	/**
+	 * Subscribe/detach the coordinator demand for the bar. Polling is a slow
+	 * 2 s heartbeat; the equalizer and interpolated progress need 250 ms
+	 * frames, but only while audio is playing.
+	 */
+	private syncNowPlayingTicks(): void {
+		// Data polling is owned by the controller (its own 2 s interval,
+		// stopped on exit/disable); the coordinator here only drives render
+		// demand: 250 ms frames for the equalizer and interpolated clock
+		// while audio is actually playing.
+		const controller = this.nowPlayingController;
+		const state = controller?.status();
+		const playing =
+			(controller?.isEnabled() ?? false) &&
+			state?.state === "playing" &&
+			Boolean(state.title);
+		if (playing && !this.nowPlayingAnim) {
+			this.nowPlayingAnim = this.coordinator.subscribe("nowplaying.anim", 250);
+		} else if (!playing && this.nowPlayingAnim) {
+			this.nowPlayingAnim.stop();
+			this.nowPlayingAnim = undefined;
+		}
 	}
 
 	/** Apply one preference, persist it, and hand back the effective set. */
@@ -1144,7 +1240,10 @@ export class App implements FeatureHost {
 				const previous = this.dialogs.at(-1);
 				if (this.approvalDialogs.size) this.showApprovalDock();
 				else if (previous) { previous.handle.setHidden(false); previous.handle.focus(); }
-				else if (!this.exiting) this.tui.setFocus(this.editor);
+				// The composer owns focus after the last dialog (finding 3):
+				// route through the region router so activeRegion agrees, or the
+				// editor-scoped gates would still think the editor owns keys.
+				else if (!this.exiting) this.setFocusForRegion("chat-composer");
 				this.tui.requestRender();
 				done(value);
 			};
@@ -1224,6 +1323,9 @@ export class App implements FeatureHost {
 		this.inFlightTimers.clear();
 		this.transcript.suspend();
 		this.invalidateApprovals();
+		this.nowPlayingController?.stop();
+		this.nowPlayingAnim?.stop();
+		this.nowPlayingAnim = undefined;
 		this.coordinator.dispose();
 		for (const dialog of [...this.dialogs].reverse()) dialog.cancel();
 		this.inputListenerDisposer?.();
@@ -1359,10 +1461,17 @@ export class App implements FeatureHost {
 			// An editor intelligence popup (completion) owns Enter/Tab/Esc and
 			// arrows while it is open. This runs BEFORE the running-turn Esc
 			// branch: Esc dismisses the top popup and must not cancel a chat turn.
-			if (integration.pane.handleIntelligenceKey(data) === "consumed") {
+			// Region-gated (finding 4b): a popup whose region lost focus must
+			// never consume keys from whoever owns them now.
+			if (this.activeRegion === "editor" && integration.pane.handleIntelligenceKey(data) === "consumed") {
 				this.tui.requestRender();
 				return { consume: true };
 			}
+			// Completion type-to-filter (finding 6): this key falls through to
+			// the editor, which may edit the buffer under an open list. One
+			// deferred pass re-syncs the session; without an edit (motion keys,
+			// consumed workspace keys) it no-ops on the version check.
+			if (this.completionSession && this.activeRegion === "editor") this.scheduleCompletionRefilter();
 			// The Problems pane owns Esc while focused: it closes the section
 			// instead of falling into the double-Esc prompt refill or stopping
 			// the running turn.
@@ -1854,6 +1963,16 @@ export class App implements FeatureHost {
 			// inside the same visible column height as the editor pane.
 			integration.explorerPane.setRowBudget(Math.max(3, layout.explorer.rows - chrome - 2));
 		}
+		// Focus reconciliation (finding 1): the recomposed geometry may have
+		// hidden the region that owns focus (e.g. chat maximized while the
+		// editor was active). pi-tui would keep delivering keys to the now
+		// unmounted pane — typing silently editing an invisible buffer — so
+		// retarget the composer, the only always-visible region. The nested
+		// sync from setFocusForRegion terminates immediately: the composer is
+		// always in focusRegions(), so this never re-enters the branch.
+		if (!this.focusRegions().includes(this.activeRegion)) {
+			this.setFocusForRegion("chat-composer");
+		}
 		this.tui.requestRender();
 	}
 
@@ -1885,7 +2004,12 @@ export class App implements FeatureHost {
 
 	private cycleFocus(direction: 1 | -1): void {
 		const regions = this.focusRegions();
-		if (regions.length <= 1) return;
+		// A single visible region still takes focus: after a chat maximize F6
+		// must hand the composer its focus instead of early-returning.
+		if (regions.length <= 1) {
+			this.setFocusForRegion(regions[0] ?? "chat-composer");
+			return;
+		}
 		const index = regions.indexOf(this.activeRegion);
 		const next = regions[(index + direction + regions.length) % regions.length] ?? "chat-composer";
 		this.setFocusForRegion(next);
@@ -1903,6 +2027,9 @@ export class App implements FeatureHost {
 			(region === "explorer" && this.workspaceLayout?.explorer !== undefined) ||
 			(region === "problems" && this.problemsOpen && this.workspaceLayout?.editor !== undefined);
 		this.activeRegion = visible ? region : "chat-composer";
+		// A completion list is editor-scoped: it must not stay mounted (and
+		// keep consuming keys) after focus left the editor (finding 4a).
+		if (this.activeRegion !== "editor" && this.completionSession) this.clearCompletion();
 		if (!integration || !visible) {
 			this.tui.setFocus(this.editor);
 		} else {
@@ -2151,7 +2278,15 @@ export class App implements FeatureHost {
 			position: context.position,
 		});
 		this.completionSession = session;
-		const popup = new CompletionPopup({});
+		// Mouse acceptance (finding 5): a click selects the clicked row in the
+		// machine first, then the popup's accept action fires. Keyboard and
+		// dismiss hookups stay unchanged.
+		const popup = new CompletionPopup({
+			onSelect: (index) => {
+				session.setSelectedIndex(index);
+			},
+		});
+		this.completionPopup = popup;
 		popup.onAction = (action) => {
 			if (action.kind === "accept") this.acceptCompletion();
 		};
@@ -2197,9 +2332,58 @@ export class App implements FeatureHost {
 		this.clearCompletion();
 	}
 
+	/**
+	 * Deferred type-to-filter (finding 6): a key fell through to the editor and
+	 * may have edited the buffer under an open completion list. The microtask
+	 * runs after the focused view applied the edit, so the refilter sees the
+	 * landed text/version instead of the stale pre-key state.
+	 */
+	private scheduleCompletionRefilter(): void {
+		const session = this.completionSession;
+		if (!session) return;
+		queueMicrotask(() => this.refilterCompletion(session));
+	}
+
+	/**
+	 * Re-sync an open completion session after the buffer moved on. A plain
+	 * setPrefix() is not enough: it keeps the version captured when the list
+	 * was requested, and accept() would refuse the (now) mismatched buffer as
+	 * stale. rerun() re-captures the current version and refetches for the
+	 * same caret, so the next accept passes the version gate. The existing
+	 * snapshot is refiltered optimistically while that request is in flight.
+	 */
+	private refilterCompletion(session: CompletionSession): void {
+		if (this.completionSession !== session || this.exiting) return;
+		const integration = this.integration;
+		const popup = this.completionPopup;
+		if (!integration || !popup || this.activeRegion !== "editor") return;
+		const record = integration.store.getDocument(session.documentId);
+		if (!record || session.capturedVersion === record.version) return;
+		const cursorOffset = integration.store.getViewState(session.documentId)?.cursorOffset ?? 0;
+		const prefix = completionPrefixBefore(record.text, cursorOffset);
+		const position = offsetToPosition(record.text, cursorOffset);
+		const seq = ++this.completionRefilterSeq;
+		void session.rerun(prefix, position).then((state) => {
+			// A newer refilter, a closed session or an exit owns the surface now.
+			if (this.completionSession !== session || this.exiting || seq !== this.completionRefilterSeq) return;
+			if (state === "visible") {
+				popup.setModel(completionPopupModelFrom(session));
+				this.tui.requestRender();
+				return;
+			}
+			this.clearCompletion();
+		}).catch(() => {
+			if (this.completionSession === session && seq === this.completionRefilterSeq) this.clearCompletion();
+		});
+		popup.setModel(completionPopupModelFrom(session));
+		this.tui.requestRender();
+	}
+
 	private clearCompletion(): void {
 		this.completionSession?.close("dismissed");
 		this.completionSession = undefined;
+		this.completionPopup = undefined;
+		this.completionRefilterSeq += 1;
 		this.integration?.pane.setIntelligence(undefined);
 		this.tui.requestRender();
 	}
@@ -2332,10 +2516,14 @@ export class App implements FeatureHost {
 		}
 	}
 
-	/** Reload disk / Overwrite (explicit) / Keep editing, per plan §9. */
-	private async resolveSaveConflict(conflict: SaveConflictDescriptor): Promise<void> {
+	/**
+	 * Reload disk / Overwrite (explicit) / Keep editing, per plan §9. Returns
+	 * the controller resolution so close-flow callers can continue the close
+	 * after a conflict detour (finding 7).
+	 */
+	private async resolveSaveConflict(conflict: SaveConflictDescriptor): Promise<ConflictResolution | undefined> {
 		const integration = this.integration;
-		if (!integration) return;
+		if (!integration) return undefined;
 		const choice = await this.pick(`Save conflict: ${displayUriName(conflict.uri)}`, [
 			{ value: "reload", label: "Reload disk", description: "Discard buffer edits and adopt the file on disk" },
 			{ value: "overwrite-explicit", label: "Overwrite (explicit)", description: "Write this buffer over the file on disk" },
@@ -2349,6 +2537,7 @@ export class App implements FeatureHost {
 			this.refreshEditorView(conflict.documentId);
 		}
 		this.tui.requestRender();
+		return resolution;
 	}
 
 	/** Ctrl+W / `/editor close` path: close the active tab, dirty-guarded. */
@@ -2373,8 +2562,18 @@ export class App implements FeatureHost {
 			if (!choice) return;
 			const resolved = await integration.controller.resolveClose(documentId, choice.value as DirtyCloseChoice);
 			if (resolved.status === "closed") this.afterTabClosed(documentId);
-			else if (resolved.status === "save-conflict") await this.resolveSaveConflict(resolved.conflict);
-			else if (resolved.status === "needs-decision") {
+			else if (resolved.status === "save-conflict") {
+				// The close decision survives the conflict detour (finding 7):
+				// once the save/overwrite (or reload) cleared the buffer, run the
+				// already-chosen close again — otherwise the tab silently stays
+				// open after the user answered "Save and close". Keep editing
+				// leaves the tab open (and dirty) on purpose.
+				const conflict = await this.resolveSaveConflict(resolved.conflict);
+				if (conflict?.status === "saved" || conflict?.status === "reloaded") {
+					const closed = await integration.controller.resolveClose(documentId, "discard");
+					if (closed.status === "closed") this.afterTabClosed(documentId);
+				}
+			} else if (resolved.status === "needs-decision") {
 				this.print("The file changed while saving; save again or discard.", "warning");
 			}
 			return;
@@ -2552,7 +2751,9 @@ export class App implements FeatureHost {
 		this.quickOpenHandle?.hide();
 		this.quickOpenHandle = undefined;
 		pane.focused = false;
-		if (!this.exiting) this.tui.setFocus(this.editor);
+		// Dismissing the overlay returns focus to the composer (finding 3);
+		// the region router keeps the recorded region honest.
+		if (!this.exiting) this.setFocusForRegion("chat-composer");
 		this.tui.requestRender();
 	}
 
@@ -3146,7 +3347,10 @@ export class App implements FeatureHost {
 		} else {
 			const previous = this.dialogs.at(-1);
 			if (previous) { previous.handle.setHidden(false); previous.handle.focus(); }
-			else if (!this.exiting) this.tui.setFocus(this.editor);
+			// Releasing the last approval returns focus to the composer
+			// (finding 3) through the region router, so the editor-scoped gates
+			// read the region that actually owns keys.
+			else if (!this.exiting) this.setFocusForRegion("chat-composer");
 			if (this.footer.status === "awaiting_approval") this.footer.status = this.running ? "working" : "ready";
 		}
 		this.tui.requestRender();

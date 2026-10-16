@@ -264,8 +264,14 @@ class LspFraming:
 
     @staticmethod
     def encode(message: Mapping[str, Any]) -> bytes:
-        """ASCII headers, CRLF separator, UTF-8 JSON body (byte Content-Length)."""
-        body = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        """ASCII headers, CRLF separator, UTF-8 JSON body (byte Content-Length).
+
+        ``ensure_ascii=True`` keeps the JSON body pure ASCII: a lone surrogate
+        in server-supplied data (e.g. an echoed request method) is escaped
+        instead of making ``encode`` raise and leaving a server request
+        unanswered.
+        """
+        body = json.dumps(message, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
         return b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
 
     def feed(self, chunk: bytes) -> list[dict[str, Any]]:
@@ -1167,8 +1173,24 @@ class LspConnection:
             response["error"] = error
         else:
             response["result"] = result
-        with contextlib.suppress(LspError):
+        try:
             await self._send(response)
+        except LspError:
+            pass
+        except UnicodeError:
+            # Never leave a server request unanswered: fall back to a
+            # plain-ASCII internal error when a supplied value cannot be
+            # encoded even with ASCII escaping.
+            fallback: dict[str, Any] = {
+                "jsonrpc": "2.0",
+                "id": request_id if isinstance(request_id, int) else None,
+                "error": {
+                    "code": JSONRPC_INTERNAL_ERROR,
+                    "message": "server request response could not be encoded",
+                },
+            }
+            with contextlib.suppress(LspError, UnicodeError):
+                await self._send(fallback)
 
     # -- failure handling ----------------------------------------------------
 

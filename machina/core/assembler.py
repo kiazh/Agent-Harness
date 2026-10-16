@@ -99,12 +99,16 @@ class PromptAssembler:
         recent_chunks: list[dict[str, Any]],
         retrieved_chunks: list[tuple[ContextChunk, float]],
         query: str,
+        *,
+        omitted_evidence: int = 0,
     ) -> str:
         """Assemble a prompt within the token budget.
 
         Keep the system instructions and current query first, then use any
         remaining space for the goal, the latest compaction summary, recent
         activity, and retrieved context — in that priority order.
+        ``omitted_evidence`` discloses budget-dropped retrieved entries so a
+        trimmed section is never mistaken for the full evidence set.
         """
         budget = max(1, self.session_budget)
         sections: dict[str, str] = {}
@@ -170,7 +174,7 @@ class PromptAssembler:
             ]
             if recent_parts:
                 add("recent", "\n\n## Recent Activity\n" + "\n".join(recent_parts))
-        if retrieved_chunks:
+        if retrieved_chunks or omitted_evidence:
             # Summaries are owned by the reserved section above; rendering
             # them again here would duplicate the compacted context.
             relevant_parts = [
@@ -178,8 +182,19 @@ class PromptAssembler:
                 for chunk, _score in retrieved_chunks
                 if not self._is_compaction_summary(chunk)
             ]
-            if relevant_parts:
-                add("retrieved", "\n\n## Relevant Context\n" + "\n".join(relevant_parts))
+            if relevant_parts or omitted_evidence:
+                # The omission note leads the section: sections are fitted by
+                # cutting a prefix, so a trailing note would be the first
+                # thing lost under budget pressure — exactly when the
+                # disclosure matters.
+                note = (
+                    f"[{omitted_evidence} lower-ranked retrieved excerpts omitted "
+                    f"by the token budget]\n"
+                    if omitted_evidence
+                    else ""
+                )
+                section = "\n\n## Relevant Context\n" + note + "\n".join(relevant_parts)
+                add("retrieved", section)
         return render()
 
     @staticmethod

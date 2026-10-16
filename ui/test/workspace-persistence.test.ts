@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+	MAX_PERSISTED_DOCUMENT_BYTES,
 	MAX_PERSISTED_ROOTS,
 	WorkspacePersistence,
 	parseWorkspaceState,
@@ -237,4 +238,43 @@ test("a rejecting write propagates; a throwing read never blocks a save", async 
 	await persistence.save("/ws/a", fullState());
 	store.failGet = false;
 	assert.deepEqual(await persistence.load("/ws/a"), { state: fullState(), migrated: false });
+});
+
+test("byte-bound eviction keeps the stored document under the backend 64 KiB cap", async () => {
+	const store = new MemoryStore();
+	const persistence = new WorkspacePersistence(store);
+	// Two 4 KiB URIs per root (~8 KiB serialized each): nine roots exceed the
+	// backend bound, so the oldest roots must be evicted before writing.
+	const bigState = (): WorkspacePersistedState => ({
+		version: 1,
+		requestedMode: "editor",
+		splitRatio: 0.6,
+		explorerRequested: true,
+		explorerWidth: 32,
+		openUris: [`file:///ws/${"a".repeat(4000)}`, `file:///ws/${"b".repeat(4000)}`],
+		activeUri: "file:///ws/b.ts",
+	});
+	for (let index = 0; index < 9; index++) {
+		await persistence.save(`/ws/big-root-${String(index).padStart(2, "0")}`, bigState());
+	}
+	const bytes = new TextEncoder().encode(store.value ?? "").length;
+	assert.ok(bytes < 64 * 1024, `stored document must respect WORKSPACE_UI_STATE_MAX_BYTES: ${bytes}`);
+	assert.ok(bytes < MAX_PERSISTED_DOCUMENT_BYTES, "the safety margin keeps the document under the bound");
+	const byRoot = byRootOf(store);
+	assert.ok(Object.keys(byRoot).length < 9, "byte-bound eviction actually ran");
+	assert.equal(byRoot["/ws/big-root-00"], undefined, "the least recently saved root is evicted first");
+	assert.ok(byRoot["/ws/big-root-08"], "the just-saved root always survives its own save");
+	assert.deepEqual(await persistence.load("/ws/big-root-08"), { state: bigState(), migrated: false });
+});
+
+test("small documents under the byte bound keep every root", async () => {
+	const store = new MemoryStore();
+	const persistence = new WorkspacePersistence(store);
+	assert.equal(
+		MAX_PERSISTED_DOCUMENT_BYTES,
+		64 * 1024,
+		"bound matches WORKSPACE_UI_STATE_MAX_BYTES in core/config.py",
+	);
+	for (let index = 0; index < 5; index++) await persistence.save(`/ws/small-${String(index)}`, fullState());
+	assert.equal(Object.keys(byRootOf(store)).length, 5, "no spurious eviction for a small document");
 });

@@ -32,6 +32,7 @@ from machina.core.exceptions import (
 from machina.core.images import IMAGE_TOKEN_RESERVE, validate_images
 from machina.core.metrics import metrics
 from machina.core.models import AgentResponse, LLMResponse, StreamEvent, ToolDefinition
+from machina.core.projection import project_retrieved
 from machina.core.prompt import (
     _effective_turn_budget,
     _request_context_tokens,
@@ -52,6 +53,7 @@ from machina.core.prompt import (
 from machina.core.provider import LLMProvider, audit_log, get_provider
 from machina.core.session import Session, session_manager
 from machina.core.session_mode import turn_scope
+from machina.core.tool_views import bounded_tool_view, mark_turn_accepted
 from machina.core.turn_flow import collect_pauses, stagnation_step, stopped_response
 from machina.core.usage import provider_identity, usage_store
 from machina.memory.consolidator import MemoryConsolidator
@@ -706,6 +708,9 @@ class BaseReActAgent:
         except Exception as e:
             logger.warning("Archived context retrieval failed: %s", e)
 
+        # T5 evidence projection (dedup + budget) with prompt disclosure.
+        retrieved_chunks, omitted_evidence = project_retrieved(retrieved_chunks)
+
         # Prompt sections assemble in machina.core.prompt (moves-only): the
         # composition order below matches the previous inline version exactly,
         # so the assembled text is byte-identical.
@@ -729,6 +734,7 @@ class BaseReActAgent:
             recent,
             retrieved_chunks,
             user_message,
+            omitted_evidence=omitted_evidence,
         )
         messages = build_turn_messages(prompt, images)
         return session, messages
@@ -1293,14 +1299,21 @@ class BaseReActAgent:
                         )
                         item["_hooked"] = True
 
+                # T2/T3: retain the original and append a bounded view.
+                view, artifact_id = await bounded_tool_view(
+                    tool_name,
+                    result_str,
+                    session_id=session_id,
+                    agent_id=self.agent_id,
+                    status=_tool_outcome(item),
+                )
+                if artifact_id:
+                    item["_artifact_handle"] = artifact_id
                 # Durably record the action exactly once (context chunk +
                 # approval retirement + tool_calls_made entry). Shared with the
                 # cancellation finalizer so the normal path stays unchanged.
                 await self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
-                # Skill pages and status snapshots already have bounded output.
-                # Preserve continuation offsets and complete JSON beyond the preview cap.
-                message_limit = tool_message_limit(tool_name)
-                self._append_tool_messages(messages, response, tc, result_str[:message_limit])
+                self._append_tool_messages(messages, response, tc, view)
         finally:
             await self._finalize_completed_tools(
                 planned, session_id, pending_chunks, tool_calls_made
@@ -1365,6 +1378,11 @@ class BaseReActAgent:
             "result": result_str[:_STORED_TOOL_RESULT_CHARS],
             "result_truncated": len(result_str) > _STORED_TOOL_RESULT_CHARS,
         }
+        # When the full result was retained as an artifact, the durable chunk
+        # points at it so later sessions/turns can recover the exact original
+        # beyond the chunk copy's 65k cap.
+        if item.get("_artifact_handle"):
+            payload["artifact_handle"] = item["_artifact_handle"]
         if pending_chunks is not None:
             pending_chunks.append(
                 {
@@ -1917,6 +1935,8 @@ class ReActAgent(BaseReActAgent):
                             iterations=iteration + 1,
                         )
                         self._schedule_learning_review(session_id, user_message, completed)
+                        # T0: attribute the accepted completion for cost views.
+                        await mark_turn_accepted(session_id, self.agent_id, usage_store)
                         return completed
                     if response.content:
                         pending_chunks.append(
@@ -2181,6 +2201,8 @@ class ReActAgent(BaseReActAgent):
                             iterations=iteration + 1,
                         )
                         self._schedule_learning_review(session_id, user_message, completed)
+                        # T0: attribute the accepted completion for cost views.
+                        await mark_turn_accepted(session_id, self.agent_id, usage_store)
                         yield StreamEvent(
                             type="done",
                             response=completed,

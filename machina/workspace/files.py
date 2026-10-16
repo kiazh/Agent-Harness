@@ -318,9 +318,8 @@ class WorkspaceFiles:
             size_bytes=len(data),
         )
 
-    @staticmethod
-    def _verify_fd(fd: int, candidate: Path, *, display: str) -> None:
-        """fstat/lstat dev+ino equality (TOCTOU guard, no /proc dependency)."""
+    def _verify_fd(self, fd: int, candidate: Path, *, display: str) -> None:
+        """fstat/lstat dev+ino equality plus post-open containment (TOCTOU guard)."""
         try:
             st_fd = os.fstat(fd)
             st_path = os.lstat(candidate)
@@ -331,6 +330,27 @@ class WorkspaceFiles:
         if stat.S_ISLNK(st_path.st_mode):
             raise WorkspaceError("denied", f"path is a symlink: {display}")
         if (st_fd.st_ino, st_fd.st_dev) != (st_path.st_ino, st_path.st_dev):
+            raise WorkspaceError("denied", f"path changed during access (TOCTOU): {display}")
+        self._verify_containment(candidate, display=display)
+
+    def _verify_containment(self, candidate: Path, *, display: str) -> None:
+        """Re-resolve *candidate* after the open and require it to stay inside.
+
+        The dev+ino comparison alone is blind to an ancestor directory that is
+        swapped for a symlink pointing outside the root between ``resolve()``
+        and ``open()``: the descriptor and the lstat path then both refer to
+        the same outside file. Re-walking the realpath after the open (the
+        same post-open check ``machina/tools/file.py`` performs) closes that
+        window; anything that no longer re-resolves inside the root is refused
+        as a TOCTOU denial.
+        """
+        try:
+            real = Path(os.path.realpath(candidate))
+        except OSError as error:
+            raise WorkspaceError(
+                "denied", f"path changed during access (TOCTOU): {display}"
+            ) from error
+        if real != self.root and not real.is_relative_to(self.root):
             raise WorkspaceError("denied", f"path changed during access (TOCTOU): {display}")
 
     # ─── listing ────────────────────────────────────────────────────────────
@@ -402,13 +422,19 @@ class WorkspaceFiles:
 
         entries.sort(key=lambda e: (0 if e.kind == "directory" else 1, e.name.casefold(), e.name))
         page = entries[offset : offset + limit]
-        truncated = scan_truncated or offset + limit < len(entries)
-        next_cursor = str(offset + limit) if truncated else None
+        # Page bound and scan cap are separate disclosures: the cursor follows
+        # the page slice only, so a directory larger than MAX_LIST_SCAN can no
+        # longer hand out a cursor that the next call refuses as out of range
+        # (the old empty-page-with-refused-cursor loop). The scan cap stays
+        # disclosed through ``truncated``: the listing really is incomplete
+        # when it fired, even though no further cursor exists.
+        page_truncated = offset + limit < len(entries)
+        next_cursor = str(offset + limit) if page_truncated else None
         return ListPage(
             entries=tuple(page),
             next_cursor=next_cursor,
             exclusions=tuple(sorted(self.exclusions)),
-            truncated=truncated,
+            truncated=scan_truncated or page_truncated,
         )
 
     def _entry_from_scandir(self, raw: os.DirEntry[str], parent_rel: str) -> ListEntry:
@@ -531,6 +557,7 @@ class WorkspaceFiles:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
                 raise WorkspaceError("not-regular", f"target is not a regular file: {display}")
+            self._verify_containment(resolved, display=display)
             digest = hashlib.sha256()
             size = 0
             while True:

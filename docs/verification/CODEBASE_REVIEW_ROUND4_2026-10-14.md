@@ -344,7 +344,7 @@ strongest:
 - **Pins pre-fix behavior:** RPC TTL tests assert persistence
   (`test_api_bugfixes.py:347-448`); `_normalize_answer(2024.5) == "20245"` pins the decimal
   collapse (`test_fm6_locomo.py:23-24`).
-- **Environment coupling:** `REPO_ROOT = "/Users/shadow/machina"` in `test_repomap.py:10`;
+- **Environment coupling:** `REPO_ROOT` was hardcoded to an absolute maintainer-home path in `test_repomap.py` (since fixed);
   `live_db` errors instead of skipping without a DSN; live MCP round trip converts hangs to
   skips; no Windows CI despite Windows-only path tests; env vars set at import
   (`MACHINA_API_KEY`, `MACHINA_GATEWAY_NO_SCHEDULER`) leak for the session.

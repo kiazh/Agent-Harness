@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { ComposerBox, Footer } from "../src/components.ts";
 import { AppShell } from "../src/components/AppShell.ts";
+import { NowPlayingBar } from "../src/components/NowPlayingBar.ts";
 import { WorkspaceShell } from "../src/components/WorkspaceShell.ts";
 import { AnimationCoordinator } from "../src/design/motion.ts";
 import { editorTheme } from "../src/theme.ts";
@@ -652,6 +653,38 @@ test("a 40x9 editor-mode frame keeps the full-width composer and the grip", () =
 		assert.equal(geometry.editor!.columns, 39, "the grip takes exactly its column");
 		assert.equal(screen[0]!.charAt(39), "▐");
 		assert.match(screen[8] ?? "", /test-model/);
+	} finally {
+		teardown(h);
+	}
+});
+
+test("split mode pins the music bar to the chat column top, editor untouched", () => {
+	const h = buildHarness(160, 48);
+	try {
+		const bar = new NowPlayingBar(h.coordinator);
+		bar.state = {
+			available: true,
+			state: "playing",
+			title: "Example track title",
+			artist: "Example artist",
+			album: null,
+			source: "Google Chrome",
+			elapsed: 84,
+			duration: 210,
+			error: null,
+			fetchedAtMs: Date.now(),
+		};
+		bar.visible = true;
+		h.shell.setPinnedBar(bar);
+		configure(h);
+		const screen = plain(h.tui.getScreenLines());
+		assert.match(screen[0] ?? "", /Example track title/, "bar owns the chat column top row");
+		assert.match(screen[0] ?? "", /EDITOR/, "editor column shares the same screen row");
+		assert.equal(
+			screen.findIndex((line) => line.includes("chat transcript row")),
+			3,
+			"transcript sits below the bar inside the chat column",
+		);
 	} finally {
 		teardown(h);
 	}

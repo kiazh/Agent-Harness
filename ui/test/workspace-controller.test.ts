@@ -1255,3 +1255,126 @@ test("WorkspaceGatewayAdapter binds identity and shares the request function", a
 	assert.equal(adapter.identity(), undefined);
 	await assert.rejects(() => adapter.read(fileUri("a.ts")), /workspace is not open/);
 });
+
+// ─── review fixes: save overlap, successor retirement, restore focus ────────
+
+test("overlapping saves keep suppressing save-origin echoes until the last settles", async () => {
+	const h = build();
+	await openWorkspace(h);
+	const { documentId, uri } = await mustOpen(h, "a.ts", "one\n");
+	h.store.insertText(documentId, "x");
+	h.controller.noteEdit(documentId);
+	const firstGate = deferred<WorkspaceSaveResult>();
+	const secondGate = deferred<WorkspaceSaveResult>();
+	const queue = [firstGate, secondGate];
+	h.gateway.saveHandler = async () => (queue.shift() ?? secondGate).promise;
+	const first = h.controller.save(documentId);
+	h.store.insertText(documentId, "y");
+	h.controller.noteEdit(documentId);
+	const second = h.controller.save(documentId);
+	firstGate.resolve({ ok: true, revision: "save-1", savedUiVersion: 1 });
+	assert.equal((await first).status, "saved");
+	// The NEWER save is still in flight: its save-origin echo must not be
+	// misclassified just because an earlier save for the same document settled.
+	h.controller.handleEvent(workspaceEvent({
+		type: "workspace.fileChanged",
+		uri,
+		revision: "save-2",
+		origin: "save",
+	}));
+	assert.equal(h.store.getDocument(documentId)?.conflict, undefined, "the newer save echo is no conflict");
+	assert.equal(h.controller.conflictFor(documentId), undefined);
+	assert.equal(h.controller.externalChangeFor(documentId), undefined, "no spurious external notice");
+	assert.ok(!h.notices.some((notice) => notice.text.includes("changed on disk")), "no external-change warning");
+	secondGate.resolve({ ok: true, revision: "save-2", savedUiVersion: 2 });
+	assert.equal((await second).status, "saved");
+	const document = h.store.getDocument(documentId);
+	assert.equal(document?.savedRevision, "save-2");
+	assert.equal(document?.dirty, false);
+	await h.controller.dispose();
+});
+
+test("replacing a preview retires its conflicts and external notices", async () => {
+	const h = build();
+	await openWorkspace(h);
+	h.gateway.readHandler = async (uri) => readResult(uri);
+	const a = await h.controller.openUri(fileUri("a.ts"), { preview: true });
+	if (a.status !== "opened") assert.fail("preview open failed");
+	// A refused save records a conflict while the buffer is still a preview.
+	h.gateway.saveHandler = async (_uri, expectedRevision) => ({
+		ok: false,
+		conflict: { diskRevision: "disk-9", baseRevision: expectedRevision ?? "", reason: "revision-mismatch" },
+	});
+	assert.equal((await h.controller.save(a.documentId)).status, "conflict");
+	assert.ok(h.controller.conflictFor(a.documentId));
+	// An external change adds a soft notice for the same clean preview.
+	h.controller.handleEvent(workspaceEvent({
+		type: "workspace.fileChanged",
+		uri: a.uri,
+		revision: "disk-10",
+		origin: "external",
+	}));
+	assert.ok(h.controller.externalChangeFor(a.documentId));
+	// Opening another preview replaces the clean one, retiring its state.
+	const b = await h.controller.openUri(fileUri("b.ts"), { preview: true });
+	assert.equal(b.status, "opened");
+	assert.equal(h.store.getDocument(a.documentId), undefined, "the replaced preview is evicted");
+	assert.equal(h.controller.conflictFor(a.documentId), undefined, "its conflict retires with it");
+	assert.equal(h.controller.externalChangeFor(a.documentId), undefined, "its notice retires with it");
+	await h.controller.dispose();
+});
+
+test("a late workspace.close resolution never clears a newer binding", async () => {
+	const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+	const closeGate = deferred<{ closed: boolean }>();
+	let openCount = 0;
+	const request = (async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+		calls.push({ method, params });
+		if (method === "workspace.open") {
+			openCount += 1;
+			return {
+				workspaceId: `ws_${openCount}`,
+				clientId: "cl_1",
+				epoch: openCount,
+				rootLabel: `ws${openCount}`,
+				resolvedRoot: String(params.root),
+				trusted: true,
+				capabilities: [],
+			};
+		}
+		if (method === "workspace.close") return closeGate.promise;
+		return readResult(String(params.uri));
+	}) as unknown as WorkspaceRequestFn;
+	const adapter = new WorkspaceGatewayAdapter(request);
+	await adapter.open("/one", true);
+	const closing = adapter.close();
+	// A new workspace binds while the old close is still outstanding.
+	const second = await adapter.open("/two", true);
+	assert.equal(second.workspaceId, "ws_2");
+	closeGate.resolve({ closed: true });
+	assert.ok(!isWorkspaceRefusal(await closing));
+	assert.equal(adapter.identity()?.workspaceId, "ws_2", "the newer binding survives the stale close");
+	// Every later request still addresses the new workspace.
+	const read = await adapter.read(fileUri("a.ts"));
+	assert.ok(!isWorkspaceRefusal(read));
+	assert.deepEqual(calls.at(-1)?.params, { workspaceId: "ws_2", epoch: 2, uri: fileUri("a.ts") });
+});
+
+test("reopenRecent restores without stealing focus; manual opens still focus", async () => {
+	const h = build();
+	await openWorkspace(h);
+	h.gateway.readHandler = async (uri) => readResult(uri);
+	h.focusRegions.length = 0;
+	const outcome = await h.controller.reopenRecent({
+		version: WORKSPACE_STATE_VERSION,
+		requestedMode: "split",
+		splitRatio: 0.5,
+		explorerRequested: true,
+		openUris: [fileUri("r1.ts"), fileUri("r2.ts")],
+	});
+	assert.equal(outcome.opened, 2);
+	assert.deepEqual(h.focusRegions, [], "restoring remembered files never grabs the editor focus");
+	await h.controller.openUri(fileUri("manual.ts"));
+	assert.deepEqual(h.focusRegions, ["editor"], "a manual open still focuses the editor");
+	await h.controller.dispose();
+});

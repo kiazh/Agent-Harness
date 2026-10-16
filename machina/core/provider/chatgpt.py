@@ -61,6 +61,7 @@ from machina.core.provider.transport import (
     _validate_messages,
     _validate_params,
 )
+from machina.core.provider.usage_map import parse_chatgpt_usage
 from machina.core.usage import _estimate_tokens, usage_store
 from machina.security import chatgpt_auth
 
@@ -182,11 +183,8 @@ class _FunctionCallAccumulator:
         return calls
 
 
-def _map_usage(usage: dict[str, Any]) -> dict[str, int]:
-    prompt = int(usage.get("input_tokens") or 0)
-    completion = int(usage.get("output_tokens") or 0)
-    total = int(usage.get("total_tokens") or 0) or prompt + completion
-    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+def _map_usage(usage: dict[str, Any]) -> dict[str, Any]:
+    return parse_chatgpt_usage(usage)
 
 
 def _stream_error(event: dict[str, Any], model: str) -> ProviderError:

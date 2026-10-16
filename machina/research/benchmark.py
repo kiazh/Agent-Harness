@@ -58,6 +58,9 @@ from machina.research.locomo import (
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEVTOOLS_ENV = "MACHINA_DEVTOOLS"
 _DEVTOOLS_SIBLINGS = ("Machina-DevTools", "machina-devtools")
+#: A candidate must carry the harness modules the sections import. An
+#: arbitrary cwd containing only ``tests/__init__.py`` is not a checkout.
+_DEVTOOLS_REQUIRED_TESTS = ("tests/test_replay_harness.py", "tests/test_retrieval_eval.py")
 
 # Subprocess sections must be bounded: an unbounded child (suite/UI) would
 # hang the whole benchmark with no way to notice. A timed-out section is
@@ -75,16 +78,30 @@ _INCIDENT = {
 }
 
 
+def _is_devtools_checkout(candidate: Path) -> bool:
+    """Whether *candidate* is the DevTools checkout the sections import from."""
+    root = candidate.expanduser()
+    if not (root / "tests" / "__init__.py").is_file():
+        return False
+    return all((root / required).is_file() for required in _DEVTOOLS_REQUIRED_TESTS)
+
+
 def _devtools_root_or_none() -> Path | None:
+    """Resolve the DevTools checkout: explicit env, siblings, then cwd.
+
+    Sibling checkouts next to this repository are preferred over the current
+    directory, so a run from an unrelated tree still finds the suite; the cwd
+    fallback keeps a run *inside* the DevTools checkout working (its tests/
+    is importable).
+    """
     candidates: list[Path] = []
     env = os.environ.get(_DEVTOOLS_ENV)
     if env:
         candidates.append(Path(env).expanduser())
-    # Running from the DevTools checkout itself (its tests/ is importable).
-    candidates.append(Path.cwd())
     candidates.extend(_REPO_ROOT.parent / name for name in _DEVTOOLS_SIBLINGS)
+    candidates.append(Path.cwd())
     for candidate in candidates:
-        if (candidate / "tests" / "__init__.py").is_file():
+        if _is_devtools_checkout(candidate):
             return candidate.resolve()
     return None
 
@@ -92,7 +109,9 @@ def _devtools_root_or_none() -> Path | None:
 def _ensure_tests_importable() -> None:
     devtools = _devtools_root_or_none()
     if devtools is None:
-        raise SystemExit(
+        # RuntimeError (not SystemExit): one broken section records an error
+        # payload and the run continues instead of aborting every section.
+        raise RuntimeError(
             "benchmark requires the Machina-DevTools checkout next to this "
             f"repository (or {_DEVTOOLS_ENV} pointing at it). "
             "Clone https://github.com/kiazh/Machina-DevTools beside it."
@@ -562,7 +581,11 @@ def main(argv: list[str] | None = None) -> int:
         started = time.monotonic()
         try:
             payload = fn()
-        except Exception as exc:  # a single broken section must not kill the run
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:
+            # One broken section (including a SystemExit escaping an import)
+            # records an error payload; the remaining sections still run.
             payload = {"error": f"{type(exc).__name__}: {exc}"}
         payload["_section_seconds"] = round(time.monotonic() - started, 2)
         results[name] = payload

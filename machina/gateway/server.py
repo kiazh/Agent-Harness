@@ -381,6 +381,17 @@ class Gateway:
             leftovers = await _bounded_join(tasks, timeout=timeout, label="gateway turns")
             for t in leftovers:
                 logger.warning("gateway turn task quarantined on close: %s", t.get_name())
+        # Retired workspace LSP managers keep stopping in the background after
+        # a workspace reopen; join them bounded (never cancelled) before the
+        # loop closes so their process teardown is observed.
+        try:
+            from machina.gateway.features.workspace import drain_retired_lsp_managers
+
+            await drain_retired_lsp_managers(self, timeout=timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception as _boundary_error:
+            record_failure("server.close", _boundary_error)
         if self._owns_db:
             try:
                 await self.runtime.shutdown_connectors(timeout=timeout)

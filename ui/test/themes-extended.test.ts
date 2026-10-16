@@ -125,3 +125,36 @@ test("new skins paint a unique background through the terminal harness", () => {
 		setSkin(previous);
 	}
 });
+
+// The full registry intentionally keeps two alias families: `opencode` and
+// `codex` share the neutral surface (#0b0b0c) as the brand/default pair, and
+// `onedark` is the unhyphenated spelling of `one-dark` (#282c34) kept for
+// saved theme ids. Those pairs are the only allowed surface collisions; every
+// skin's full palette must otherwise be unique so an accidental duplicate
+// cannot land via a future theme wave.
+const ALLOWED_SURFACE_ALIASES: ReadonlyArray<readonly string[]> = [
+	["codex", "opencode"],
+	["one-dark", "onedark"],
+];
+
+test("registry keeps every full palette and every surface distinct (aliases explicit)", () => {
+	const palettes = new Map<string, string>();
+	const surfaces = new Map<string, string[]>();
+	for (const name of SKIN_NAMES) {
+		const base = skinBase(name)!;
+		const palette = JSON.stringify(base);
+		const clash = palettes.get(palette);
+		assert.equal(clash, undefined, `${name} duplicates the full palette of ${clash}`);
+		palettes.set(palette, name);
+		const surface = base.neutral.toLowerCase();
+		if (!surfaces.has(surface)) surfaces.set(surface, []);
+		surfaces.get(surface)!.push(name);
+	}
+	for (const [surface, names] of surfaces) {
+		if (names.length === 1) continue;
+		const allowed = ALLOWED_SURFACE_ALIASES.some(
+			(pair) => names.length === pair.length && names.every((name) => pair.includes(name)),
+		);
+		assert.ok(allowed, `surface ${surface} is shared by non-alias skins: ${names.join(", ")}`);
+	}
+});

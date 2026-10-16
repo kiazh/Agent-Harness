@@ -4,6 +4,48 @@ Current release evidence and open gates are in [RELEASE_READINESS.md](docs/verif
 
 Checked matrix: implementation → entry points → dependency → trigger → config → fallback → lifecycle → proof test. Statuses: automatic (every turn), conditional (when triggered/material exists), degraded (fallback reported), optional (explicit), offline (research-only).
 
+## Pinned now-playing bar (2026-10-16, TUI)
+
+Shows whatever is playing on this computer (browser video, Spotify, Music,
+…) in a bar pinned above the transcript in the chat column. Design contract:
+TUI_DESIGN.md §Music bar; agent self-knowledge: FEATURES["music"].
+
+| Item | Location | Change | Proof |
+|---|---|---|---|
+| NP-01 | `ui/src/components/NowPlayingBar.ts`, `ui/src/components/AppShell.ts` | Pinned bar as a sibling of the retained transcript ScrollView (never scrolls; the wrapper keeps the anchor): 3 rows full / 2 rows / 1 compact row reduced / hidden at compact (state survives), animated equalizer + interpolated elapsed while playing (one shared coordinator, reduced-motion static), click sends play/pause, honest "Nothing playing" line, width-safe 0–120 | `ui/test/nowplaying-bar.test.ts`, pinned-bar tests in `ui/test/layout.test.ts` + `ui/test/workspace-shell.test.ts`, boot test `ui/test/nowplaying-app-boot.test.ts` |
+| NP-02 | `machina/core/nowplaying.py`, `machina/gateway/features/nowplaying.py` | Layered, local-only detection behind `nowplaying.get` / `nowplaying.command`: MediaRemote (ctypes) → nowplaying-cli/media-control → Spotify/Music AppleScript → front YouTube tab (Chromium family + Safari). Bounded subprocess timeouts + wall budget, running-app checks before any AppleScript (never launches apps), permission denials cached and named, browser playback state reported `unknown`, non-macOS honest error | `tests/test_nowplaying.py` (layer order, parsing, permission, caching, command routing, gateway handlers); live probes on macOS (MediaRemote callbacks, QuickTime/Spotify/Chrome detection, gated-build behavior) |
+| NP-03 | `ui/src/features/music.ts`, `ui/src/nowplaying/controller.ts`, `machina/core/config.py`, `machina/core/self_knowledge.py` | `/music` command (play/pause, next/prev, status, on/off) over a polling controller (2 s poll, 250 ms animation demand only while playing; commands never guess state — they re-read); config key `nowplaying_enabled` (on by default; hides the bar when false); the always-on brief names `/music` (brief stays within its 1600-token bound) | `ui/test/nowplaying-command.test.ts`, `ui/test/nowplaying-controller.test.ts`, `tests/test_nowplaying_config.py`, `test_self_knowledge_completeness.py` census green |
+
+The bar is on by default (`nowplaying_enabled=true`) and shows one honest
+line when nothing is playing. Playback control is best-effort per source:
+Spotify/Music/CLI accept transport commands; a browser tab is display-only.
+Metadata never leaves the machine.
+
+## Token-efficiency infrastructure (2026-10-16)
+
+Implements the prioritized plan in [docs/TOKEN_EFFICIENCY.md](docs/TOKEN_EFFICIENCY.md)
+(T0 measurement → T6 configurable output; learned compression, routing,
+semantic caches, and warmers deliberately stay off until task-specific
+evidence exists).
+
+| Item | Location | Change | Proof |
+|---|---|---|---|
+| TE-01 | `core/provider/usage_map.py`, `core/usage.py`, `db/schema.sql`, `db/connection.py` | Normalized usage ledger: `prompt_tokens = uncached + cache_read + cache_write` per provider family (Anthropic additive categories, OpenAI cached subset, DeepSeek hit/miss, ChatGPT responses, Ollama), `usage_basis` (provider/partial/estimate/missing/failed), `requested_model`, `purpose` attribution for auxiliary calls, NULL-not-zero cache columns; runtime migration for existing DBs | `tests/test_te_usage_ledger.py` (normalization matrix, missing-keeps-reservation, real-DB finish/mark/summary), existing `test_usage*.py` green |
+| TE-02 | `core/pricing.py`, `core/usage.py` | Dated price table keyed `provider/model` (USD/MTok; DeepSeek's chat snapshot only — other models stay NULL) + `pricing_table_json` overrides that never inherit the base snapshot's date/source; `cost_usd` + `price_version` per row; unknown price = NULL; cache-absent prompts cost as fully uncached (upper bound) | `test_te_usage_ledger.py` pricing cases; cost formula asserted against the snapshot |
+| TE-03 | `core/usage.py`, `core/agent.py`, `core/tool_views.py` | Accepted-completion attribution: the turn-final call of a successful turn is marked; summaries/reranks/retries count toward cost but never toward acceptance; the durable `UsageStore.summary()` payload reports `acceptedCompletions`, `knownCostUsd`, `unknownCostCalls`, `cacheReadTokens`/`cacheWriteTokens` and `costPerAcceptedCompletionUsd` (None when nothing was accepted); the `machina usage` CLI table does not render these ledger fields yet | `test_te_usage_ledger.py` mark/summary tests |
+| TE-04 | `core/provider/prompt_cache.py`, `core/provider/anthropic.py`, `core/provider/openrouter.py`, `core/provider/transport.py` | Cache capability profiles (mode/min-prefix/breakpoint budget/usage fields; unknown = unsupported) + Anthropic conversation-tail breakpoint (system + last tool + tail ≤ 4 budget) and OpenRouter tail wiring for Anthropic-routed models; OFF path byte-identical | `tests/test_e1_prompt_cache.py` (updated ON-path pins + frozen OFF goldens), `test_te_cache_profiles.py` |
+| TE-05 | `core/artifacts.py`, `tools/artifacts.py`, `db/schema.sql`, `db/connection.py` | Durable tool artifacts: store-before-publish, verbatim originals, `artifact_read`/`artifact_search`/`artifact_describe` with per-call re-authorization across the delegation tree, retention/expiry, per-session quota that refuses (never evicts), `artifact_handle` on durable chunks; store failure/oversize/quota = no artifact claim | `tests/test_te_artifacts.py` (paging/search/ACL/expiry/quota/fail-open, real DB) |
+| TE-06 | `core/reducers.py`, `core/tool_views.py`, `core/prompt.py` | Deterministic format reducers (tests/logs/JSON/CSV/diff/code/head+tail) for over-cap results: decisive lines kept, omission seam and method disclosed, head+tail always keeps the verdict tail; store-before-lossy-publish (reduced views require a durable handle, else the legacy cap), skill/status/document-search/artifact-paging tools exempt from reducers but still append-bounded (artifact pages page-aware at 4000), reduced views exempt from stale condensation | `tests/test_te_reducers.py`, `test_te_views_integration.py` (loop-level view/handle/fail-open paths), `test_te_prompt_policy.py` |
+| TE-07 | `core/projection.py`, `core/agent.py`, `core/assembler.py` | Evidence projection: whitespace-normalized exact-duplicate removal + token-budgeted selection across memory/RAG/archive with prompt disclosure of omissions; first entry survives even a zero-fit budget; failures keep the unprojected list | `tests/test_te_projection.py`, `test_te_prompt_policy.py` (assembler disclosure) |
+| TE-08 | `core/config.py`, `core/prompt.py` | `output_policy: legacy or concise` (legacy default keeps prompts byte-identical; concise appends the preservation-aware answer-first policy); all new keys validated and bounded | `test_te_prompt_policy.py`, `test_te_usage_ledger.py` config cases |
+
+Deferred by design (no default-on without task evidence): learned compression,
+model routing/effort adaptation, semantic answer caching, cache warmers,
+progressive native-tool schema deferral. `prompt_cache_enabled` remains
+opt-in; the ledger's cache columns now make that pilot measurable
+(`cacheReadTokens`, `cacheWriteTokens`, cost per accepted completion) on real
+turns instead of guesswork. No live-provider savings claim is made.
+
 ## Session history and workflow repairs (2026-10-13)
 
 | Item | Location | Change | Proof |

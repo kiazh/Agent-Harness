@@ -782,6 +782,27 @@ test("completion popup mouse: press selects, hover highlights, click accepts", (
 	assert.equal(popup.handleMouse(mouseEvent({ type: "press", x: 0, y: 9, width: 30 })), undefined);
 });
 
+test("completion popup click reports the clicked index before accepting", () => {
+	const calls: string[] = [];
+	const popup = new CompletionPopup({ onSelect: (index) => calls.push(`select:${index}`) });
+	popup.setModel(popupModel(["a", "b", "c", "d", "e"]));
+	popup.onAction = (action) => calls.push(`action:${action.kind}`);
+	const click = popup.handleMouse(mouseEvent({ type: "click", x: 0, y: 3, width: 30 }));
+	assert.deepEqual(click, { handled: true, focus: true });
+	assert.deepEqual(calls, ["select:3", "action:accept"], "the clicked row reaches the parent before accept");
+	assert.equal(popup.selectedIndex(), 3, "the popup model follows the clicked row");
+
+	// Only a completed left click reports: press, hover, wheel and non-left
+	// clicks stay below the parent callbacks (the renderer synthesizes the
+	// click after the press, mirroring the explorer grip's guard).
+	calls.length = 0;
+	popup.handleMouse(mouseEvent({ type: "press", x: 0, y: 1, width: 30 }));
+	popup.handleMouse(mouseEvent({ type: "move", x: 0, y: 2, width: 30 }));
+	assert.equal(popup.handleMouse(mouseEvent({ type: "wheel", x: 0, y: 1, width: 30, wheelDelta: 2 })), undefined);
+	assert.equal(popup.handleMouse(mouseEvent({ type: "click", button: "right", x: 0, y: 1, width: 30 })), undefined);
+	assert.deepEqual(calls, [], "no report outside a completed left click");
+});
+
 test("completion popup snapshots a session through the list-source view", async () => {
 	const store = new EditorStore();
 	const doc = open(store, "s");

@@ -233,7 +233,7 @@ function configureClient(client: FakeClient): void {
 	client.responses.set("session.create", { session: SESSION_A });
 	client.responses.set("prompt.submit", { turnId: "t" });
 	client.responses.set("prompt.cancel", {});
-	client.responses.set("config.get", { config: {}, secrets: [] });
+	client.responses.set("config.get", { config: { nowplaying_enabled: false }, secrets: [] });
 	client.responses.set("config.set", { model: "m", provider: "openrouter", key: "workspace_ui_state", value: "" });
 	client.responses.set("workspace.open", workspaceIdentity());
 	client.responses.set("workspace.documentOpen", { acceptedVersion: 0, serverGeneration: 1, state: "ready" });
@@ -291,6 +291,7 @@ function internals(app: App): {
 	workspaceLayout?: { effectiveMode: string; editor?: { columns: number; x: number }; chat?: { columns: number; x: number }; grip?: { columns: number; x: number }; explorer?: { columns: number; x: number } };
 	workspaceLayoutActive: boolean;
 	activeRegion: string;
+	setFocusForRegion(region: string): void;
 	problemsOpen: boolean;
 	completionSession?: unknown;
 	quickOpenPane?: unknown;
@@ -432,7 +433,7 @@ test("a persisted state restores mode, remembered files and cursors", async () =
 			},
 		},
 	});
-	client.handlers.set("config.get", () => ({ config: { workspace_ui_state: persisted }, secrets: [] }));
+	client.handlers.set("config.get", () => ({ config: { workspace_ui_state: persisted, nowplaying_enabled: false }, secrets: [] }));
 	await app.start();
 	await waitForWorkspace(app);
 	await settle();
@@ -600,7 +601,7 @@ test("a direct viewport click restores the caret with no key input (item 1)", as
 
 // ─── keys ───────────────────────────────────────────────────────────────────
 
-test("Ctrl+Right maximizes chat; Ctrl+Left always returns to the 50/50 split (editor region only)", async () => {
+test("Ctrl+Right maximizes chat from the editor; hiding reconciles focus and the split returns via the command", async () => {
 	const { app, tui } = makeApp();
 	await app.start();
 	await waitForWorkspace(app);
@@ -626,17 +627,29 @@ test("Ctrl+Right maximizes chat; Ctrl+Left always returns to the 50/50 split (ed
 
 	tui.press("\x1b[1;5C");
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat", "chat maximized");
+	// Hiding the editor reconciles focus to the composer (review finding: keys
+	// must never keep flowing into an unmounted pane), so Ctrl+Left is word
+	// motion again; the toggle back is the workspace command.
+	assert.equal(internals(app).activeRegion, "chat-composer", "focus follows the hidden editor");
 	tui.press("\x1b[1;5D");
-	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "Ctrl+Left restores the split");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat", "composer Ctrl+Left is word motion");
+	await runCommand({ name: "workspace", args: "split" }, app);
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "the split stays reachable via the command");
 	assert.equal(internals(app).integration?.controller.getLayoutInput().requestedMode, "split");
 
 	// The mode-hop sequence that used to strand the editor: editor maximize →
-	// chat → Ctrl+Left must still land on the split, not back on editor.
+	// (focus editor) → chat → focus reconciles to the composer, and the split
+	// comes back through the command surface (the pane toggle is editor-gated).
 	await runCommand({ name: "editor", args: "maximize" }, app);
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "editor");
+	internals(app).setFocusForRegion("editor");
+	assert.equal(internals(app).activeRegion, "editor");
 	tui.press("\x1b[1;5C");
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat");
+	assert.equal(internals(app).activeRegion, "chat-composer", "the hidden editor never keeps the keys");
 	tui.press("\x1b[1;5D");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat", "composer Ctrl+Left is word motion");
+	await runCommand({ name: "workspace", args: "split" }, app);
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "the 50/50 split stays reachable");
 	assert.equal(internals(app).integration?.controller.getLayoutInput().requestedMode, "split");
 	await app.exit();
@@ -824,7 +837,7 @@ test("a fresh workspace persists the explorer open; an explicit stored false sta
 		},
 	});
 	const second = makeApp();
-	second.client.handlers.set("config.get", () => ({ config: { workspace_ui_state: explicit }, secrets: [] }));
+	second.client.handlers.set("config.get", () => ({ config: { workspace_ui_state: explicit, nowplaying_enabled: false }, secrets: [] }));
 	await second.app.start();
 	await waitForWorkspace(second.app);
 	assert.equal(

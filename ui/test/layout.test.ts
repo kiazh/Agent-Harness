@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { ComposerBox, Footer } from "../src/components.ts";
 import { AppShell } from "../src/components/AppShell.ts";
+import { NowPlayingBar } from "../src/components/NowPlayingBar.ts";
 import { AnimationCoordinator } from "../src/design/motion.ts";
 import { editorTheme } from "../src/theme.ts";
 
@@ -352,4 +353,64 @@ test("terminal resize updates density and chrome without needing a key or gatewa
   assert.equal(shell.currentDensity, "full");
   assert.match(plain(tui.getScreenLines()).at(-1)!, /\? shortcuts/);
  } finally {footer.dispose(); coordinator.dispose(); tui.stop();}
+});
+
+test("the pinned music bar stays at row 0 while the transcript grows", () => {
+	const term = mockTerminal(80, 24);
+	const tui = new TuiAltScreen(term);
+	const transcript = new Container();
+	for (let i = 0; i < 4; i++) transcript.addChild(new Text(`history row ${i}`, 0, 0));
+	const coordinator = new AnimationCoordinator(() => tui.requestRender());
+	const bar = new NowPlayingBar(coordinator);
+	bar.state = {
+		available: true,
+		state: "playing",
+		title: "Example track title",
+		artist: "Example artist",
+		album: null,
+		source: "Google Chrome",
+		elapsed: 84,
+		duration: 210,
+		error: null,
+		fetchedAtMs: Date.now(),
+	};
+	bar.visible = true;
+	const composer = new ComposerBox(tui, editorTheme, { paddingX: 1 });
+	const footer = new Footer(coordinator);
+	const shell = new AppShell(tui, transcript, composer, footer);
+	shell.setPinnedBar(bar);
+	tui.setLayoutRoot(shell.root);
+	tui.start();
+	tui.renderNow(true);
+	try {
+		let screen = plain(tui.getScreenLines());
+		assert.match(screen[0] ?? "", /Example track title/, "bar pinned at row 0");
+		assert.match(screen[1] ?? "", /Example artist · Google Chrome/);
+		assert.equal(
+			screen.findIndex((line) => line.includes("history row 0")),
+			3,
+			"transcript starts below the three-row bar",
+		);
+
+		for (let i = 4; i < 60; i++) transcript.addChild(new Text(`history row ${i}`, 0, 0));
+		tui.renderNow(true);
+		screen = plain(tui.getScreenLines());
+		assert.match(screen[0] ?? "", /Example track title/, "growth never moves the bar");
+
+		// Reduced viewport keeps one compact row; compact hides the bar.
+		term.rows = 9;
+		tui.renderNow(true);
+		screen = plain(tui.getScreenLines());
+		assert.match(screen[0] ?? "", /Example track title — Example artist/, "one-row compact bar");
+		assert.doesNotMatch(screen[1] ?? "", /Example track title/);
+
+		term.rows = 6;
+		tui.renderNow(true);
+		screen = plain(tui.getScreenLines());
+		assert.doesNotMatch(screen[0] ?? "", /Example track title/, "bar hidden at compact density");
+	} finally {
+		footer.dispose();
+		coordinator.dispose();
+		tui.stop();
+	}
 });

@@ -183,13 +183,13 @@ class MemoryApprovalGate:
         base_strength: float = 1.0,
         embedding: list[float] | None = None,
         embedding_space: str | None = None,
-    ) -> PendingMemory:
+    ) -> PendingMemory | MemoryEntry:
         """Submit a memory for approval.
 
-        If the gate is disabled, this still creates a pending record
-        but immediately approves it (for audit purposes).
-
-        Returns the PendingMemory entry.
+        If the gate is disabled, this still creates a pending record (for
+        audit) but immediately approves it and returns the durable
+        ``MemoryEntry`` — the truthful "stored" outcome. While enabled it
+        returns the ``PendingMemory`` awaiting review.
         """
         # Step 1: Redact secrets
         redaction_result = self.redactor.redact(content)
@@ -277,9 +277,13 @@ class MemoryApprovalGate:
             redactions=redactions,
         )
 
-        # Step 3: If gate is disabled, auto-approve
+        # Step 3: If the gate is disabled, complete the write now and return
+        # the durable result. Returning the stale PENDING record would claim
+        # status=pending with memory_id=None after a real memory was stored.
         if not self.is_enabled():
-            await self.approve(pending_id, auto_approved=True)
+            approved = await self.approve(pending_id, auto_approved=True)
+            if approved is not None:
+                return approved
 
         return pending
 

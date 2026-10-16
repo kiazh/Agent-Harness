@@ -44,7 +44,7 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import { truncateDisplay } from "../design/text.ts";
+import { sanitizeDisplay, truncateDisplay } from "../design/text.ts";
 import { repairFill, selectListTheme, theme } from "../design/theme.ts";
 import type { DocumentRecord } from "../editor/model.ts";
 import type { EditorStore } from "../editor/model.ts";
@@ -113,7 +113,12 @@ interface TabHitArea {
 	close?: boolean;
 }
 
-/** Scheme-stripped, percent-decoded display path for a document URI. */
+/**
+ * Scheme-stripped, percent-decoded, sanitized display path for a document URI.
+ * Sanitization runs AFTER decoding so encoded control bytes (`%1B`, `%07`, …)
+ * are neutralized rather than reconstructed for the terminal; every consumer
+ * (breadcrumb, tab strip, problems rows) renders this already-safe string.
+ */
 export function uriDisplayPath(uri: string): string {
 	let path = uri;
 	const scheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.exec(path);
@@ -123,7 +128,7 @@ export function uriDisplayPath(uri: string): string {
 	} catch {
 		// Malformed percent-encoding: keep the raw path rather than throwing.
 	}
-	return path;
+	return sanitizeDisplay(path);
 }
 
 function pathSegments(path: string): string[] {
@@ -141,7 +146,11 @@ export function disambiguatedTabLabels(uris: string[]): string[] {
 	const depths = segments.map(() => 1);
 	const labelAt = (index: number): string => {
 		const parts = segments[index] ?? [];
-		if (parts.length === 0) return uris[index] ?? "";
+		// A sanitized path with no segments must never fall back to the raw
+		// URI: that bypassed uriDisplayPath and could carry control bytes into
+		// the tab strip (V1 verification finding). Render it through the same
+		// sanitizing seam (which yields "" here).
+		if (parts.length === 0) return uriDisplayPath(uris[index] ?? "");
 		const depth = Math.min(depths[index] ?? 1, parts.length);
 		return parts.slice(parts.length - depth).join("/");
 	};
@@ -460,14 +469,24 @@ export class EditorPane implements Component, Focusable {
 		// The popup and problems slots share one budget with the viewport: at
 		// least one viewport row always survives, and the popup wins contested
 		// rows because it carries the focused interaction. A mounted Problems
-		// section also reserves its one-row separation rule.
+		// section also reserves its one-row separation rule. When the slots
+		// oversubscribe the pane (popup + problems + divider push the viewport
+		// below one row), the deficit shrinks the problems section itself —
+		// never the popup — so the drawn lines equal the allocation exactly
+		// and `lastProblemsRows` never claims rows that were clipped away.
 		const slotBudget = Math.max(0, this.allocatedRows - EDITOR_PANE_CHROME_ROWS - 1);
 		const popupLines = this.intelligencePopup ? this.intelligencePopup.render(safeWidth) : [];
 		const popupShown = popupLines.slice(0, slotBudget);
-		const problemsRows = this.problemsComponent
+		let problemsRows = this.problemsComponent
 			? Math.min(this.problemsRowBudget, Math.max(0, slotBudget - popupShown.length))
 			: 0;
-		const problemsDivider = problemsRows > 0 ? 1 : 0;
+		let problemsDivider = problemsRows > 0 ? 1 : 0;
+		const deficit =
+			EDITOR_PANE_CHROME_ROWS + popupShown.length + problemsRows + problemsDivider + 1 - this.allocatedRows;
+		if (deficit > 0) {
+			problemsRows = Math.max(0, problemsRows - deficit);
+			problemsDivider = problemsRows > 0 ? 1 : 0;
+		}
 		const viewportRows = Math.max(
 			1,
 			this.allocatedRows - EDITOR_PANE_CHROME_ROWS - popupShown.length - problemsRows - problemsDivider,

@@ -9,7 +9,9 @@ The diagnostics store keeps one set per ``(uri, producer)`` with LSP replace
 semantics: a publish replaces that producer's set, an empty list clears only
 that producer, older-version publishes are rejected, and entries carry the
 publishing server's generation so a result from a dead generation can never
-become current (plan §16).
+become current (plan §16). The set table itself is bounded: at the cap a new
+``(uri, producer)`` publish evicts the least-recently-published set, disclosed
+through :attr:`DiagnosticsStore.evicted`.
 """
 
 from __future__ import annotations
@@ -34,6 +36,10 @@ MAX_SYMBOL_RESULTS = 500
 MAX_SYMBOL_NAME_CHARS = 512
 MAX_DIAGNOSTICS_PER_FILE = 1000
 MAX_DIAGNOSTIC_MESSAGE_CHARS = 8192
+#: Bound on the number of ``(uri, producer)`` sets the store retains; a new
+#: key at the cap evicts the least-recently-published set (disclosed, never
+#: silently unbounded).
+MAX_DIAGNOSTIC_SETS = 1024
 MAX_SOURCE_CHARS = 200
 MAX_CODE_CHARS = 200
 MAX_LOG_DETAIL_CHARS = 500
@@ -598,9 +604,21 @@ class DiagnosticsStore:
     never become current).
     """
 
-    def __init__(self, *, per_file_cap: int = MAX_DIAGNOSTICS_PER_FILE) -> None:
+    def __init__(
+        self,
+        *,
+        per_file_cap: int = MAX_DIAGNOSTICS_PER_FILE,
+        max_sets: int = MAX_DIAGNOSTIC_SETS,
+    ) -> None:
         self._per_file_cap = max(1, per_file_cap)
+        self._max_sets = max(1, max_sets)
         self._sets: dict[tuple[str, str], _DiagnosticSet] = {}
+        self._evicted = 0
+
+    @property
+    def evicted(self) -> int:
+        """Sets dropped by the bounded key cap since the store was created."""
+        return self._evicted
 
     def publish(
         self,
@@ -634,7 +652,7 @@ class DiagnosticsStore:
             if len(stored) < self._per_file_cap:
                 stored.append(item)
         omitted = valid - len(stored)
-        self._sets[key] = _DiagnosticSet(
+        stored_set = _DiagnosticSet(
             producer=producer,
             version=version,
             generation=generation,
@@ -643,6 +661,13 @@ class DiagnosticsStore:
             omitted=omitted,
             cleared=not stored,
         )
+        # Bounded key count: a republish touches its key (most-recently
+        # published); a new key at the cap evicts the oldest-published set.
+        self._sets.pop(key, None)
+        if len(self._sets) >= self._max_sets:
+            del self._sets[next(iter(self._sets))]
+            self._evicted += 1
+        self._sets[key] = stored_set
         return PublishOutcome(
             uri=uri,
             producer=producer,
@@ -676,6 +701,19 @@ class DiagnosticsStore:
             current = generation_for(stored.producer)
             if stored.epoch != epoch or current is None or current != stored.generation:
                 del self._sets[key]
+
+    def clear_uri(self, uri: str) -> int:
+        """Drop every producer set for one URI; returns the number removed.
+
+        A closed document reopens as a fresh mirror at version 0, so the
+        retained version gate would otherwise reject every later publish for
+        that URI. Closing must therefore reset the whole URI, not just the
+        mirror.
+        """
+        keys = [key for key in self._sets if key[0] == uri]
+        for key in keys:
+            del self._sets[key]
+        return len(keys)
 
     def clear(self) -> None:
         self._sets.clear()

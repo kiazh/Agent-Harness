@@ -67,13 +67,13 @@ Observations from the logs (all 6 runs green):
 ## Reproduce the exact matrix
 
 ```sh
-cd /Users/shadow/machina && bash /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/h2h/run_matrix.sh
+cd <repo> && bash /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/h2h/run_matrix.sh
 ```
 
 Equivalent single cell (defaults: `--timeout 240`, OpenCode model `deepseek/deepseek-flash`, agent `build`; Machina agent `harness`; venv `<repo>/.venv`):
 
 ```sh
-cd /Users/shadow/machina && .venv/bin/python machina/research/head_to_head.py \
+cd <repo> && .venv/bin/python machina/research/head_to_head.py \
   --harness both \
   --task-dir /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/h2h/task2 \
   --prompt "Make all tests in tests/test_pipeline.py pass. Do not modify the tests. Work until pytest passes." \

@@ -168,7 +168,7 @@ function configureClient(client: FakeClient): void {
 	client.responses.set("session.create", { session: SESSION_A });
 	client.responses.set("prompt.submit", { turnId: "t" });
 	client.responses.set("prompt.cancel", {});
-	client.responses.set("config.get", { config: {}, secrets: [] });
+	client.responses.set("config.get", { config: { nowplaying_enabled: false }, secrets: [] });
 	client.responses.set("config.set", { model: "m", provider: "openrouter", key: "workspace_ui_state", value: "" });
 	client.responses.set("workspace.open", workspaceIdentity());
 	client.responses.set("workspace.documentOpen", { acceptedVersion: 0, serverGeneration: 1, state: "ready" });

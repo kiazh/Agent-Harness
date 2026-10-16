@@ -219,7 +219,7 @@ fake-terminal UI, attack fixtures); unit-level tightening only with a written re
   delegation transport, persona DB filters, batch dedup.
 - **Pins pre-fix behavior:** RPC TTL (`test_api_bugfixes.py:347-448`), luna ultra,
   bug-15 lazy config, `_normalize_answer(2024.5)` (update with the R1/`locomo` change).
-- **Environment coupling:** `/Users/shadow/machina` hardcode (`test_repomap.py:10`),
+- **Environment coupling:** maintainer-home absolute path hardcode (`test_repomap.py`, since fixed),
   `live_db` error-instead-of-skip, MCP hang→skip, Windows-only tests never on CI, env vars
   leaking from import (`MACHINA_API_KEY`, `MACHINA_GATEWAY_NO_SCHEDULER`).
 - **Missing coverage to add:** true caller-scope binding; same-session read/write load race;

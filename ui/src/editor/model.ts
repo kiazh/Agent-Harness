@@ -571,7 +571,20 @@ export class EditorStore {
 		this.recomputeDirty(record);
 		const primary = normalized[normalized.length - 1];
 		if (primary) {
-			view.cursorOffset = Math.min(primary.startOffset + primary.text.length, nextText.length);
+			// `primary` carries pre-transaction offsets; shift its end past the
+			// composed deltas of every edit that composes before it so the caret
+			// lands after the primary text in the post-compose document.
+			let composedEnd = primary.startOffset + primary.text.length;
+			for (const edit of normalized) {
+				if (edit === primary) continue;
+				const composesBefore =
+					edit.startOffset < primary.startOffset ||
+					(edit.startOffset === primary.startOffset && edit.order < primary.order);
+				if (composesBefore) {
+					composedEnd += edit.text.length - (edit.endOffset - edit.startOffset);
+				}
+			}
+			view.cursorOffset = clampSelectionOffset(composedEnd, nextText.length);
 			view.selectionAnchorOffset = undefined;
 		}
 

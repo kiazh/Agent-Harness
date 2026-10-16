@@ -25,12 +25,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from machina.observability.diagnostics import record_failure
 from machina.skills.ports import SkillSource
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; runtime import stays deferred
+    from machina.skills.metadata import MetadataDiagnostic, SkillMetadata
 
 try:  # POSIX advisory locks for cross-process telemetry merges.
     import fcntl
@@ -43,6 +46,21 @@ logger = logging.getLogger(__name__)
 # same skills are found no matter where `machina` is launched. Override with env vars.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _LEGACY_INSTALL_BUILD_RE = re.compile(r"[a-z0-9_-]+\.install-[0-9]+-[0-9a-f]{8}")
+#: Cap on sidecar files folded into the stat-only cache signature.
+_MAX_ENRICHMENT_SIGNATURE_FILES = 128
+
+
+def _metadata_module():
+    """Deferred handle to :mod:`machina.skills.metadata`.
+
+    ``registry.py``'s module-level machina imports are pinned to the
+    ports+observability seam by ``tests/test_architecture_pairs.py``; the
+    metadata module itself imports nothing from ``machina``, so this deferred
+    import is purely seam-conformance, not cycle avoidance.
+    """
+    from machina.skills import metadata
+
+    return metadata
 
 
 def _skill_key(name: Any) -> Any:
@@ -244,6 +262,11 @@ class Skill:
     source_type: str = "local"  # "local", "url", "builtin", "hub", "learned"
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Validated schema-v2 catalog metadata (front matter) or validated sidecar
+    # enrichment. ``None`` for v1 skills and for v2 documents that failed
+    # validation (baseline fallback). Inert data only — consumers must never
+    # treat it as authority. See machina.skills.metadata.
+    skill_metadata: SkillMetadata | None = None
 
 
 # Prompt-injection pattern sources. The compact variants replace `\s+` with
@@ -360,8 +383,16 @@ class SkillParser:
         return content
 
     @staticmethod
-    def parse(file_path: str | Path) -> Skill:
-        """Parse a SKILL.md file."""
+    def parse(
+        file_path: str | Path,
+        diagnostics: list[MetadataDiagnostic] | None = None,
+    ) -> Skill:
+        """Parse a SKILL.md file.
+
+        ``diagnostics`` (optional) collects bounded schema-v2 metadata
+        diagnostics. Bad v2 metadata never raises here: the skill loads with
+        baseline (v1) metadata and the caller receives the reason.
+        """
         path = Path(file_path)
         # Bound the read itself: a symlink can point at an arbitrarily large
         # file, and reading it only to reject the content afterwards invites
@@ -424,6 +455,41 @@ class SkillParser:
             raise ValueError("skill created_at must be an ISO timestamp")
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=UTC)
+
+        metadata_module = _metadata_module()
+        skill_metadata, metadata_diags = metadata_module.parse_skill_metadata(
+            metadata, skill_name=name, content=content, file_path=str(path)
+        )
+        if skill_metadata is not None:
+            # Catalog text (aliases, prerequisites, headings, ...) may be
+            # surfaced by browsing/preview consumers, so it passes the same
+            # best-effort injection scan as content. A hit degrades to
+            # baseline instead of failing the whole skill.
+            scanned = [
+                *skill_metadata.aliases,
+                *skill_metadata.preconditions,
+                *skill_metadata.required_tools,
+                *skill_metadata.exclusions,
+                *skill_metadata.stack.languages,
+                *skill_metadata.stack.frameworks,
+                *(section.heading for section in skill_metadata.sections),
+            ]
+            try:
+                for _value in scanned:
+                    SkillParser._scan_injection(_value)
+            except ValueError as exc:
+                skill_metadata = None
+                metadata_diags.append(
+                    metadata_module.MetadataDiagnostic(
+                        code=metadata_module.CODE_METADATA_INVALID,
+                        message=f"metadata text failed the injection scan: {exc}",
+                        skill_id=name,
+                        file_path=str(path),
+                        severity="error",
+                    )
+                )
+        if diagnostics is not None:
+            diagnostics.extend(metadata_diags)
         return Skill(
             name=name,
             description=description,
@@ -435,6 +501,7 @@ class SkillParser:
             source=metadata.get("source", ""),
             source_type=metadata.get("source_type", "local"),
             created_at=created_at,
+            skill_metadata=skill_metadata,
         )
 
 
@@ -446,7 +513,11 @@ class SkillRegistry(SkillSource):
     """
 
     def __init__(
-        self, skills_dir: str | Path | None = None, *, learned_dir: str | Path | None = None
+        self,
+        skills_dir: str | Path | None = None,
+        *,
+        learned_dir: str | Path | None = None,
+        enrichment_dir: str | Path | None = None,
     ) -> None:
         self._include_ecc = skills_dir is None
         self._ecc_bundle = None
@@ -472,6 +543,14 @@ class SkillRegistry(SkillSource):
         # reload semantics (out-of-band edits are still picked up) without
         # paying for a full parse on every call.
         self._signature_cache: tuple | None = None
+        # ECC enrichment sidecars (spec §7.3). ``None`` resolves the
+        # module-owned default (``machina/skills/enrichment/`` or the
+        # ``MACHINA_SKILL_ENRICHMENT_DIR`` override) lazily so tests can point
+        # it at a tmp dir.
+        self._enrichment_dir_override = Path(enrichment_dir) if enrichment_dir is not None else None
+        # Bounded catalog diagnostics from the last completed (re)load. The
+        # accessor reports them; they are never mixed into skill content.
+        self._metadata_diags: list[MetadataDiagnostic] = []
         # Merge-on-write bookkeeping: counters this instance has already
         # accounted for on disk. New increments are the delta over the
         # baseline, so a concurrent instance's writes are never overwritten.
@@ -503,11 +582,19 @@ class SkillRegistry(SkillSource):
         """Mark the parsed skill cache stale so the next load_all() re-reads."""
         self._signature_cache = None
 
+    def _enrichment_dir(self) -> Path:
+        """Resolved sidecar directory (override wins over the module default)."""
+        if self._enrichment_dir_override is not None:
+            return self._enrichment_dir_override
+        return _metadata_module().default_enrichment_dir()
+
     def _signature(self) -> tuple:
         """Cheap fingerprint of the on-disk skill set used to validate the cache.
 
         Stats only — no file contents are read. A changed mtime or size on any
-        SKILL.md, or on telemetry.json, invalidates the cached parse.
+        SKILL.md, telemetry.json, or enrichment sidecar invalidates the cached
+        parse. Sidecar stats live in this same signature: there is deliberately
+        no second, competing cache.
         """
         entries: list[tuple[str, int, int]] = []
         for directory in self._skill_dirs():
@@ -528,7 +615,21 @@ class SkillRegistry(SkillSource):
             telemetry = (telemetry_stat.st_mtime_ns, telemetry_stat.st_size)
         except OSError:
             telemetry = None
-        return (tuple(entries), telemetry)
+        enrichment: list[tuple[str, int, int]] = []
+        try:
+            for sidecar in sorted(self._enrichment_dir().glob("*.json"))[
+                :_MAX_ENRICHMENT_SIGNATURE_FILES
+            ]:
+                try:
+                    sidecar_stat = sidecar.stat()
+                except OSError:
+                    continue
+                enrichment.append(
+                    (sidecar.name, sidecar_stat.st_mtime_ns, sidecar_stat.st_size)
+                )
+        except OSError:
+            pass
+        return (tuple(entries), telemetry, tuple(enrichment))
 
     def _load_telemetry(self) -> None:
         """Load telemetry data from JSON file into skill objects."""
@@ -612,8 +713,11 @@ class SkillRegistry(SkillSource):
         except OSError:
             logger.warning("Failed to save telemetry", exc_info=True)
         if self._signature_cache is not None:
-            # Only acknowledge our telemetry write, not concurrent source edits.
-            self._signature_cache = (self._signature_cache[0], self._signature()[1])
+            # Only acknowledge our telemetry write, not concurrent source edits
+            # or sidecar changes: keep the cached source+enrichment stats and
+            # refresh the telemetry slot.
+            current = self._signature()
+            self._signature_cache = (self._signature_cache[0], current[1], self._signature_cache[2])
 
     def _write_merged_telemetry(self) -> None:
         try:
@@ -655,7 +759,13 @@ class SkillRegistry(SkillSource):
 
         A single malformed or rejected SKILL.md (e.g. it trips the
         prompt-injection filter) is skipped with a warning rather than
-        aborting the whole load.
+        aborting the whole load. Skipped and degraded skills are also reported
+        through :meth:`metadata_diagnostics` (bounded).
+
+        Validated schema-v2 metadata is attached to each loaded ``Skill`` as
+        ``skill_metadata``; bundled ECC skills receive validated sidecar
+        enrichment when the sidecar revision matches the bundle revision.
+        Invalid metadata degrades to baseline — the skill still loads.
 
         Repeated calls with no on-disk change are cheap no-ops: the parsed
         result is cached and validated against a stat-only signature, so
@@ -665,15 +775,34 @@ class SkillRegistry(SkillSource):
         signature = self._signature()
         if self._signature_cache is not None and signature == self._signature_cache and not refresh:
             return
+        metadata_module = _metadata_module()
+        collector = metadata_module.DiagnosticCollector(metadata_module.MAX_DIAGNOSTICS)
         self._skills.clear()
         if self._include_ecc:
             if self._ecc_bundle is None:
                 from machina.skills.bundle import ECCBundle
 
                 self._ecc_bundle = ECCBundle()
-            self._skills.update(
-                (_skill_key(skill.name), skill) for skill in self._ecc_bundle.skills()
-            )
+            ecc_skills = list(self._ecc_bundle.skills())
+            # Sidecar enrichment is keyed by the bundle revision; without an
+            # identifiable revision (e.g. a test double without a manifest)
+            # the safe behavior is baseline metadata, never guessed enrichment.
+            manifest = getattr(self._ecc_bundle, "manifest", None)
+            revision = manifest.get("revision") if isinstance(manifest, dict) else None
+            if isinstance(revision, str) and revision:
+                enrichment, enrichment_diags = metadata_module.load_enrichment_sidecar(
+                    revision,
+                    skill_ids=[skill.name for skill in ecc_skills],
+                    sidecar_dir=self._enrichment_dir(),
+                )
+                collector.extend(enrichment_diags)
+            else:
+                enrichment = {}
+            for skill in ecc_skills:
+                enriched = enrichment.get(skill.name)
+                if enriched is not None:
+                    skill.skill_metadata = enriched
+                self._skills[_skill_key(skill.name)] = skill
         for directory in self._skill_dirs():
             if not directory.exists():
                 continue
@@ -681,19 +810,65 @@ class SkillRegistry(SkillSource):
                 if skill_dir.is_dir() and not _LEGACY_INSTALL_BUILD_RE.fullmatch(skill_dir.name):
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
+                        parse_diags: list[Any] = []
                         try:
-                            skill = SkillParser.parse(skill_file)
+                            skill = SkillParser.parse(skill_file, diagnostics=parse_diags)
                         except (ValueError, OSError, UnicodeDecodeError) as e:
                             logger.warning("Skipping skill %s: %s", skill_file, e)
+                            collector.add(
+                                metadata_module.MetadataDiagnostic(
+                                    code=metadata_module.CODE_SKILL_LOAD_FAILED,
+                                    message=str(e) or e.__class__.__name__,
+                                    skill_id=skill_dir.name,
+                                    file_path=str(skill_file),
+                                    severity="error",
+                                )
+                            )
                             continue
+                        collector.extend(parse_diags)
                         existing = self._skills.get(_skill_key(skill.name))
                         if not existing or existing.source_type != "builtin-ecc":
                             # Local provenance cannot claim the verified bundle's trust.
                             if skill.source_type == "builtin-ecc":
                                 skill.source_type = "local"
+                            if existing is not None:
+                                collector.add(
+                                    metadata_module.MetadataDiagnostic(
+                                        code=metadata_module.CODE_DUPLICATE_SKILL_ID,
+                                        message=(
+                                            f"skill {skill.name!r} at {skill.file_path} replaces "
+                                            f"the earlier entry at {existing.file_path}"
+                                        ),
+                                        skill_id=skill.name,
+                                        file_path=skill.file_path,
+                                    )
+                                )
                             self._skills[_skill_key(skill.name)] = skill
+                        else:
+                            collector.add(
+                                metadata_module.MetadataDiagnostic(
+                                    code=metadata_module.CODE_DUPLICATE_SKILL_ID,
+                                    message=(
+                                        f"local skill {skill.name!r} at {skill.file_path} was not "
+                                        "loaded: a bundled skill with the same name takes precedence"
+                                    ),
+                                    skill_id=skill.name,
+                                    file_path=skill.file_path,
+                                )
+                            )
         self._load_telemetry()
         self._signature_cache = signature
+        self._metadata_diags = collector.finish()
+
+    def metadata_diagnostics(self) -> list[MetadataDiagnostic]:
+        """Bounded metadata diagnostics from the last completed load.
+
+        Covers malformed/rejected v2 metadata, unsupported and authority-shaped
+        fields, oversized data, section-anchor problems, dependency cycles,
+        duplicate skill ids, skipped (unparseable) skills, and stale enrichment
+        sidecars. Empty before the first load and when nothing was reported.
+        """
+        return list(self._metadata_diags)
 
     def get(self, name: str) -> Skill | None:
         return self._skills.get(_skill_key(name))
@@ -901,6 +1076,11 @@ class SkillRegistry(SkillSource):
             "source": skill.source,
             "source_type": skill.source_type,
         }
+        if skill.skill_metadata is not None:
+            # Preserve validated v2 catalog metadata across rewrites instead of
+            # silently dropping it. ``to_dict`` inlines opaque extensions as
+            # top-level fields; anchors re-derive from content on the next load.
+            frontmatter.update(skill.skill_metadata.to_dict())
         yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
         skill_content = f"---\n{yaml_text}---\n{content}\n"
 
@@ -971,6 +1151,14 @@ class SkillRegistry(SkillSource):
         skill.description = new_description
         skill.content = new_content
         skill.triggers = new_triggers
+        if content is not None and skill.skill_metadata is not None:
+            # Section anchors are content-derived: re-bind them so the live
+            # object never carries line numbers into replaced content. The
+            # next load_all() re-derives them (and their diagnostics) anyway.
+            metadata_module = _metadata_module()
+            skill.skill_metadata, _anchor_diags = metadata_module.bind_section_anchors(
+                skill.skill_metadata, new_content
+            )
         self._invalidate()
         return skill
 

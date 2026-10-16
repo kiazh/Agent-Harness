@@ -37,7 +37,7 @@ dependency). `import harness_evals` works; the package does not expose
 `__version__`, so the version is read via `importlib.metadata`.
 
 The pilot venv never imports Machina. Retrieval is a subprocess into the repo
-venv (`/Users/shadow/machina/.venv/bin/python`), fed the embedded helper
+venv (`.venv/bin/python`), fed the embedded helper
 source via `python -` with `PYTHONPATH=<repo>`; ground-truth parsing and token
 F1 reuse the repo's own `machina/research/locomo.py` loaded directly from file
 (the module is pure stdlib).

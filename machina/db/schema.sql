@@ -431,6 +431,21 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at TIMESTAMPTZ
 );
+-- Token-efficiency ledger upgrades (2026-10-16). Existing databases are
+-- upgraded by the runtime migration in db/connection.py; keep both in sync.
+-- requested_model differs from model when the provider resolves an alias;
+-- cache categories are NULL when the provider did not report them (unknown is
+-- not zero); usage_basis distinguishes provider-reported from estimates;
+-- cost_usd is a dated estimate (NULL when the price snapshot cannot cover the
+-- used categories); accepted marks the turn-final call of a successful turn.
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS requested_model TEXT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'agent';
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cache_read_tokens INT CHECK (cache_read_tokens >= 0);
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cache_write_tokens INT CHECK (cache_write_tokens >= 0);
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS usage_basis TEXT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION CHECK (cost_usd >= 0);
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS price_version TEXT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS accepted BOOLEAN;
 CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_agent ON llm_usage(agent_id, created_at DESC);
 -- Delegation attribution upgrades are applied by delegation_schema.sql.
@@ -438,6 +453,31 @@ CREATE INDEX IF NOT EXISTS idx_llm_usage_agent ON llm_usage(agent_id, created_at
 CREATE INDEX IF NOT EXISTS idx_llm_usage_session_status ON llm_usage(session_id, status);
 -- Composite index for UsageStore.summary(): WHERE agent_id = $1 [FILTER status]
 CREATE INDEX IF NOT EXISTS idx_llm_usage_agent_status ON llm_usage(agent_id, status);
+
+-- ─── Durable Tool Artifacts (token-efficiency T2) ─────────────────────────
+-- Immutable originals for oversized tool results. The model sees a bounded
+-- view plus a handle; every read re-authorizes against the caller's session
+-- ancestry, and expiry returns "unavailable" honestly. Rows cascade with the
+-- session. Content is text-only: tool results are already text.
+CREATE TABLE IF NOT EXISTS tool_artifacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    source_version TEXT,
+    status TEXT,
+    summary TEXT,
+    content TEXT NOT NULL,
+    content_bytes INT NOT NULL CHECK (content_bytes >= 0),
+    token_estimate INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ,
+    access_count INT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tool_artifacts_session
+    ON tool_artifacts(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tool_artifacts_expiry
+    ON tool_artifacts(expires_at) WHERE expires_at IS NOT NULL;
 
 -- ─── Agent Beliefs (Gap 2: Identity Model) ─────────────────────────────────
 

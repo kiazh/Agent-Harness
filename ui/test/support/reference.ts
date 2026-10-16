@@ -16,7 +16,7 @@ export async function referenceFixture(columns = 140, rows = 52) {
   async request(method:string, params:Record<string, unknown> = {}) {
    requests.push({method,params});
    if (method === "initialize") return {version:"fixture", model:"preview", cwd:"~/machina", branch:"main", provider:"fixture"};
-   if (method === "config.get") return {config:{theme:"codex"}};
+   if (method === "config.get") return {config:{theme:"codex",nowplaying_enabled:false}};
    if (method === "mode.get") return {mode:"ask"};
    if (method === "session.create") return {session:{id:"reference-session", title:"Preview", model:"preview", provider:"fixture", status:"active", lastActivity:null}};
    if (method === "prompt.submit") return {turnId:"reference-turn"};

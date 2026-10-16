@@ -2,7 +2,7 @@
 // bounds, ordering) and the ProblemsPane + EditorPane bottom-slot behavior.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { stripTerminalSequences, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { EditorPane } from "../src/components/EditorPane.ts";
 import { CompletionPopup } from "../src/components/IntelligencePopups.ts";
 import { ProblemsPane, formatProblemRow } from "../src/components/ProblemsPane.ts";
@@ -142,6 +142,25 @@ test("unversioned pushes replace and label; malformed entries are skipped", () =
 		diagnostics: [diagnostic(0, 0, 1, "kept"), { nope: true }, "garbage"],
 	});
 	assert.deepEqual(model.rows().map((row) => row.message), ["kept"]);
+});
+
+test("dedupe keys include the displayed version and source labels", () => {
+	const model = new ProblemsModel();
+	// Two producer entries whose rows match except for the version: one prints
+	// `[unversioned]`, so they must not collapse into one row.
+	model.push({ uri: URI, version: null, source: "one", diagnostics: [{ ...diagnostic(0, 0, 1, "same text"), source: "shared" }] });
+	model.push({ uri: URI, version: 5, source: "two", diagnostics: [{ ...diagnostic(0, 0, 1, "same text"), source: "shared" }] });
+	const rows = model.rows();
+	assert.equal(rows.length, 2, "null version vs 5 stay distinct");
+	assert.deepEqual(rows.map((row) => row.version), [null, 5]);
+	// Different display sources print differently: both survive too.
+	model.push({ uri: URI, version: 1, source: "three", diagnostics: [{ ...diagnostic(2, 0, 2, "twin"), source: "left" }] });
+	model.push({ uri: URI, version: 1, source: "four", diagnostics: [{ ...diagnostic(2, 0, 2, "twin"), source: "right" }] });
+	assert.equal(model.rows().filter((row) => row.message === "twin").length, 2, "different (source) labels stay distinct");
+	// Rows whose every displayed field matches still collapse to one.
+	model.push({ uri: "file:///w/other.ts", version: 1, source: "five", diagnostics: [{ ...diagnostic(1, 0, 2, "dupe"), source: "shared" }] });
+	model.push({ uri: "file:///w/other.ts", version: 1, source: "six", diagnostics: [{ ...diagnostic(1, 0, 2, "dupe"), source: "shared" }] });
+	assert.equal(model.rows().filter((row) => row.message === "dupe").length, 1, "display-identical rows still dedupe");
 });
 
 test("rows sort severity → uri → line and counts track each severity", () => {
@@ -413,6 +432,40 @@ test("the popup wins contested slot rows; problems never overdraw the allocation
 	const after = plain(harness.pane.render(60));
 	assert.equal(after.length, 12);
 	assert.match(after[8] ?? "", /✗ 1 · ! 1 · i 1/, "the problems section returns once the popup unmounts");
+});
+
+test("an oversubscribed pane shrinks the problems rows instead of clipping them", () => {
+	const harness = setupPane("hello");
+	const popupRows = Array.from({ length: 13 }, (_, index) => `popup-${index}`);
+	const problemRows = Array.from({ length: 6 }, (_, index) => `problem-${index}`);
+	const routed: number[] = [];
+	const popup: Component = { render: () => [...popupRows], invalidate: () => {} };
+	const problems: Component = {
+		render: () => [...problemRows],
+		invalidate: () => {},
+		handleMouse: (event) => {
+			routed.push(Math.floor(event.y));
+			return { handled: true };
+		},
+	};
+	harness.pane.setIntelligence(popup, {});
+	harness.pane.setProblems(problems, 6);
+	harness.pane.layout(23);
+	const rows = plain(harness.pane.render(60));
+	assert.equal(rows.length, 23, "the allocation is met exactly");
+	assert.equal(rows.filter((line) => line.trimEnd().startsWith("popup-")).length, 13, "the popup is never clipped");
+	assert.equal(
+		rows.filter((line) => line.trimEnd().startsWith("problem-")).length,
+		5,
+		"23 - 3 chrome - 13 popup - 1 divider - 1 viewport row leaves 5 problems rows",
+	);
+	assert.ok(!rows.some((line) => line.includes("problem-5")), "the clipped row is gone, never half-drawn");
+	assert.match(rows[22] ?? "", /problem-4/, "the last drawn row is a real problem row");
+	// `lastProblemsRows` must match the drawn band exactly: a press on the last
+	// drawn row (y 22) reaches the component, the row after it (y 23) does not.
+	assert.equal(harness.pane.handleMouse(mouseEvent({ type: "press", x: 0, y: 22, width: 60 }))?.handled, true);
+	assert.deepEqual(routed, [4], "the press reached the problems row drawn last");
+	assert.equal(harness.pane.handleMouse(mouseEvent({ type: "press", x: 0, y: 23, width: 60 })), undefined);
 });
 
 test("a pull replaces the set a push created (no duplicate rows from producer labels)", async () => {

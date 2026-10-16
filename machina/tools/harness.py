@@ -90,8 +90,29 @@ async def harness_status() -> str:
 
     # Truncation ladder, cheapest context first. The final guard refuses
     # rather than emitting truncated JSON; every omitted field is marked so
-    # absence is never misread as emptiness.
+    # absence is never misread as emptiness. Learning notes are live evidence,
+    # so every recoverable/duplicated section above them drops first.
     serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES and "installed" in safe:
+        # Inventory names are detail; the per-source counts remain.
+        installed = safe["installed"]
+        for source, entry in (installed.get("skills_by_source") or {}).items():
+            if isinstance(entry, dict) and entry.pop("names", None) is not None:
+                installed.setdefault("installed_omitted", []).append(source)
+        serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES and safe.get("features"):
+        # The always-on capability brief already carries FEATURES in the
+        # system prompt; live learning state cannot be recovered from it, so
+        # the duplicate feature map is dropped before notes (never silently:
+        # absence is disclosed).
+        safe["features"] = {}
+        safe["features_omitted"] = "See the harness capabilities section of the system prompt"
+        serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES:
+        workspace = safe.get("workspace")
+        if isinstance(workspace, dict) and workspace.pop("profiles", None):
+            workspace["profiles_omitted"] = "Inspect /lsp status"
+            serialized = _shrink()
     if len(serialized) > _MAX_STATUS_BYTES:
         # Keep JSON valid for the agent's bounded tool-message budget. Never
         # turn omitted notes into evidence that learning has no saved state.
@@ -106,25 +127,6 @@ async def harness_status() -> str:
         safe["learning"]["rsi"]["trial"] = None
         safe["learning"]["rsi"]["trial_omitted"] = "Inspect full trial with /growth show"
         serialized = _shrink()
-    if len(serialized) > _MAX_STATUS_BYTES and "installed" in safe:
-        installed = safe["installed"]
-        for source, entry in (installed.get("skills_by_source") or {}).items():
-            if isinstance(entry, dict) and entry.pop("names", None) is not None:
-                installed.setdefault("installed_omitted", []).append(source)
-        serialized = _shrink()
-    if len(serialized) > _MAX_STATUS_BYTES and safe.get("features"):
-        # The always-on capability brief already carries FEATURES in the
-        # system prompt; live workspace/transport state cannot be recovered
-        # from it, so the duplicate feature map is dropped before the
-        # workspace profiles (never silently: absence is disclosed).
-        safe["features"] = {}
-        safe["features_omitted"] = "See the harness capabilities section of the system prompt"
-        serialized = _shrink()
-    if len(serialized) > _MAX_STATUS_BYTES:
-        workspace = safe.get("workspace")
-        if isinstance(workspace, dict) and workspace.pop("profiles", None):
-            workspace["profiles_omitted"] = "Inspect /lsp status"
-            serialized = _shrink()
     if len(serialized) > _MAX_STATUS_BYTES:
         # Corrupt/legacy state must not defeat the tool-message bound and yield
         # truncated JSON. Refuse safely instead of implying omitted data is empty.

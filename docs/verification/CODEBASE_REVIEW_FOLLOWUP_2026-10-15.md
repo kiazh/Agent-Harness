@@ -8,7 +8,7 @@ Tests were excluded as requested. No tests, application probes, fixes, commits, 
 
 ### F01 — P1, conditional: directory-fd write protection still permits an ancestor swap before opening
 
-**Source:** [file.py:280](/Users/shadow/machina/machina/tools/file.py:280), [file.py:282](/Users/shadow/machina/machina/tools/file.py:282), [file.py:291](/Users/shadow/machina/machina/tools/file.py:291).
+**Source:** [file.py:280](machina/tools/file.py:280), [file.py:282](machina/tools/file.py:282), [file.py:291](machina/tools/file.py:291).
 
 The new pinned-directory implementation closes the previous post-open pathname race, but its directory acquisition still checks containment by pathname before `lstat` and `open`. For a target `workspace/a/b/file`, another local process can replace ancestor `a` with a symlink to an outside tree after `_realpath_inside_base(parent)` returns but before `lstat(parent)`. Both `lstat` and `open` then identify the outside directory `b`. The inode comparison succeeds, and `O_NOFOLLOW` only rejects a symlink at the final component `b`. Subsequent descriptor-relative writes are anchored to the wrong directory.
 
@@ -18,7 +18,7 @@ The new pinned-directory implementation closes the previous post-open pathname r
 
 ### F02 — P1: cancelling a tool batch loses records of already-completed effects
 
-**Source:** [agent.py:1133](/Users/shadow/machina/machina/core/agent.py:1133), [agent.py:1151](/Users/shadow/machina/machina/core/agent.py:1151), [agent.py:1268](/Users/shadow/machina/machina/core/agent.py:1268), [agent.py:1274](/Users/shadow/machina/machina/core/agent.py:1274).
+**Source:** [agent.py:1133](machina/core/agent.py:1133), [agent.py:1151](machina/core/agent.py:1151), [agent.py:1268](machina/core/agent.py:1268), [agent.py:1274](machina/core/agent.py:1274).
 
 Tool completions are emitted as each task finishes, but context recording, `tool_calls_made` bookkeeping and approval completion happen in Phase D, after the entire batch. If a fast write finishes while another tool is still running, cancelling the turn skips Phase D. The completed write is not in `pending_chunks`, so cancellation flushing cannot recover it. An approved action that already ran can remain in the claimed state.
 
@@ -28,7 +28,7 @@ Tool completions are emitted as each task finishes, but context recording, `tool
 
 ### F03 — P2: failed connector rollback overwrites another worker's newer configuration
 
-**Source:** [management.py:238](/Users/shadow/machina/machina/connectors/management.py:238), [management.py:243](/Users/shadow/machina/machina/connectors/management.py:243), [management.py:246](/Users/shadow/machina/machina/connectors/management.py:246), [management.py:212](/Users/shadow/machina/machina/connectors/management.py:212).
+**Source:** [management.py:238](machina/connectors/management.py:238), [management.py:243](machina/connectors/management.py:243), [management.py:246](machina/connectors/management.py:246), [management.py:212](machina/connectors/management.py:212).
 
 `add_and_connect` saves a configuration and then awaits connection/discovery. Its configuration lock is local to one service instance. Another process can save a newer configuration during that await. If the first connection fails, `_compensate` unconditionally removes the connector or restores its prior fields, destroying the newer successful update.
 
@@ -38,7 +38,7 @@ Tool completions are emitted as each task finishes, but context recording, `tool
 
 ### F04 — P2: agent connector installation bypasses the existing sandbox stdio restriction
 
-**Source:** [management.py:233](/Users/shadow/machina/machina/connectors/management.py:233), [management.py:246](/Users/shadow/machina/machina/connectors/management.py:246), [mcp_client.py:381](/Users/shadow/machina/machina/connectors/mcp_client.py:381).
+**Source:** [management.py:233](machina/connectors/management.py:233), [management.py:246](machina/connectors/management.py:246), [mcp_client.py:381](machina/connectors/mcp_client.py:381).
 
 The agent `mcp_connect` management path validates the approved request but does not reject a stdio connector in sandbox mode before launching it. The MCP client launches stdio servers on the host. Existing connector connection/invocation paths explicitly prohibit this combination.
 
@@ -48,7 +48,7 @@ The agent `mcp_connect` management path validates the approved request but does 
 
 ### F05 — P2: connector store locking can block the entire event loop
 
-**Source:** [store.py:48](/Users/shadow/machina/machina/connectors/store.py:48), [service.py:148](/Users/shadow/machina/machina/connectors/service.py:148).
+**Source:** [store.py:48](machina/connectors/store.py:48), [service.py:148](machina/connectors/service.py:148).
 
 POSIX connector writes acquire `flock(LOCK_EX)` synchronously, without a deadline. Async configuration/removal methods call these writes directly. If another process holds the lock while stalled, the waiting process blocks its event-loop thread, including unrelated requests, cancellation and health handling.
 
@@ -58,7 +58,7 @@ POSIX connector writes acquire `flock(LOCK_EX)` synchronously, without a deadlin
 
 ### F06 — P2: OAuth refresh takes locks in conflicting orders
 
-**Source:** [service.py:65](/Users/shadow/machina/machina/connectors/service.py:65), [oauth.py:1206](/Users/shadow/machina/machina/connectors/oauth.py:1206), [oauth.py:1368](/Users/shadow/machina/machina/connectors/oauth.py:1368).
+**Source:** [service.py:65](machina/connectors/service.py:65), [oauth.py:1206](machina/connectors/oauth.py:1206), [oauth.py:1368](machina/connectors/oauth.py:1368).
 
 A service refresh holds the configuration lock while refreshing cached authorization. When a token refresh is in flight, cache refresh waits for that operation's credential lock. The token-refresh owner holds the credential lock and, after receiving tokens, calls `_resolve_config`, which waits for the configuration lock. The circular wait lasts until the bounded refresh-coalescing wait expires; the cache path then treats the in-flight record as unavailable and removes cached authorization.
 
@@ -68,7 +68,7 @@ A service refresh holds the configuration lock while refreshing cached authoriza
 
 ### F07 — P2: HTTP streaming drops growth state between generator steps
 
-**Source:** [streaming.py:77](/Users/shadow/machina/machina/api/routes/streaming.py:77), [streaming.py:197](/Users/shadow/machina/machina/api/routes/streaming.py:197), [agent.py:644](/Users/shadow/machina/machina/core/agent.py:644), [agent.py:1567](/Users/shadow/machina/machina/core/agent.py:1567).
+**Source:** [streaming.py:77](machina/api/routes/streaming.py:77), [streaming.py:197](machina/api/routes/streaming.py:197), [agent.py:644](machina/core/agent.py:644), [agent.py:1567](machina/core/agent.py:1567).
 
 HTTP streaming creates a fresh task for every `__anext__` call. Growth episode and RSI ContextVars are set inside the first step's task, so they do not propagate back to the driver and into later tasks. The done step reads the default episode ID and skips `_complete_growth`. Even a short completion normally yields usage before done, separating preparation and completion into different tasks.
 
@@ -78,7 +78,7 @@ HTTP streaming creates a fresh task for every `__anext__` call. Growth episode a
 
 ### F08 — P2: shared RAG pipelines retain old embedding credentials and failed backend selection
 
-**Source:** [rag.py:83](/Users/shadow/machina/machina/tools/rag.py:83), [rag.py:145](/Users/shadow/machina/machina/tools/rag.py:145), [embedder.py:92](/Users/shadow/machina/machina/rag/embedder.py:92), [embedder.py:129](/Users/shadow/machina/machina/rag/embedder.py:129).
+**Source:** [rag.py:83](machina/tools/rag.py:83), [rag.py:145](machina/tools/rag.py:145), [embedder.py:92](machina/rag/embedder.py:92), [embedder.py:129](machina/rag/embedder.py:129).
 
 Pipeline identity includes embedding backend/model/base URL but not credential identity or effective backend availability. Its independently constructed OpenAI embedder captures an API key and Authorization header at initialization. Rotating/clearing the key does not rebuild the pipeline. Similarly, a pipeline constructed without usable API credentials can stay keyword-only after a key is added, if the other identity components remain unchanged. The separate shared-embedder helper includes a credential digest, but the RAG pipeline does not use that helper.
 
@@ -88,7 +88,7 @@ Pipeline identity includes embedding backend/model/base URL but not credential i
 
 ### F09 — P2: persistent CLI model/provider changes can write the old value back
 
-**Source:** [CLI:1627](/Users/shadow/machina/machina/cli/__init__.py:1627), [CLI:1637](/Users/shadow/machina/machina/cli/__init__.py:1637), [config.py:507](/Users/shadow/machina/machina/core/config.py:507), [config.py:537](/Users/shadow/machina/machina/core/config.py:537).
+**Source:** [CLI:1627](machina/cli/__init__.py:1627), [CLI:1637](machina/cli/__init__.py:1637), [config.py:507](machina/core/config.py:507), [config.py:537](machina/core/config.py:537).
 
 After `config.set`, persistent model/provider updates synchronize the environment shadow using `config.get(key)`. That getter still prefers the old `MACHINA_MODEL`/`MACHINA_PROVIDER` environment value over the newly saved attribute. With `MACHINA_MODEL=old`, `machina config-set model new --persist` can save YAML `new` and then write `old` back into `.env`, while reporting success.
 
@@ -98,7 +98,7 @@ After `config.set`, persistent model/provider updates synchronize the environmen
 
 ### F10 — P2: forced setup merges the old environment instead of replacing it
 
-**Source:** [CLI:1401](/Users/shadow/machina/machina/cli/__init__.py:1401), [CLI:1508](/Users/shadow/machina/machina/cli/__init__.py:1508), [CLI:1527](/Users/shadow/machina/machina/cli/__init__.py:1527).
+**Source:** [CLI:1401](machina/cli/__init__.py:1401), [CLI:1508](machina/cli/__init__.py:1508), [CLI:1527](machina/cli/__init__.py:1527).
 
 `setup --force` prints that it is overwriting `.env` and clears only its in-memory existing-values mapping. Since the file still exists, the seed/replacement branch is skipped, and `set_env_values` merges changes into the original contents. Noninteractive forced setup retains prior provider keys, model/provider choices and other settings; blank interactive answers also fail to remove old secrets.
 
@@ -108,7 +108,7 @@ After `config.set`, persistent model/provider updates synchronize the environmen
 
 ### F11 — P2: title-only retrieval evaluation is forced to score zero
 
-**Source:** [locomo.py:512](/Users/shadow/machina/machina/research/locomo.py:512), [locomo.py:530](/Users/shadow/machina/machina/research/locomo.py:530), [session_recall.py:130](/Users/shadow/machina/machina/core/session_recall.py:130).
+**Source:** [locomo.py:512](machina/research/locomo.py:512), [locomo.py:530](machina/research/locomo.py:530), [session_recall.py:130](machina/core/session_recall.py:130).
 
 The title-only evaluation filters hits to `source == 'title'`, then creates rankings only from hits whose chunk UUID appears in a dialogue mapping. Title hits always have `chunk_id=None`, so all title-only rankings are empty even when a title matches. All temporary session titles are also the same generic `LoCoMo transcript`.
 
@@ -118,7 +118,7 @@ The title-only evaluation filters hits to `source == 'title'`, then creates rank
 
 ### F12 — P2: delegation bookkeeping failure leaks the newly built child/provider
 
-**Source:** [orchestrator.py:314](/Users/shadow/machina/machina/core/orchestrator.py:314), [orchestrator.py:322](/Users/shadow/machina/machina/core/orchestrator.py:322), [orchestrator.py:329](/Users/shadow/machina/machina/core/orchestrator.py:329).
+**Source:** [orchestrator.py:314](machina/core/orchestrator.py:314), [orchestrator.py:322](machina/core/orchestrator.py:322), [orchestrator.py:329](machina/core/orchestrator.py:329).
 
 The delegate creates its child session and builds an owned provider, then awaits `_record_start` before entering the execution cleanup `try/finally`. A DB error or cancellation during that insert skips cleanup. The provider is not closed and the child session is left active.
 
@@ -128,7 +128,7 @@ The delegate creates its child session and builds an owned provider, then awaits
 
 ### F13 — P2: a named pipe can hang file validation on the event-loop thread
 
-**Source:** [file.py:153](/Users/shadow/machina/machina/tools/file.py:153), [file.py:155](/Users/shadow/machina/machina/tools/file.py:155), [file.py:579](/Users/shadow/machina/machina/tools/file.py:579).
+**Source:** [file.py:153](machina/tools/file.py:153), [file.py:155](machina/tools/file.py:155), [file.py:579](machina/tools/file.py:579).
 
 `resolve_path` opens every existing nondirectory path with blocking `O_RDONLY` to validate its identity. A POSIX FIFO without a writer blocks in that open. `read_file` calls `resolve_path` synchronously before its later `is_file` rejection and before moving actual reads to a thread. Other callers using the resolver inherit the same issue.
 
@@ -138,7 +138,7 @@ The delegate creates its child session and builds an owned provider, then awaits
 
 ### F14 — P3, latent helper defect: bounded subprocess stdin can block before supervision starts
 
-**Source:** [child_process.py:272](/Users/shadow/machina/machina/core/child_process.py:272), [child_process.py:277](/Users/shadow/machina/machina/core/child_process.py:277), [child_process.py:305](/Users/shadow/machina/machina/core/child_process.py:305).
+**Source:** [child_process.py:272](machina/core/child_process.py:272), [child_process.py:277](machina/core/child_process.py:277), [child_process.py:305](machina/core/child_process.py:305).
 
 The bounded subprocess helper writes all stdin synchronously before starting its timeout timer or output-reader threads. Input larger than pipe capacity blocks indefinitely if the child does not read it. A child that writes enough output before reading stdin can also deadlock both directions. The cancellation polling loop has not started at that point.
 

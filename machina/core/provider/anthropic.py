@@ -21,6 +21,7 @@ from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
 from machina.core.provider.base import LLMProvider
 from machina.core.provider.caches import _cache_get, _cache_key, _cache_put, _caller_identity
+from machina.core.provider.prompt_cache import apply_anthropic_breakpoints, cache_profile
 from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.reasoning import (
     ANTHROPIC_THINKING_BUDGETS,
@@ -29,15 +30,14 @@ from machina.core.provider.reasoning import (
 )
 from machina.core.provider.sse import sse_data, sse_event
 from machina.core.provider.transport import (
-    _ephemeral_cache_control,
     _log_prompt_cache_breakpoints,
-    _mark_last_tool_breakpoint,
     _post_with_retry,
     _prompt_cache_breakpoints_enabled,
     _stream_with_retry,
     _validate_messages,
     _validate_params,
 )
+from machina.core.provider.usage_map import parse_anthropic_usage
 from machina.core.usage import usage_store
 
 
@@ -211,38 +211,38 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
             "messages": anthropic_messages,
             **thinking,
         }
-        if system:
-            if cache_breakpoints:
-                # Block-list form is required to carry cache_control; only
-                # used when the pilot flag is on.
-                payload["system"] = [
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": _ephemeral_cache_control(),
-                    }
-                ]
-            else:
-                payload["system"] = system
+        if system and not cache_breakpoints:
+            payload["system"] = system
         if temperature != 1.0:
             payload["temperature"] = temperature
-        tools_marked = False
+        tool_defs = None
         if tools:
+            # Two ends of the stable prefix: the last tool schema, and (via
+            # the shared helper) the conversation tail so tool continuations
+            # reuse the growing prefix. Breakpoints stay capability-gated.
             tool_defs = [
                 {"name": t.name, "description": t.description, "input_schema": t.parameters}
                 for t in tools
             ]
-            if cache_breakpoints:
-                tool_defs = _mark_last_tool_breakpoint(tool_defs)
-                tools_marked = True
-            payload["tools"] = tool_defs
+            if not cache_breakpoints:
+                payload["tools"] = tool_defs
         if stream:
             payload["stream"] = True
+        system_marked = tools_marked = tail_marked = False
+        if cache_breakpoints:
+            system_marked, tools_marked, tail_marked = apply_anthropic_breakpoints(
+                payload,
+                system=system,
+                messages=anthropic_messages,
+                tools=tool_defs,
+                profile=cache_profile(self, model),
+            )
         _log_prompt_cache_breakpoints(
             self.PROVIDER_NAME,
             model,
-            system=cache_breakpoints and bool(system),
+            system=system_marked,
             tools=tools_marked,
+            tail=tail_marked,
         )
         return payload
 
@@ -327,18 +327,13 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
             raise ProviderError(f"Anthropic returned no content for {model}: {detail or data}")
 
         content, tool_calls = self._from_response_blocks(data.get("content", []))
-        usage_in = data.get("usage", {})
-        usage = {
-            "prompt_tokens": usage_in.get("input_tokens", 0),
-            "completion_tokens": usage_in.get("output_tokens", 0),
-            "total_tokens": usage_in.get("input_tokens", 0) + usage_in.get("output_tokens", 0),
-        }
+        usage = parse_anthropic_usage(data.get("usage", {}))
         metrics.record_llm_call(
             session_id="",
             model=data.get("model", model),
             duration_ms=duration_ms,
-            prompt_tokens=usage["prompt_tokens"],
-            completion_tokens=usage["completion_tokens"],
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
         )
         if reservation_id is not None:
             await usage_store.finish(reservation_id, usage, model=data.get("model", model))
@@ -346,9 +341,9 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
             "llm_call_complete",
             provider=self.PROVIDER_NAME,
             model=data.get("model", model),
-            prompt_tokens=usage["prompt_tokens"],
-            completion_tokens=usage["completion_tokens"],
-            total_tokens=usage["total_tokens"],
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
             tool_calls=len(tool_calls),
         )
         native_blocks = self._provider_content(data.get("content", []))
@@ -408,7 +403,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
         text_parts: list[str] = []
         blocks: dict[int, dict[str, Any]] = {}
         native_blocks: dict[int, dict[str, Any]] = {}
-        input_tokens = 0
+        stream_usage: dict[str, Any] = {}
         output_tokens = 0
         resolved_model = model
         saw_terminal = False
@@ -441,7 +436,9 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
                     if event_type == "message_start":
                         msg = data.get("message", {})
                         resolved_model = msg.get("model") or resolved_model
-                        input_tokens = msg.get("usage", {}).get("input_tokens", input_tokens)
+                        start_usage = msg.get("usage", {})
+                        if isinstance(start_usage, dict):
+                            stream_usage.update(start_usage)
                     elif event_type == "content_block_start":
                         idx = data.get("index", 0)
                         block = data.get("content_block", {})
@@ -547,11 +544,10 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
                     "input": parsed_input if isinstance(parsed_input, dict) else {},
                 }
             )
-        usage = {
-            "prompt_tokens": input_tokens,
-            "completion_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
-        }
+        # message_delta carries the cumulative output count; it wins over any
+        # placeholder in message_start.
+        stream_usage["output_tokens"] = output_tokens
+        usage = parse_anthropic_usage(stream_usage)
         if reservation_id is not None:
             await usage_store.finish(reservation_id, usage, model=resolved_model)
         audit_log(

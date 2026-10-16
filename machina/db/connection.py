@@ -43,6 +43,43 @@ ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_space TEXT;
 CREATE INDEX IF NOT EXISTS idx_memories_embedding_space ON memories(embedding_space);
 """
 
+# Token-efficiency ledger + artifact store (2026-10-16). schema.sql never runs
+# on an already-initialized database, so existing installations get the same
+# additive DDL here. Keep in sync with the llm_usage / tool_artifacts sections
+# of schema.sql. Idempotent (IF NOT EXISTS).
+_USAGE_LEDGER_MIGRATION = """
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS requested_model TEXT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'agent';
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cache_read_tokens INT CHECK (cache_read_tokens >= 0);
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cache_write_tokens INT CHECK (cache_write_tokens >= 0);
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS usage_basis TEXT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION CHECK (cost_usd >= 0);
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS price_version TEXT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS accepted BOOLEAN;
+"""
+
+_TOOL_ARTIFACTS_MIGRATION = """
+CREATE TABLE IF NOT EXISTS tool_artifacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    source_version TEXT,
+    status TEXT,
+    summary TEXT,
+    content TEXT NOT NULL,
+    content_bytes INT NOT NULL CHECK (content_bytes >= 0),
+    token_estimate INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ,
+    access_count INT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tool_artifacts_session
+    ON tool_artifacts(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tool_artifacts_expiry
+    ON tool_artifacts(expires_at) WHERE expires_at IS NOT NULL;
+"""
+
 
 class Database:
     """Manages asyncpg connection pool."""
@@ -256,6 +293,8 @@ class Database:
                     await conn.execute(f.read())
             await conn.execute(_CONTEXT_EVENT_ORDER_MIGRATION)
             await conn.execute(_MEMORY_EMBEDDING_SPACE_MIGRATION)
+            await conn.execute(_USAGE_LEDGER_MIGRATION)
+            await conn.execute(_TOOL_ARTIFACTS_MIGRATION)
 
     # Standalone growth-migration entry point; migration tests apply it, no production caller. Kept (R4-106).
     async def initialize_growth_schema(self) -> None:

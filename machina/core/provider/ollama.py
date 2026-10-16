@@ -26,6 +26,7 @@ from machina.core.provider.transport import (
     _validate_messages,
     _validate_params,
 )
+from machina.core.provider.usage_map import parse_ollama_usage
 from machina.core.usage import usage_store
 
 
@@ -142,7 +143,9 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
             message = data.get("message") if isinstance(data, dict) else None
             if not isinstance(message, dict):
                 detail = data if isinstance(data, dict) else "empty response"
-                raise ProviderError(f"Ollama returned no message for {model or self.model}: {detail}")
+                raise ProviderError(
+                    f"Ollama returned no message for {model or self.model}: {detail}"
+                )
         except Exception as e:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_llm_call(
@@ -159,24 +162,21 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         duration_ms = (time.monotonic() - start) * 1000
         content = message.get("content", "")
         tool_calls = message.get("tool_calls", []) or []
+        usage = parse_ollama_usage(data.get("prompt_eval_count"), data.get("eval_count"))
 
         metrics.record_llm_call(
             session_id="",
             model=data.get("model", model or self.model),
             duration_ms=duration_ms,
-            prompt_tokens=data.get("prompt_eval_count", 0),
-            completion_tokens=data.get("eval_count", 0),
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
         )
 
         # Finish usage reservation
         if reservation_id is not None:
             await usage_store.finish(
                 reservation_id,
-                {
-                    "prompt_tokens": data.get("prompt_eval_count", 0),
-                    "completion_tokens": data.get("eval_count", 0),
-                    "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
-                },
+                usage,
                 model=data.get("model", model or self.model),
             )
 
@@ -184,19 +184,15 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
             "llm_call_complete",
             provider="ollama",
             model=data.get("model", model or self.model),
-            prompt_tokens=data.get("prompt_eval_count", 0),
-            completion_tokens=data.get("eval_count", 0),
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
             tool_calls=len(tool_calls),
         )
 
         response = LLMResponse(
             content=content,
             model=data.get("model", model or self.model),
-            usage={
-                "prompt_tokens": data.get("prompt_eval_count", 0),
-                "completion_tokens": data.get("eval_count", 0),
-                "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
-            },
+            usage=usage,
             raw=data,
             tool_calls=tool_calls,
         )
@@ -318,7 +314,9 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                             if type(value) is int and value >= 0:
                                 usage[target] = value
                         if "prompt_tokens" in usage and "completion_tokens" in usage:
-                            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+                            usage["total_tokens"] = (
+                                usage["prompt_tokens"] + usage["completion_tokens"]
+                            )
                         break
             if not saw_terminal:
                 # A clean EOF without a ``done: true`` frame is a truncation:
@@ -336,6 +334,10 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
             raise
 
         full_content = "".join(content_parts)
+
+        # Normalize the incrementally collected figures (no cache categories
+        # exist for local models; the ledger still labels the basis).
+        usage = parse_ollama_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
 
         # Finish usage reservation
         if reservation_id is not None:

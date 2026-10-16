@@ -2,6 +2,15 @@
 
 This is guidance, not an authorization decision or a semantic classifier.
 Uncertain requests remain eligible for task routing; no provider call is added.
+
+Extensions for the shared deterministic TaskDescriptor (spec §8) stay additive:
+:func:`classify_task` and :func:`conversational` keep their exact signatures and
+prior behavior, while :func:`classify_task_conservative`,
+:func:`web_build_request`, :func:`strip_quoted_spans`,
+:func:`detect_constraints`, and :func:`released_constraints` expose the narrow
+phrase rules the descriptor normalizes. The shared task-family word sets below
+are the single source of truth imported by ``machina.skills.workflow`` (no third
+classifier).
 """
 
 import re
@@ -25,7 +34,7 @@ _FOLLOW_ON_ACTION = re.compile(
     r"(?:fix|build|implement|add|refactor|review|research|create|test|check|"
     r"inspect|run|verify|investigate|search|read|write|export|plan|design|"
     r"change|update|modify|edit|remove|delete|set|enable|disable|rename|"
-    r"migrate|deploy|install|configure)\b",
+    r"migrate|deploy|install|configure|switch)\b",
     re.I,
 )
 
@@ -38,7 +47,7 @@ _FOLLOW_ON_ACTION = re.compile(
 _AMBIGUOUS_FOLLOW_ON = re.compile(
     r"\s*(?:continue|go\s+on|proceed|do\s+it|go\s+ahead|and\s+then\??|"
     r"just\s+write\s+the\s+file|yes(?:\s+do\s+(?:it|that))?|"
-    r"same\s+for\s+the\s+rest)\s*[!?.]*\s*",
+    r"same\s+for\s+the\s+rest|switch)\s*[!?.]*\s*",
     re.I,
 )
 
@@ -76,9 +85,182 @@ _ACTION_VERB = re.compile(
     r"\b(?:fix|build|implement|add|refactor|review|research|create|test|check|"
     r"inspect|run|verify|investigate|search|read|write|export|plan|design|"
     r"change|update|modify|edit|remove|delete|set|enable|disable|rename|"
-    r"migrate|deploy|install|configure)\b",
+    r"migrate|deploy|install|configure|switch)\b",
     re.I,
 )
+
+# ─── Shared TaskDescriptor vocabulary (spec §8; single source of truth) ──────
+
+#: Technology names that are ordinary English words. A bare token alone is a
+#: topic, not an implementation authorization (spec §8.2 "go/rust/swift").
+AMBIGUOUS_TECHNOLOGIES = frozenset({"go", "rust", "swift"})
+
+#: Task words that mark coding work even without a named technology. Hoisted
+#: from ``machina.skills.workflow.plan_workflow`` so intent, workflow, and the
+#: TaskDescriptor share one set (spec §8.1: no third classifier).
+CODING_TASK_WORDS = frozenset(
+    {
+        "api",
+        "debug",
+        "refactor",
+        "bug",
+        "feature",
+        "function",
+        "component",
+        "coding",
+        "programming",
+        "testing",
+    }
+)
+
+#: Task words that select the research family (mirrors the workflow planner).
+RESEARCH_TASK_WORDS = frozenset({"research", "investigate", "competitors", "literature", "pubmed"})
+
+#: Follow-up words allowed to inherit a stack from recent context.
+FOLLOW_UP_STACK_WORDS = frozenset(
+    {
+        "testing",
+        "fix",
+        "debug",
+        "refactor",
+        "continue",
+        "add",
+        "implement",
+        "optimize",
+        "component",
+        "function",
+        "api",
+    }
+)
+
+# ─── Quoted-example conservatism (spec §8.3) ────────────────────────────────
+
+# Paired quotes only: an unpaired apostrophe in "don't" is ordinary text and
+# must not swallow the rest of the request. A regex cannot parse every quoting
+# construction; the descriptor stays conservative where it is unsure.
+_QUOTED_SPANS = re.compile(
+    "\"[^\"\\n]*\"|\u201c[^\u201d\\n]*\u201d|\u00ab[^\u00bb\\n]*\u00bb|`[^`\\n]*`|'[^']{2,}'"
+)
+
+# ─── Narrow web-build phrase rule: action + web noun (spec §8.2) ────────────
+
+_WEB_BUILD_ACTION = re.compile(
+    r"\b(?:make|build|create|design|develop|ship|scaffold|construct|craft|"
+    r"launch|write|code|implement|bootstrap)\b|\bspin\s+up\b|\bset\s+up\b",
+    re.I,
+)
+_WEB_BUILD_NOUN = re.compile(
+    r"\b(?:website|web\s+site|web\s?page|webpage|web\s+app(?:lication)?|webapp|"
+    r"landing\s+page|portfolio\s+(?:website|web\s+site|site|page)|"
+    r"(?:web|portfolio|e-?commerce)\s+site|web\s+front[\s-]?end|"
+    r"front[\s-]?end\s+(?:site|app|website|project))\b",
+    re.I,
+)
+# "make a decision/plan about the website" is deliberation, not a build ask.
+_NON_BUILD_MAKE = re.compile(
+    r"\bmake\s+(?:a\s+|an\s+|the\s+|me\s+a\s+)?(?:decision|choice|comparison|"
+    r"list|plan|sense|sure|money|room|note|claim|judgment|judgement|complaint|"
+    r"request)\b",
+    re.I,
+)
+_WEB_BUILD_WINDOW = 48
+
+# ─── Sticky constraints (spec §8.3) ─────────────────────────────────────────
+
+_READONLY_CONSTRAINT = re.compile(
+    r"(?:just\s+review|review\s+only|(?:don't|dont|do\s+not)\s+"
+    r"(?:implement|edit|change|modify|touch|write)|no\s+changes?|"
+    r"without\s+(?:chang|modif|edit|touch)|read[\s-]?only|give\s+feedback)",
+    re.I,
+)
+_NEGATED_ACTION = re.compile(
+    r"\b(?:don't|dont|do\s+not|never|without)\b[\s,:-]*"
+    r"(?:(?:actually|really|ever|just|now|please)\s+)*"
+    r"(?:(?:want|need)\s+to\s+)?"
+    r"(install|deploy|edit|change|modify|touch|delete|remove|commit|push|run|"
+    r"execute|write)\b",
+    re.I,
+)
+_CONSTRAINT_FOR_VERB = {
+    "edit": "no-edit",
+    "change": "no-edit",
+    "modify": "no-edit",
+    "touch": "no-edit",
+    "write": "no-edit",
+    "delete": "no-delete",
+    "remove": "no-delete",
+    "install": "no-install",
+    "deploy": "no-deploy",
+    "commit": "no-commit",
+    "push": "no-push",
+    "run": "no-execute",
+    "execute": "no-execute",
+}
+#: Canonical constraint tokens in stable order.
+CONSTRAINTS = (
+    "read-only",
+    "no-edit",
+    "no-delete",
+    "no-install",
+    "no-deploy",
+    "no-commit",
+    "no-push",
+    "no-execute",
+)
+
+_CONSTRAINT_RELEASE = re.compile(
+    r"(?:you\s+(?:can|may)|feel\s+free\s+to|go\s+ahead\s+and|now\s+you\s+can)"
+    r"\s+(?:now\s+)?(?:edit|change|modify|write|make\s+changes|implement)\b"
+    r"|no\s+longer\s+read[\s-]?only",
+    re.I,
+)
+
+#: Constraint tokens cleared by an explicit release phrase (spec §8.3).
+_RELEASABLE_CONSTRAINTS = frozenset({"read-only", "no-edit"})
+
+
+def strip_quoted_spans(text: str) -> str:
+    """Replace paired quoted spans with a space (quoted text is not permission).
+
+    Conservative by design: only paired quotes are stripped, so apostrophes in
+    ordinary words (``don't``) never remove request text.
+    """
+    return _QUOTED_SPANS.sub(" ", text)
+
+
+def web_build_request(query: str) -> bool:
+    """Whether *query* is an action + web-noun build request (spec §8.2).
+
+    Narrow phrase rule only: requires an action verb near a web-building noun.
+    A financial "portfolio" or a quoted example never matches on its own.
+    """
+    text = strip_quoted_spans(query)
+    for match in _WEB_BUILD_ACTION.finditer(text):
+        action = match.group(0).casefold()
+        if action.startswith("make") and _NON_BUILD_MAKE.match(text, match.start()):
+            continue
+        window = text[match.end() : match.end() + _WEB_BUILD_WINDOW]
+        if _WEB_BUILD_NOUN.search(window):
+            return True
+    return False
+
+
+def detect_constraints(query: str) -> tuple[str, ...]:
+    """Canonical read-only/negation constraints stated in *query* (spec §8.3)."""
+    found: set[str] = set()
+    if _READONLY_CONSTRAINT.search(query):
+        found.add("read-only")
+    for match in _NEGATED_ACTION.finditer(query):
+        found.add(_CONSTRAINT_FOR_VERB[match.group(1).casefold()])
+    return tuple(token for token in CONSTRAINTS if token in found)
+
+
+def released_constraints(query: str) -> frozenset[str]:
+    """Constraint tokens explicitly released by *query* (sticky otherwise)."""
+    if not _CONSTRAINT_RELEASE.search(query):
+        return frozenset()
+    return _RELEASABLE_CONSTRAINTS
+
 
 TASK_CLASSES = (
     "conversational",
@@ -118,6 +300,19 @@ def classify_task(query: str) -> str:
         return "learn-directory"
     if conversational(query):
         return "conversational" if _GREETING.fullmatch(query) else "explain"
+    if web_build_request(query):
+        # "make me a website": the narrow action+web-noun rule (spec §8.2).
+        return "implement"
     if _ACTION_VERB.search(query):
         return "implement"
     return "ambiguous"
+
+
+def classify_task_conservative(query: str) -> str:
+    """Like :func:`classify_task` but quoted example spans are ignored first.
+
+    A routing question that quotes "make me a website" is not a request to
+    build one (spec §8.3). For queries without paired quotes this is exactly
+    :func:`classify_task`.
+    """
+    return classify_task(strip_quoted_spans(query))

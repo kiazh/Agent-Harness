@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from machina.core.config import MAX_TOKENS, config
+from machina.core.config import MAX_TOKENS
 from machina.core.exceptions import ProviderError, RateLimitError, ValidationError
 from machina.core.models import ToolDefinition
 from machina.core.provider._log import logger
@@ -259,124 +259,16 @@ def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Prompt-cache breakpoints (E1 pilot — ``prompt_cache_enabled``, default OFF)
-#
-# The stable prefix (system prompt + tool schemas) is resent on every call.
-# When enabled, the two ends that bound it get an Anthropic-style ephemeral
-# ``cache_control`` marker: the final system content block and the last tool
-# schema entry. AnthropicProvider sends breakpoints natively; OpenRouter
-# passes them through only for models routed to Anthropic ("anthropic" in the
-# model id) — Direct providers and Ollama are untouched.
-#
-# Expected saving is not quantified here: it is bounded by the serving
-# model's minimum cacheable prompt length (~1k-4k tokens for current Claude
-# models), by real-turn prefix stability, and by the cache-write premium
-# until a prefix is read back within the TTL. It stays a pilot (default off)
-# until that is measured on real turns.
+# Prompt-cache breakpoints moved to machina/core/provider/prompt_cache.py
+# (god-file discipline); re-exported so existing import paths keep working.
 # ---------------------------------------------------------------------------
-def _prompt_cache_breakpoints_enabled() -> bool:
-    """Read the pilot toggle live; invalid config degrades to disabled.
-
-    A bad value must never take provider calls down: without breakpoints the
-    request is still fully valid (same contract as ``reasoning_effort``).
-    """
-    try:
-        return bool(config.get("prompt_cache_enabled"))
-    except (ValidationError, ValueError) as exc:
-        logger.warning(
-            "Ignoring invalid prompt_cache_enabled config value (%s); "
-            "sending requests without cache breakpoints",
-            type(exc).__name__,
-        )
-        return False
-
-
-def _ephemeral_cache_control() -> dict[str, str]:
-    """Fresh Anthropic-style ephemeral breakpoint marker."""
-    return {"type": "ephemeral"}
-
-
-def _openrouter_anthropic_model(model: str | None) -> bool:
-    """Whether an OpenRouter model id routes to Anthropic for cache_control."""
-    return "anthropic" in (model or "").lower()
-
-
-def _mark_openrouter_system_breakpoint(
-    messages: list[dict[str, Any]],
-) -> list[dict[str, Any]] | None:
-    """Copy *messages* with an ephemeral breakpoint on the system tail.
-
-    Returns None when there is no non-empty system message to mark, so the
-    caller can leave the payload untouched. The caller's list and dicts are
-    never mutated: breakpoints belong to the wire payload only, not to the
-    caller's history.
-    """
-    last_system = -1
-    for index, message in enumerate(messages):
-        if message.get("role") == "system":
-            last_system = index
-    if last_system < 0:
-        return None
-    message = messages[last_system]
-    content = message.get("content")
-    if isinstance(content, str):
-        if not content:
-            return None
-        marked: Any = [
-            {"type": "text", "text": content, "cache_control": _ephemeral_cache_control()}
-        ]
-    elif isinstance(content, list) and content and isinstance(content[-1], dict):
-        # Already block-form: mark a copy of the final block.
-        marked = [
-            *content[:-1],
-            {**content[-1], "cache_control": _ephemeral_cache_control()},
-        ]
-    else:
-        return None
-    out = list(messages)
-    out[last_system] = {**message, "content": marked}
-    return out
-
-
-def _mark_last_tool_breakpoint(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Copy *tools* with an ephemeral breakpoint on the final entry."""
-    if not tools:
-        return tools
-    return [*tools[:-1], {**tools[-1], "cache_control": _ephemeral_cache_control()}]
-
-
-def _openrouter_wire_messages(
-    messages: list[dict[str, Any]], cache_breakpoints: bool
-) -> tuple[list[dict[str, Any]], bool]:
-    """Return ``(messages_for_wire, system_marked)`` for OpenRouter.
-
-    With breakpoints enabled the system tail is marked in a copied list;
-    the caller's history is never mutated. Disabled or unmarkable input is
-    returned unchanged so the OFF path stays byte-identical.
-    """
-    if not cache_breakpoints:
-        return messages, False
-    marked = _mark_openrouter_system_breakpoint(messages)
-    if marked is None:
-        return messages, False
-    return marked, True
-
-
-def _log_prompt_cache_breakpoints(provider: str, model: str, *, system: bool, tools: bool) -> None:
-    """One debug line per call when breakpoints attach (pilot visibility).
-
-    The saving expectation is stated, not measured: benefit depends on the
-    serving model's minimum cacheable prompt length and real-turn prefix
-    stability (follow-up sizing), so no number is invented here.
-    """
-    if not (system or tools):
-        return
-    logger.debug(
-        "prompt cache breakpoints attached provider=%s model=%s system=%s tools=%s; "
-        "saving unmeasured (minimum cacheable prompt length and real-turn "
-        "prefix stability apply)",
-        provider,
-        model,
-        system,
-        tools,
-    )
+from machina.core.provider.prompt_cache import (  # noqa: E402, F401
+    _ephemeral_cache_control,
+    _log_prompt_cache_breakpoints,
+    _mark_last_tool_breakpoint,
+    _mark_message_tail_breakpoint,
+    _mark_openrouter_system_breakpoint,
+    _openrouter_anthropic_model,
+    _openrouter_wire_messages,
+    _prompt_cache_breakpoints_enabled,
+)

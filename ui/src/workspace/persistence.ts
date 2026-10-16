@@ -31,6 +31,10 @@ import {
 export const PERSISTENCE_DOCUMENT_VERSION = 1 as const;
 /** Bounded root retention, LRU by last save. */
 export const MAX_PERSISTED_ROOTS = 100;
+/** Backend byte bound for the whole stored document (`WORKSPACE_UI_STATE_MAX_BYTES` in core/config.py). */
+export const MAX_PERSISTED_DOCUMENT_BYTES = 64 * 1024;
+/** Headroom kept under the backend bound so a near-full save is never rejected for size. */
+const PERSISTED_DOCUMENT_SAFETY_MARGIN_BYTES = 1024;
 /** Bounded URI/cursor retention inside one root's state. */
 export const MAX_PERSISTED_URIS = 100;
 /** Longest URI string accepted in a persisted state. */
@@ -201,12 +205,20 @@ function parseDocument(raw: string): DocumentRead {
 	};
 }
 
+const utf8Encoder = new TextEncoder();
+
+/** UTF-8 byte length of the exact document serialization about to be written. */
+function documentByteLength(byRoot: Record<string, unknown>): number {
+	return utf8Encoder.encode(JSON.stringify({ version: PERSISTENCE_DOCUMENT_VERSION, byRoot })).length;
+}
+
 /**
  * Bounded adapter over one injected string store. One JSON document holds a
  * per-root map: `{ version: 1, byRoot: { [resolvedRoot]: state } }`. Saves
- * re-insert the touched root last, so eviction (over ~100 roots) drops the
- * least recently saved root first. Insertion order is meaningful for the
- * non-integer string keys resolved absolute paths produce.
+ * re-insert the touched root last, so eviction drops the least recently saved
+ * root first until the document fits both the root count cap and the backend
+ * byte bound. Insertion order is meaningful for the non-integer string keys
+ * resolved absolute paths produce.
  */
 export class WorkspacePersistence {
 	private readonly store: WorkspacePersistenceStore;
@@ -246,14 +258,29 @@ export class WorkspacePersistence {
 		const byRoot = document.byRoot;
 		delete byRoot[rootKey];
 		byRoot[rootKey] = serialized;
-		while (Object.keys(byRoot).length > MAX_PERSISTED_ROOTS) {
-			const oldest = Object.keys(byRoot)[0];
-			if (oldest === undefined) break;
-			delete byRoot[oldest];
-		}
+		this.evictToFit(byRoot, rootKey);
 		await this.store.set(
 			JSON.stringify({ version: PERSISTENCE_DOCUMENT_VERSION, byRoot }),
 		);
+	}
+
+	/**
+	 * Evict least-recently-saved roots until the document fits both the root
+	 * count cap and the backend byte bound (minus a safety margin). The root
+	 * being saved is kept even when it alone is oversized: that write is still
+	 * attempted, and the backend rejection surfaces to the caller.
+	 */
+	private evictToFit(byRoot: Record<string, unknown>, keepRootKey: string): void {
+		for (;;) {
+			const keys = Object.keys(byRoot);
+			const overCount = keys.length > MAX_PERSISTED_ROOTS;
+			const overBytes =
+				documentByteLength(byRoot) > MAX_PERSISTED_DOCUMENT_BYTES - PERSISTED_DOCUMENT_SAFETY_MARGIN_BYTES;
+			if (!overCount && !overBytes) return;
+			const oldest = keys.find((key) => key !== keepRootKey);
+			if (oldest === undefined) return;
+			delete byRoot[oldest];
+		}
 	}
 
 	/** Best-effort read: a throwing store read is "nothing stored". */

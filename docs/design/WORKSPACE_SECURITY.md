@@ -27,7 +27,7 @@ Written at T0/W1; T11 verifies the listed tests actually exist and pass.
 | # | Threat | Vector | Control (owner task) |
 |---|---|---|---|
 | S1 | Spoofed actor | Model supplies `params.actor="user"` | Actor derives from trusted invocation context only; UI authority = gateway token (T5, tested) |
-| S2 | Spoofed workspace | Stale/foreign workspaceId reused | Server-side binding workspaceId↔client↔epoch; unknown ids → structured NOT_FOUND (T5) |
+| S2 | Spoofed workspace | Stale/foreign workspaceId reused | Per-request `workspaceId` equality against the open identity (wrong/absent → structured NOT_FOUND) + monotonic `epoch` re-checked on every mirror/intelligence call (stale → denied). `clientId` is minted into the identity but never verified — meaningful only for a multi-client transport; moot on single-client stdio (T5) |
 | T1 | Path traversal write/read | `..`, absolute, encoded separators in rel paths | realpath containment + fd-verified opens + O_NOFOLLOW walk (T5) |
 | T2 | Symlink escape | File or parent dir symlinked outside root | Ancestor-symlink rejection; entries flagged; no following out of root (T5) |
 | T3 | TOCTOU on save | Disk changed between read and replace | Expected-revision recheck immediately before commit; per-path coordinator; conflict result, never overwrite (T5) |
@@ -43,8 +43,8 @@ Written at T0/W1; T11 verifies the listed tests actually exist and pass.
 | D2 | Restart storm | Crash loop | Bounded backoff 3/5min then manual restart (T7) |
 | D3 | Huge file/listing DoS | Giant file, deep tree, wide dir | 1 MiB readable default, 200-entry pages, bounded recursion, no blocking key path (T5/T6) |
 | E1 | Unauthorized code execution | LSP `executeCommand`, auto-install suggestions, auto-run project scripts | executeCommand disabled by default; no auto-install; no shell; server-initiated requests answered or refused explicitly (T7) |
-| E2 | Unsolicited workspace edits | Server `workspace/applyEdit` | Preview + version validation + explicit consent; applied=true means model-applied, not disk-saved (T9) |
-| E3 | Trust laundering | Repo-supplied binary/config auto-trusted | Explicit user trust decision; langservers resolved from validated absolute paths or explicit config; never auto-trust `node_modules` binaries (T7) |
+| E2 | Unsolicited workspace edits | Server `workspace/applyEdit` | Refusal-only: every server-initiated `workspace/applyEdit` is answered `applied:false` with a `failureReason`; no production code registers `on_server_request`, so staged preview + explicit consent remain a forward seam (the initialize capabilities still advertise `workspace.applyEdit`, test-pinned) (T7 refusal; T9 staging is forward) |
+| E3 | Trust laundering | Repo-supplied binary/config auto-trusted | Explicit workspace trust gates LSP attachment and control (an untrusted open detaches the manager); resolution order is explicit path → `PATH` → documented repo-local dev fallback under `ui/node_modules/.bin` (`pyright-langserver`, `typescript-language-server`) — trusted-by-configuration and repo-scoped, with nothing auto-installed and no shell-string execution (T7) |
 
 ## Residual risks (documented, not hidden)
 

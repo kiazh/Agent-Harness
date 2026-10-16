@@ -17,8 +17,8 @@ Verified against the migrated suite in `Machina-DevTools`, commit `03d01b5`.
 
 ## Verification
 
-- Backend: `PYTHON=/Users/shadow/machina/.venv/bin/python
-  MACHINA_REPO=/Users/shadow/machina ./run-tests.sh -m 'not ui_integration and
+- Backend: `PYTHON=<repo>/.venv/bin/python
+  MACHINA_REPO=<repo> ./run-tests.sh -m 'not ui_integration and
   not workflow_trial' -q --tb=short -p no:cacheprovider` with a fresh dedicated
   PostgreSQL database: **5,126 passed, 1 skipped, 9 deselected**.
 - The skip requires Windows path semantics. UI integration wrappers and optional

@@ -25,6 +25,12 @@ export interface ComposerBudget {
 	setDegradedMode(degraded: boolean): void;
 }
 
+/** Pinned bar contract: a component that can hide itself and size by budget. */
+export interface PinnedBarSlot extends Component {
+	visible: boolean;
+	setBudget(rows: number): void;
+}
+
 export class AppShell {
 	/** The single primary transcript ScrollView, retained for life. */
 	readonly transcriptScroll: ScrollView;
@@ -44,6 +50,8 @@ export class AppShell {
 	private lastRows = -1;
 	private density: Density = "full";
 	private dock: Component | undefined;
+	/** Pinned top bar above the transcript (music); hidden rows collapse. */
+	private pinnedBar: PinnedBarSlot | undefined;
 	/** Created on first workspace use; its absence means today's chat-only tree. */
 	private workspace: WorkspaceShell | undefined;
 
@@ -71,6 +79,17 @@ export class AppShell {
 
 	setDock(component?: Component): void {
 		this.dock = component;
+		this.applyBudgets();
+		this.rebuild();
+	}
+
+	/**
+	 * Pinned bar above the transcript (chat column both in chat-only and
+	 * split layouts). The transcript ScrollView instance is never replaced;
+	 * visibility toggles collapse the row without touching scroll state.
+	 */
+	setPinnedBar(bar?: PinnedBarSlot): void {
+		this.pinnedBar = bar;
 		this.applyBudgets();
 		this.rebuild();
 	}
@@ -183,6 +202,7 @@ export class AppShell {
 			this.composer.setMaxRows(this.lastRows < 16 ? 1 : 3);
 			this.composer.setDegradedMode(this.density === "degraded");
 			this.footer.compact = this.lastRows < 16;
+			this.pinnedBar?.setBudget(this.pinnedBarRows());
 			return;
 		}
 		switch (this.density) {
@@ -207,6 +227,23 @@ export class AppShell {
 				this.footer.compact = true;
 				break;
 		}
+		this.pinnedBar?.setBudget(this.pinnedBarRows());
+	}
+
+	/**
+	 * Pinned-bar rows by viewport: the full mock layout (title/artist/
+	 * transport) needs room; short viewports keep one compact line; degraded
+	 * viewports hide the bar entirely (playback keeps its state).
+	 */
+	private pinnedBarRows(): number {
+		switch (this.density) {
+			case "full":
+				return this.lastRows >= 24 ? 3 : 2;
+			case "reduced":
+				return 1;
+			default:
+				return 0;
+		}
 	}
 
 	private build(density: Density): VStack {
@@ -217,7 +254,7 @@ export class AppShell {
 		if (!topRow) {
 			return new VStack(
 				[
-					{ component: this.transcriptScroll, grow: 1 },
+					{ component: this.chatColumn(), grow: 1 },
 					...(this.dock ? [{ component: this.dock, shrink: 0 }] : []),
 					{ component: this.composer, shrink: 0 },
 					{ component: this.footer, shrink: 0 },
@@ -253,7 +290,7 @@ export class AppShell {
 		if (result.effectiveMode === "split" && result.chat && result.editor) {
 			return new HStack(
 				workspace.entries(result, {
-					component: this.transcriptScroll,
+					component: this.chatColumn(),
 					basis: result.chat.columns,
 					shrink: 0,
 					grow: 0,
@@ -265,6 +302,31 @@ export class AppShell {
 			return new HStack(workspace.entries(result), { gap: 0 });
 		}
 		return undefined;
+	}
+
+	/**
+	 * The chat column: the pinned bar (when configured) above the retained
+	 * transcript ScrollView. Without a bar this is the exact legacy object,
+	 * so existing composition tests and identities are unchanged. A fresh
+	 * wrapper per build is fine — the ScrollView instance inside is retained
+	 * and carries the scroll anchor.
+	 */
+	private chatColumn(): Component {
+		const bar = this.pinnedBar;
+		if (!bar) return this.transcriptScroll;
+		return new VStack(
+			[
+				{
+					component: bar,
+					basis: "auto",
+					shrink: 0,
+					minSize: 0,
+					visible: () => bar.visible,
+				},
+				{ component: this.transcriptScroll, grow: 1, minSize: 1 },
+			],
+			{ gap: 0 },
+		);
 	}
 
 	private rebuild(): void {

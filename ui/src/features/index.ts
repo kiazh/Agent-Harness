@@ -20,6 +20,7 @@ import { harnessesCommand } from "./harnesses.ts";
 import { outputCommand } from "./output.ts";
 import { settingsCommands } from "./settings.ts";
 import { themeCommand } from "./theme.ts";
+import { musicCommand } from "./music.ts";
 import { contextCommands } from "./context.ts";
 import { workspaceCommands } from "./workspace.ts";
 import type { AskTextOptions, AskTextResult, Command, FamilySession, FeatureHost, NoticeKind } from "./types.ts";
@@ -79,6 +80,7 @@ const COMMANDS: Command[] = [
 	approvalsCommand,
 	modelsCommand,
 	themeCommand,
+	musicCommand,
 	outputCommand,
 	mcpCommand,
 	interopCommand,
