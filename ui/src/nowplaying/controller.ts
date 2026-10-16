@@ -46,6 +46,7 @@ export class NowPlayingController {
 	constructor(options: NowPlayingControllerOptions) {
 		this.bar = options.bar;
 		this.request = options.request;
+		this.onChange = options.onChange;
 		this.bar.onToggle = () => void this.toggle();
 	}
 

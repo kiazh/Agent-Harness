@@ -147,6 +147,108 @@ test("a refresh that lands after disabling is dropped (stale state cannot return
 	assert.equal(bar.visible, false);
 });
 
+test("constructor onChange is called after accepted readings", async () => {
+	const coordinator = new AnimationCoordinator(() => {});
+	const bar = new NowPlayingBar(coordinator);
+	let payload: Record<string, unknown> = { ...PLAYING };
+	let notifications = 0;
+	const controller = new NowPlayingController({
+		bar,
+		request: async <T,>() => payload as T,
+		onChange: () => {
+			notifications += 1;
+		},
+	});
+	try {
+		// App supplies onChange through the constructor (startNowPlaying);
+		// post-assignment (controller.onChange = …) would bypass the defect.
+		await controller.initialize({ nowplaying_enabled: true });
+		assert.equal(notifications, 1, "initial accepted reading notifies once");
+
+		payload = { ...PLAYING, title: "Second Track" };
+		await controller.refresh();
+		assert.equal(notifications, 2, "the later accepted reading notifies again");
+		assert.equal(bar.state?.title, "Second Track");
+	} finally {
+		controller.stop();
+		coordinator.dispose();
+	}
+});
+
+test("omitting onChange stays supported and causes no exception", async () => {
+	const coordinator = new AnimationCoordinator(() => {});
+	const bar = new NowPlayingBar(coordinator);
+	const controller = new NowPlayingController({
+		bar,
+		request: async <T,>() => PLAYING as T,
+	});
+	try {
+		await controller.initialize({ nowplaying_enabled: true });
+		await controller.refresh();
+		assert.equal(bar.state?.title, "Night Drive");
+	} finally {
+		controller.stop();
+		coordinator.dispose();
+	}
+});
+
+test("a refresh landing after stop() neither updates state nor notifies", async () => {
+	const coordinator = new AnimationCoordinator(() => {});
+	const bar = new NowPlayingBar(coordinator);
+	let resolvePending: ((value: unknown) => void) | undefined;
+	let notifications = 0;
+	const controller = new NowPlayingController({
+		bar,
+		request: async <T,>() =>
+			new Promise((resolve) => {
+				resolvePending = resolve as (value: unknown) => void;
+			}) as Promise<T>,
+		onChange: () => {
+			notifications += 1;
+		},
+	});
+	try {
+		const inFlight = controller.refresh();
+		controller.stop();
+		resolvePending?.({ ...PLAYING, title: "Late Track" });
+		await inFlight;
+		assert.ok(bar.state === undefined, "the late reading is discarded");
+		assert.equal(notifications, 0, "and it never notifies after exit");
+	} finally {
+		controller.stop();
+		coordinator.dispose();
+	}
+});
+
+test("a failed read notifies with the normalized unavailable state", async () => {
+	const coordinator = new AnimationCoordinator(() => {});
+	const bar = new NowPlayingBar(coordinator);
+	let fail = false;
+	let notifications = 0;
+	const controller = new NowPlayingController({
+		bar,
+		request: async <T,>() => {
+			if (fail) throw new Error("detector crashed");
+			return PLAYING as T;
+		},
+		onChange: () => {
+			notifications += 1;
+		},
+	});
+	try {
+		await controller.initialize({ nowplaying_enabled: true });
+		assert.equal(notifications, 1, "the playing reading notified");
+		fail = true;
+		await controller.refresh();
+		assert.equal(notifications, 2, "a degraded read still notifies App");
+		assert.equal(bar.state?.available, false);
+		assert.match(bar.state?.error ?? "", /detector crashed/);
+	} finally {
+		controller.stop();
+		coordinator.dispose();
+	}
+});
+
 test("an older overlapping poll never overwrites a newer reading", async () => {
 	const bar = new NowPlayingBar(new AnimationCoordinator(() => {}));
 	const pending: Array<(value: unknown) => void> = [];

@@ -85,6 +85,40 @@ test("stop() and disabling halt the polling", async (t) => {
 	assert.equal(fetches, afterStop, "no fetches after stop");
 });
 
+test("a scheduled poll notifies the constructor callback without input", async (t) => {
+	t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
+	const coordinator = new AnimationCoordinator(() => {});
+	const bar = new NowPlayingBar(coordinator);
+	let payload = reading();
+	let notifications = 0;
+	const controller = new NowPlayingController({
+		bar,
+		request: async <T,>() => payload as T,
+		onChange: () => {
+			notifications += 1;
+		},
+	});
+	// Real macrotask drain: mock timers leave setImmediate alone, so awaited
+	// request resolutions settle deterministically without real sleeps.
+	const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
+	try {
+		await controller.initialize({ nowplaying_enabled: true });
+		assert.equal(notifications, 1, "the startup read notified once");
+
+		// The gateway changes its answer; no click, no command, no agent turn.
+		payload = reading({ title: "Different Song" });
+		t.mock.timers.tick(NOWPLAYING_POLL_MS);
+		await drain();
+		t.mock.timers.tick(NOWPLAYING_POLL_MS);
+		await drain();
+		assert.equal(bar.state?.title, "Different Song", "the scheduled read reached the bar");
+		assert.ok(notifications >= 2, `the scheduled polls notified App (saw ${notifications})`);
+	} finally {
+		controller.stop();
+		coordinator.dispose();
+	}
+});
+
 test("the rendered clock advances between polls while playing (interpolation)", (t) => {
 	t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
 	const bar = new NowPlayingBar(new AnimationCoordinator(() => {}));
