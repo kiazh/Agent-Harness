@@ -193,6 +193,42 @@ export interface SkillsPreviewResult {
 	tokenBasis: string;
 }
 
+/** `skills.section` request (handler `skills_section`). */
+export interface SkillsSectionParams {
+	skillId: string;
+	contentRevision?: string;
+	section?: string;
+	offset?: number;
+	budget?: number;
+}
+
+/** One `skills.section` diagnostic (metadata `MetadataDiagnostic` wire shape). */
+export interface SkillsSectionDiagnostic {
+	code: string;
+	message: string;
+	skill_id: string;
+}
+
+/** `skills.section` response (handler `_section_payload`). */
+export interface SkillsSectionResult {
+	skillId: string;
+	contentRevision: string;
+	sectionId: string;
+	heading: string;
+	text: string;
+	start: number;
+	end: number;
+	total: number;
+	sectionTotal: number;
+	line: number;
+	continuation: number | null;
+	stale: boolean;
+	bound: boolean;
+	anchorId: string;
+	budget: number;
+	diagnostics: SkillsSectionDiagnostic[];
+}
+
 export type SkillsPickerStatus = "idle" | "loading" | "ready" | "error";
 export type SkillsPickerMode = "results" | "details" | "preview";
 export type SkillsPickerFocus = "query" | "filters";
@@ -215,6 +251,9 @@ export interface SkillsPickerView {
 	details: SkillsDetailsSkill | null;
 	detailsStatus: "idle" | "loading" | "ready" | "error";
 	detailsError: string;
+	section: SkillsSectionResult | null;
+	sectionStatus: "idle" | "loading" | "ready" | "error";
+	sectionError: string;
 	preview: SkillsPreviewResult | null;
 	previewStatus: "idle" | "loading" | "ready" | "error";
 	previewError: string;
@@ -224,11 +263,14 @@ export interface SkillsPickerView {
 export type SkillsSearchProvider = (params: SkillsSearchParams) => Promise<SkillsSearchResult>;
 export type SkillsDetailsProvider = (skillId: string) => Promise<SkillsDetailsSkill>;
 export type SkillsPreviewProvider = (request: string) => Promise<SkillsPreviewResult>;
+export type SkillsSectionProvider = (params: SkillsSectionParams) => Promise<SkillsSectionResult>;
 
 export interface SkillsPickerProviders {
 	search: SkillsSearchProvider;
 	details: SkillsDetailsProvider;
 	preview: SkillsPreviewProvider;
+	/** Version-bound passage read (`skills.section`, spec §12.2). */
+	section: SkillsSectionProvider;
 }
 
 export interface SkillsPickerOptions {
@@ -266,6 +308,8 @@ export const SKILLS_STATES = ["any", "enabled", "disabled"] as const;
 export const SKILLS_QUERY_MAX = 2000;
 /** Mirrors the gateway capability filter bound (`_str(..., max_len=80)`). */
 const CAPABILITY_MAX = 80;
+/** Requested section budget; mirrors the handler default (`SKILLS_SECTION_DEFAULT_BUDGET`). */
+export const SKILLS_SECTION_BUDGET = 800;
 
 const SELECTED_PREFIX = `${ICONS.selectedMarker} `;
 const PLAIN_PREFIX = "  ";
@@ -310,6 +354,24 @@ export function classificationLabel(classification: string, query: string): stri
 /** One sanitized physical display row. */
 function singleLine(text: string): string {
 	return sanitizeDisplay(text).replace(/\n/g, " ");
+}
+
+const SECTION_HEADING = /^(?:#{1,6})\s+(.+?)\s*#*\s*$/m;
+
+/**
+ * Deterministic anchor of the first markdown heading, matching the server's
+ * `slugify_heading` (casefold, non-alphanumerics to `-`, trimmed; empty
+ * headings default to `section`). Empty content/headings return `""`, which
+ * the reader treats as "no declared section" and continues by offset.
+ */
+export function firstSectionSlug(content: string): string {
+	const match = SECTION_HEADING.exec(content ?? "");
+	if (!match) return "";
+	const slug = (match[1] ?? "")
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return slug || "section";
 }
 
 function message(error: unknown): string {
@@ -404,6 +466,11 @@ export class SkillsPicker implements Component {
 	private detailsStatus: "idle" | "loading" | "ready" | "error" = "idle";
 	private detailsError = "";
 
+	private section: SkillsSectionResult | undefined;
+	private sectionSkillId: string | null = null;
+	private sectionStatus: "idle" | "loading" | "ready" | "error" = "idle";
+	private sectionError = "";
+
 	private preview: SkillsPreviewResult | undefined;
 	private previewStatus: "idle" | "loading" | "ready" | "error" = "idle";
 	private previewError = "";
@@ -412,6 +479,7 @@ export class SkillsPicker implements Component {
 	/** Sequence of the newest scheduled request; older responses are dropped. */
 	private requestSeq = 0;
 	private previewSeq = 0;
+	private sectionSeq = 0;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(providers: SkillsPickerProviders, options: SkillsPickerOptions = {}) {
@@ -444,6 +512,10 @@ export class SkillsPicker implements Component {
 		this.detailsSkillId = null;
 		this.detailsStatus = "idle";
 		this.detailsError = "";
+		this.section = undefined;
+		this.sectionSkillId = null;
+		this.sectionStatus = "idle";
+		this.sectionError = "";
 		this.preview = undefined;
 		this.previewStatus = "idle";
 		this.previewError = "";
@@ -457,6 +529,7 @@ export class SkillsPicker implements Component {
 		this.clearTimer();
 		this.requestSeq += 1;
 		this.previewSeq += 1;
+		this.sectionSeq += 1;
 		this.focused = false;
 		this.onClose?.();
 	}
@@ -503,6 +576,9 @@ export class SkillsPicker implements Component {
 			details: this.details ?? null,
 			detailsStatus: this.detailsStatus,
 			detailsError: this.detailsError,
+			section: this.section ?? null,
+			sectionStatus: this.sectionStatus,
+			sectionError: this.sectionError,
 			preview: this.preview ?? null,
 			previewStatus: this.previewStatus,
 			previewError: this.previewError,
@@ -610,10 +686,61 @@ export class SkillsPicker implements Component {
 			});
 			rows.push({ kind: "line", text: `usage: ${details.usageCount} · enabled: ${details.enabled ? "yes" : "no"}` });
 		}
+		rows.push(...this.sectionRows(candidate));
 		const actions = ["esc back", "ctrl+r preview"];
+		const pending = this.sectionSkillId === candidate.skillId ? this.section : undefined;
+		actions.push(pending && pending.continuation !== null && !pending.stale ? "s continue section" : "s read section");
 		if (skillDeletable(candidate) && (!details || skillDeletable(details))) actions.push("d delete");
 		else actions.push("delete unavailable (bundled default)");
 		rows.push({ kind: "line", text: theme.dim(`actions: ${actions.join(" · ")}`) });
+		return rows;
+	}
+
+	/**
+	 * Version-bound section passage for the selected candidate (spec §10.4).
+	 *
+	 * The passage is only shown for the skill it was read from, carries the
+	 * exact `contentRevision` it was produced against, and a stale response
+	 * renders the honest stale state with empty text — never a passage from
+	 * edited content under the old revision.
+	 */
+	private sectionRows(candidate: SkillsCandidate): PaneRow[] {
+		if (this.sectionStatus === "loading") return [{ kind: "state", text: "(reading section…)" }];
+		if (this.sectionStatus === "error" && this.sectionSkillId === candidate.skillId) {
+			return [{ kind: "state", text: `(section read failed: ${this.sectionError})` }];
+		}
+		if (this.sectionSkillId !== candidate.skillId) return [];
+		const section = this.section;
+		if (!section) return [];
+		if (section.stale) {
+			const current = section.contentRevision ? section.contentRevision.slice(0, 8) : "unknown";
+			const detail = section.diagnostics[0]?.message ?? "";
+			return [
+				{
+					kind: "line",
+					text: theme.warning(
+						`section stale: ${section.sectionId || section.anchorId || "body"} was requested at content ${candidate.contentRevision.slice(0, 8) || "—"}, but the skill changed to ${current} — nothing from the edited text was served`,
+					),
+				},
+				{
+					kind: "line",
+					text: theme.dim(detail ? `${singleLine(detail)} · press s to re-read content ${current}` : `press s to re-read content ${current}`),
+				},
+			];
+		}
+		const rows: PaneRow[] = [
+			{
+				kind: "line",
+				text: `section: ${singleLine(section.heading || section.sectionId || "body")} (${section.text.length} of ${section.sectionTotal} chars · ${section.bound ? "declared" : "parsed anchor"} · content ${section.contentRevision.slice(0, 8) || "—"})`,
+			},
+			{ kind: "line", text: section.text || "(empty section)" },
+		];
+		if (section.continuation !== null) {
+			rows.push({
+				kind: "line",
+				text: theme.dim(`[section continues at offset ${section.continuation} — press s]`),
+			});
+		}
 		return rows;
 	}
 
@@ -794,6 +921,10 @@ export class SkillsPicker implements Component {
 		if (this.mode === "details") {
 			if (matchesKey(data, Key.ctrl("r")) || data === "p") {
 				this.startPreview();
+				return;
+			}
+			if (matchesKey(data, Key.ctrl("s")) || data === "s") {
+				this.readSection();
 				return;
 			}
 			if (data === "d") {
@@ -1114,6 +1245,12 @@ export class SkillsPicker implements Component {
 		const candidate = this.selectedCandidate();
 		if (!candidate) return;
 		this.mode = "details";
+		if (this.sectionSkillId !== candidate.skillId) {
+			this.section = undefined;
+			this.sectionSkillId = null;
+			this.sectionStatus = "idle";
+			this.sectionError = "";
+		}
 		this.detailsSkillId = candidate.skillId;
 		this.details = undefined;
 		this.detailsStatus = "loading";
@@ -1163,6 +1300,64 @@ export class SkillsPicker implements Component {
 			if (seq !== this.previewSeq || this.mode !== "preview") return;
 			this.previewStatus = "error";
 			this.previewError = singleLine(message(error));
+		}
+		this.emit();
+	}
+
+	// ─── section reads (spec §10.4/§12.2, no new authority) ────────────────
+
+	/**
+	 * Read one exact versioned passage of the selected skill.
+	 *
+	 * The first press addresses the skill's first declared/parsed section
+	 * (derived from the shown details content; offset 0 when there is no
+	 * heading). A pending continuation reads the next page of the same
+	 * `contentRevision`; after a stale response the retry uses the revision
+	 * the server reported as current, so the honest stale state is explicit
+	 * and never re-served as a silently different passage. Read-only: this
+	 * call cannot start a turn, run a tool, install or change approvals.
+	 */
+	private readSection(): void {
+		const candidate = this.selectedCandidate();
+		if (!candidate) return;
+		const skillId = candidate.skillId;
+		const previous = this.sectionSkillId === skillId ? this.section : undefined;
+		const revision = previous?.stale && previous.contentRevision
+			? previous.contentRevision
+			: candidate.contentRevision;
+		const params: SkillsSectionParams = {
+			skillId,
+			contentRevision: revision,
+			budget: SKILLS_SECTION_BUDGET,
+		};
+		if (previous?.sectionId) {
+			params.section = previous.sectionId;
+			if (previous.continuation !== null && !previous.stale) params.offset = previous.continuation;
+		} else {
+			const sectionId = previous && !previous.stale && previous.sectionId
+				? previous.sectionId
+				: firstSectionSlug(this.details?.content ?? "");
+			if (sectionId) params.section = sectionId;
+			else if (previous && previous.continuation !== null && !previous.stale) params.offset = previous.continuation;
+			else params.offset = 0;
+		}
+		this.sectionSkillId = skillId;
+		this.sectionStatus = "loading";
+		this.sectionError = "";
+		this.emit();
+		void this.loadSection(++this.sectionSeq, params);
+	}
+
+	private async loadSection(seq: number, params: SkillsSectionParams): Promise<void> {
+		try {
+			const result = await this.providers.section(params);
+			if (seq !== this.sectionSeq || this.sectionSkillId !== params.skillId) return;
+			this.section = result;
+			this.sectionStatus = "ready";
+		} catch (error) {
+			if (seq !== this.sectionSeq || this.sectionSkillId !== params.skillId) return;
+			this.sectionStatus = "error";
+			this.sectionError = singleLine(message(error));
 		}
 		this.emit();
 	}

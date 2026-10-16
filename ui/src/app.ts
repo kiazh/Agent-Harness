@@ -21,7 +21,8 @@ import { parseCommand, splitSub, type ParsedCommand } from "./commands.ts";
 import { ComposerBox, Footer, header, Picker, SecretForm, TextForm, ThinkingIndicator } from "./components.ts";
 import { Menu } from "./components/Menu.ts";
 import { OAuthProgress } from "./components/OAuthProgress.ts";
-import { SkillsPicker, type SkillsDetailsSkill, type SkillsPreviewResult, type SkillsSearchParams, type SkillsSearchResult } from "./components/SkillsPicker.ts";
+import { SkillsPicker, type SkillsDetailsSkill, type SkillsPreviewResult, type SkillsSearchParams, type SkillsSearchResult, type SkillsSectionParams, type SkillsSectionResult } from "./components/SkillsPicker.ts";
+import { HELP_KEYS, HelpPalette, helpPaletteCommands } from "./components/HelpPalette.ts";
 import { ApprovalCard, type ApprovalDecision } from "./components/ApprovalCard.ts";
 import { AppShell } from "./components/AppShell.ts";
 import { EditorPane, uriDisplayPath } from "./components/EditorPane.ts";
@@ -39,7 +40,7 @@ import type { MusicHost } from "./features/types.ts";
 import { type FamilySession, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS, type WorkspaceHost } from "./features/index.ts";
 import type { WorkspaceAttachmentHost } from "./features/workspace.ts";
 import { guardSubmit } from "./commandDispatch.ts";
-import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions, type SkillsDirectoryHost, type UiPreferenceKey, type UiSettingsHost } from "./features/types.ts";
+import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions, type HelpPaletteHost, type SkillsDirectoryHost, type UiPreferenceKey, type UiSettingsHost } from "./features/types.ts";
 import { FamilyStore, listFamilySessions } from "./family.ts";
 import { agentSessionItems } from "./features/agents.ts";
 import type { GatewayClient } from "./gateway.ts";
@@ -407,6 +408,9 @@ export class App implements FeatureHost {
 	/** `/skills` interactive directory overlay (A5, spec §12.3). */
 	private skillsPicker: SkillsPicker | undefined;
 	private skillsPickerHandle: OverlayHandle | undefined;
+	/** `/help` searchable command/keybinding palette overlay. */
+	private helpPane: HelpPalette | undefined;
+	private helpPaletteHandle: OverlayHandle | undefined;
 	/** Re-entrancy guard for the dirty-exit review. */
 	private dirtyExitInProgress = false;
 	/** Stored workspace_ui_state captured BEFORE open (open overwrites it). */
@@ -657,6 +661,17 @@ export class App implements FeatureHost {
 
     copyText(text: string): Promise<boolean> { return copyClipboardText(text); }
 
+	/**
+	 * FeatureHost: place *text* in the composer draft without submitting
+	 * (the `/help` palette resolves commands that need arguments this way).
+	 * Focus moves to the composer with the cursor after the inserted text.
+	 */
+	prefillInput(text: string): void {
+		this.editor.setText(text);
+		this.setFocusForRegion("chat-composer");
+		this.tui.requestRender();
+	}
+
 	onGatewayEvent(handler: (event: GatewayEvent) => void): () => void {
 		this.featureEventHandlers.add(handler);
 		return () => {
@@ -681,6 +696,15 @@ export class App implements FeatureHost {
 	 */
 	skillsDirectory(): SkillsDirectoryHost | undefined {
 		return { openSkillsPicker: (query) => this.openSkillsPicker(query ?? "") };
+	}
+
+	/**
+	 * FeatureHost: the searchable `/help` palette surface. Present whenever
+	 * the app runs; the palette filters local command/key data and routes
+	 * chosen commands back through the same dispatcher as typed input.
+	 */
+	helpPalette(): HelpPaletteHost | undefined {
+		return { openHelpPalette: (query) => this.openHelpPalette(query ?? "") };
 	}
 
 	// ─── global UI settings (closing pass) ──────────────────────────────────
@@ -1459,6 +1483,13 @@ export class App implements FeatureHost {
 		this.syncWorkspaceShellIfChanged();
 		if (this.dialogs.length || this.approvalDialogs.size) return undefined; // focused dialogs own their keys
 
+		// The skills directory overlay owns its keys (layered esc: preview →
+		// details → filters → close), exactly like the dialog early return
+		// above. Without this passthrough, escape reached the double-esc
+		// prompt-refill branch and ctrl+c reached the exit branch — the
+		// overlay could not be dismissed (review finding, reproduced).
+		if (this.skillsPicker) return undefined;
+
 		// ── integrated workspace (plan §8 focus priority) ────────────────────
 		// The Quick Open overlay owns every key except Esc/Ctrl+C (which would
 		// otherwise reach the stop/exit branches below): returning early lets
@@ -1466,6 +1497,16 @@ export class App implements FeatureHost {
 		if (this.quickOpenPane) {
 			if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 				this.quickOpenPane.dismiss();
+				return { consume: true };
+			}
+			return undefined;
+		}
+		// The `/help` palette owns every key the same way: Esc/Ctrl+C close it
+		// explicitly (the idle double-Esc refill below would otherwise steal
+		// the first Esc) and every other key reaches the focused palette.
+		if (this.helpPane) {
+			if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+				this.helpPane.dismiss();
 				return { consume: true };
 			}
 			return undefined;
@@ -1521,7 +1562,16 @@ export class App implements FeatureHost {
 
 		const questionKey = matchesKey(data, Key.question) || matchesKey(data, Key.shift("?")) || matchesKey(data, Key.shift("/"));
 		if (matchesKey(data, Key.f1) || (questionKey && !this.editor.getText() && !this.editor.isShowingAutocomplete())) {
-			void this.openDialog((close) => new Picker("Keyboard shortcuts", this.shortcutItems(), () => close(), () => close(), undefined, "↑↓ browse · enter/esc close", this.tui));
+			// Selecting the `/help — all commands` row dispatches the real
+			// command, so with the palette surface it opens the searchable
+			// overlay; other rows are documentation and just close.
+			void this.openDialog((close) => new Picker("Keyboard shortcuts", this.shortcutItems(), (item) => {
+				close();
+				if (item.value === "commands") {
+					const command = parseCommand("/help");
+					if (command) void runCommand(command, this);
+				}
+			}, () => close(), undefined, "↑↓ browse · enter/esc close", this.tui));
 			return { consume: true };
 		}
 
@@ -2751,7 +2801,9 @@ export class App implements FeatureHost {
 		this.quickOpenHandle = this.tui.showOverlay(pane, {
 			width: "100%",
 			maxHeight: "100%",
-			anchor: "bottom-center",
+			// Same palette family as the skills directory: open above so the
+			// list reads top-down and the composer stays visible.
+			anchor: "top-center",
 		});
 		pane.activate();
 		this.tui.setFocus(pane);
@@ -2799,6 +2851,7 @@ export class App implements FeatureHost {
 				search: (params) => this.skillsSearch(params),
 				details: (skillId) => this.skillsDetails(skillId),
 				preview: (request) => this.skillsPreview(request),
+				section: (params) => this.skillsSection(params),
 			},
 			{
 				onChange: () => this.tui.requestRender(),
@@ -2817,7 +2870,9 @@ export class App implements FeatureHost {
 		this.skillsPickerHandle = this.tui.showOverlay(pane, {
 			width: "100%",
 			maxHeight: "100%",
-			anchor: "bottom-center",
+			// Palettes open above: top-anchored so the directory reads
+			// top-down and never sits as a bottom strip over the composer.
+			anchor: "top-center",
 		});
 		pane.activate();
 		this.tui.setFocus(pane);
@@ -2830,6 +2885,57 @@ export class App implements FeatureHost {
 		this.skillsPicker = undefined;
 		this.skillsPickerHandle?.hide();
 		this.skillsPickerHandle = undefined;
+		pane.focused = false;
+		if (!this.exiting) this.setFocusForRegion("chat-composer");
+		this.tui.requestRender();
+	}
+
+	// ─── help palette (searchable /help) ────────────────────────────────────
+
+	/**
+	 * `/help`: the searchable command/keybinding palette (menu-shaped surface
+	 * rule). Enter on a no-argument command closes the overlay and dispatches
+	 * through the same parseCommand/runCommand path as typed input; a command
+	 * with an argument hint closes and prefills `/name ` into the composer
+	 * instead. Key rows are read-only reference; Esc closes.
+	 */
+	private openHelpPalette(initialQuery = ""): void {
+		if (this.helpPane) return;
+		const pane = new HelpPalette({
+			commands: helpPaletteCommands(SLASH_COMMANDS),
+			keys: HELP_KEYS,
+			initialQuery,
+			onChange: () => this.tui.requestRender(),
+		});
+		pane.onClose = () => this.closeHelpPalette();
+		pane.onRun = (command) => {
+			this.closeHelpPalette();
+			const parsed = parseCommand(`/${command.name}`);
+			if (parsed) void runCommand(parsed, this);
+		};
+		pane.onPrefill = (text) => {
+			this.closeHelpPalette();
+			this.prefillInput(text);
+		};
+		this.helpPane = pane;
+		this.helpPaletteHandle = this.tui.showOverlay(pane, {
+			width: "100%",
+			maxHeight: "100%",
+			// Same palette family as the skills directory / quick open: open
+			// above so the list reads top-down and the composer stays visible.
+			anchor: "top-center",
+		});
+		pane.activate();
+		this.tui.setFocus(pane);
+		this.tui.requestRender();
+	}
+
+	private closeHelpPalette(): void {
+		const pane = this.helpPane;
+		if (!pane) return;
+		this.helpPane = undefined;
+		this.helpPaletteHandle?.hide();
+		this.helpPaletteHandle = undefined;
 		pane.focused = false;
 		if (!this.exiting) this.setFocusForRegion("chat-composer");
 		this.tui.requestRender();
@@ -2854,6 +2960,17 @@ export class App implements FeatureHost {
 	/** Call-free route preview: no turn, provider, tool, install or approval. */
 	private skillsPreview(request: string): Promise<SkillsPreviewResult> {
 		return this.request<SkillsPreviewResult>("skills.preview_route", { request, context: {} });
+	}
+
+	/** Version-bound section read: exact passage for the shown revision (§12.2). */
+	private skillsSection(params: SkillsSectionParams): Promise<SkillsSectionResult> {
+		return this.request<SkillsSectionResult>("skills.section", {
+			skillId: params.skillId,
+			...(params.contentRevision ? { contentRevision: params.contentRevision } : {}),
+			...(params.section ? { section: params.section } : {}),
+			...(params.offset !== undefined ? { offset: params.offset } : {}),
+			budget: params.budget ?? 800,
+		});
 	}
 
 	// ─── workspace events + toggles ─────────────────────────────────────────

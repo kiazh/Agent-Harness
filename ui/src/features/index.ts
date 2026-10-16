@@ -55,7 +55,15 @@ const appCommands: Command[] = [
 const helpCommand: Command = {
 	name: "help",
 	description: "Show available commands",
-	async run(_args, host) {
+	async run(args, host) {
+		// Menu-shaped surface rule: an interactive host gets the searchable
+		// palette; hosts without the surface keep the legacy printed text.
+		const surface = host.helpPalette?.();
+		if (surface) {
+			const query = args.trim();
+			surface.openHelpPalette(query ? query : undefined);
+			return;
+		}
 		host.print(
 			`${helpText(COMMANDS)}\n\nKeys: Enter send · Shift+Enter newline · Esc stop reply · Tab complete · ↓ on empty input picks a subagent · Ctrl+C exit · Ctrl+Shift+←/→ switch agents\nWorkspace: Ctrl+P quick open · Ctrl+S save · Ctrl+Space completion (/editor complete when macOS steals it) · F12 definition · Shift+F12 references · F2 rename · F6/Shift+F6 cycle focus · Ctrl+→ maximize chat · Ctrl+← back to the 50/50 split (editor focus; composer word motion: Ctrl+←/→) · Ctrl+T explorer · Ctrl+W close tab (terminal may intercept)`,
 			"plain",

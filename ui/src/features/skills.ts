@@ -1,10 +1,11 @@
 // Skill commands: browse, list, search, show, learn, delete, curator.
 //
-// Bare `/skills` opens the interactive directory when the host provides one
-// (spec §12.3); hosts without that surface keep the legacy printed table, and
-// `/skills list` / `/skills show` stay byte-compatible for existing callers
-// (U07). `/skills search [query]` prefills the picker, or prints a bounded
-// deterministic `skills.search` table on non-overlay hosts.
+// `/skills`, `/skills list` and `/skills search` open the interactive
+// directory when the host provides one (spec §12.3 — the menu is the product
+// surface; a typed `list` must not dump the banner table on an interactive
+// terminal). Hosts without that surface keep the legacy printed table / the
+// bounded deterministic `skills.search` table (U07 fallback). `/skills show`
+// stays byte-compatible for existing callers.
 
 import { keyValues, resolvePrefix, shortId, table } from "../format.ts";
 import type { LearningReviewInfo, SkillInfo } from "../protocol.ts";
@@ -59,7 +60,7 @@ export const skillsCommand: Command = {
 	description: "Skills: browse, list, search, show, learn, proposals, approve, reject, revert, delete, curator",
 	argumentHint: "[list|search|show|learn|proposals|approve|reject|revert|delete|curator]",
 	getArgumentCompletions: options([
-		["list", "All installed skills (printed table)"],
+		["list", "All installed skills (interactive directory)"],
 		["search", "Search skills (interactive picker)"],
 		["show", "Read a skill <name>"],
 		["learn", "Create a skill from <file|url|skill>"],
@@ -84,6 +85,14 @@ export const skillsCommand: Command = {
 				return;
 			}
 			case "list": {
+				// Same interactive path as bare `/skills` on overlay hosts:
+				// typing the documented `list` verb must not regress to the
+				// printed wall of text on an interactive terminal.
+				const surface = host.skillsDirectory?.();
+				if (surface) {
+					surface.openSkillsPicker();
+					return;
+				}
 				await listSkills(host);
 				return;
 			}

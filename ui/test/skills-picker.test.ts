@@ -22,10 +22,12 @@ import {
 } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
 import {
+	SKILLS_SECTION_BUDGET,
 	SKILLS_SOURCES,
 	SKILLS_TASK_FAMILIES,
 	SkillsPicker,
 	classificationLabel,
+	firstSectionSlug,
 	skillDeletable,
 	type SkillsCandidate,
 	type SkillsDetailsSkill,
@@ -33,6 +35,8 @@ import {
 	type SkillsPreviewResult,
 	type SkillsSearchParams,
 	type SkillsSearchResult,
+	type SkillsSectionParams,
+	type SkillsSectionResult,
 } from "../src/components/SkillsPicker.ts";
 import type { GatewayClient } from "../src/gateway.ts";
 import type { SessionInfo } from "../src/protocol.ts";
@@ -116,6 +120,29 @@ function detailsSkill(overrides: Partial<SkillsDetailsSkill> = {}): SkillsDetail
 		usageCount: 4,
 		enabled: true,
 		content: "## Orientation\nStart here.\n\n## Implementation\nBuild it.",
+		...overrides,
+	};
+}
+
+/** `skills.section` payload builder (handler `_section_payload` shape). */
+function sectionResult(overrides: Partial<SkillsSectionResult> = {}): SkillsSectionResult {
+	return {
+		skillId: "web-build",
+		contentRevision: "rev0000000000",
+		sectionId: "orientation",
+		heading: "Orientation",
+		text: "Start here.",
+		start: 14,
+		end: 26,
+		total: 56,
+		sectionTotal: 12,
+		line: 2,
+		continuation: null,
+		stale: false,
+		bound: true,
+		anchorId: "orientation",
+		budget: 800,
+		diagnostics: [],
 		...overrides,
 	};
 }
@@ -213,6 +240,7 @@ interface Recorder {
 	searches: SkillsSearchParams[];
 	details: string[];
 	previews: string[];
+	sections: SkillsSectionParams[];
 	providers: SkillsPickerProviders;
 }
 
@@ -221,14 +249,17 @@ function recorder(
 		searchResult({ query: params.query, candidates: [] }),
 	details: (skillId: string) => Promise<SkillsDetailsSkill> = async () => detailsSkill(),
 	preview: (request: string) => Promise<SkillsPreviewResult> = async () => previewResult(),
+	section: (params: SkillsSectionParams) => Promise<SkillsSectionResult> = async () => sectionResult(),
 ): Recorder {
 	const searches: SkillsSearchParams[] = [];
 	const detailCalls: string[] = [];
 	const previewCalls: string[] = [];
+	const sectionCalls: SkillsSectionParams[] = [];
 	return {
 		searches,
 		details: detailCalls,
 		previews: previewCalls,
+		sections: sectionCalls,
 		providers: {
 			search: (params) => {
 				searches.push(params);
@@ -241,6 +272,10 @@ function recorder(
 			preview: (request) => {
 				previewCalls.push(request);
 				return preview(request);
+			},
+			section: (params) => {
+				sectionCalls.push(params);
+				return section(params);
 			},
 		},
 	};
@@ -642,6 +677,126 @@ test("tab/esc focus contract: esc leaves the filter row before closing", async (
 	assert.equal(closed, 1);
 });
 
+// ─── A6: in-overlay versioned section reader (§10.4/§12.2) ─────────────────
+
+test("A6 details read fetches the first declared section with the shown revision and pages its continuation", async () => {
+	assert.equal(firstSectionSlug("## Orientation\nStart here."), "orientation");
+	assert.equal(firstSectionSlug("no headings here"), "", "no heading means the reader falls back to a body offset");
+	let call = 0;
+	const rec = recorder(
+		async (params) => searchResult({ query: params.query, candidates: [candidate()] }),
+		async () => detailsSkill(),
+		async () => previewResult(),
+		async (params) => {
+			call += 1;
+			if (call === 1) {
+				assert.deepEqual(params, {
+					skillId: "web-build",
+					contentRevision: "rev0000000000",
+					section: "orientation",
+					budget: SKILLS_SECTION_BUDGET,
+				});
+				return sectionResult({ text: "Start here.", sectionTotal: 26, continuation: 12 });
+			}
+			assert.equal(params.section, "orientation");
+			assert.equal(params.offset, 12);
+			assert.equal(params.contentRevision, "rev0000000000", "continuations keep the exact revision");
+			return sectionResult({
+				text: "Then build it.",
+				start: 26,
+				end: 40,
+				sectionTotal: 26,
+				continuation: null,
+			});
+		},
+	);
+	const pane = new SkillsPicker(rec.providers);
+	pane.activate();
+	await delay(0);
+	pane.handleInput("\r"); // details
+	await delay(0);
+	assert.equal(rec.sections.length, 0, "opening details does not read the section");
+	assert.match(flow(pane), /s read section/);
+
+	pane.handleInput("s");
+	await delay(0);
+	assert.equal(rec.sections.length, 1);
+	const first = flow(pane);
+	assert.match(first, /section: Orientation \(11 of 26 chars · declared · content rev00000\)/);
+	assert.match(first, /Start here\./);
+	assert.match(first, /\[section continues at offset 12 — press s\]/);
+	assert.match(first, /s continue section/);
+
+	pane.handleInput("s");
+	await delay(0);
+	assert.equal(rec.sections.length, 2);
+	const second = flow(pane);
+	assert.match(second, /Then build it\./);
+	assert.doesNotMatch(second, /continues at offset/);
+	assert.match(second, /s read section/);
+});
+
+test("A6 a stale section read is honest and the retry uses the revision the server reported", async () => {
+	const rec = recorder(
+		async (params) => searchResult({ query: params.query, candidates: [candidate()] }),
+		async () => detailsSkill(),
+		async () => previewResult(),
+		async (params) => {
+			if (rec.sections.length === 1) {
+				return sectionResult({
+					stale: true,
+					text: "",
+					contentRevision: "89abcdef01234567",
+					diagnostics: [{
+						code: "section-stale-content",
+						message: "section 'orientation' was read against revision rev0000000000; the requested revision rev0000000000 no longer matches the current content",
+						skill_id: "web-build",
+					}],
+				});
+			}
+			assert.equal(params.contentRevision, "89abcdef01234567", "the retry binds to the current revision, not the stale one");
+			return sectionResult({ contentRevision: "89abcdef01234567", text: "Fresh orientation." });
+		},
+	);
+	const pane = new SkillsPicker(rec.providers);
+	pane.activate();
+	await delay(0);
+	pane.handleInput("\r");
+	await delay(0);
+	pane.handleInput("s");
+	await delay(0);
+	const staleScreen = flow(pane);
+	assert.match(staleScreen, /section stale: orientation was requested at content rev00000, but the skill changed to 89abcdef — nothing from the edited text was served/);
+	assert.match(staleScreen, /press s to re-read content 89abcdef/);
+	assert.doesNotMatch(staleScreen, /Start here\./, "no passage is served from the edited content");
+	pane.handleInput("s");
+	await delay(0);
+	assert.match(flow(pane), /Fresh orientation\./);
+});
+
+test("A6 a failing section read is an honest error state, never fabricated text", async () => {
+	const rec = recorder(
+		async (params) => searchResult({ query: params.query, candidates: [candidate()] }),
+		async () => detailsSkill(),
+		async () => previewResult(),
+		async () => {
+			throw new Error("skills.section unavailable");
+		},
+	);
+	const pane = new SkillsPicker(rec.providers);
+	pane.activate();
+	await delay(0);
+	pane.handleInput("\r");
+	await delay(0);
+	pane.handleInput("s");
+	await delay(0);
+	assert.equal(pane.getView().sectionStatus, "error");
+	assert.match(flow(pane), /\(section read failed: skills\.section unavailable\)/);
+	assert.equal(pane.getView().section, null, "no passage is invented on failure");
+	pane.handleInput("\x1b");
+	assert.equal(pane.getView().mode, "results");
+});
+
 // ─── Part B: real App command path ──────────────────────────────────────────
 
 class ScriptedSkillsClient {
@@ -649,13 +804,71 @@ class ScriptedSkillsClient {
 	candidates: SkillsCandidate[] = [];
 	searchError: Error | undefined;
 	previewError: Error | undefined;
+	sectionError: Error | undefined;
 	showSkill: SkillsDetailsSkill = detailsSkill() as unknown as SkillsDetailsSkill;
+	/** Content revision the fake server believes is current (change to simulate edits). */
+	sectionRevision = "rev0000000000";
 
 	start(): void {}
 	stderr(): string[] {
 		return [];
 	}
 	async stop(): Promise<void> {}
+
+	/** Minimal real-handler behavior: first heading, slug, that section's text. */
+	sectionResponse(params: Record<string, unknown>): SkillsSectionResult {
+		const content = this.showSkill.content ?? "";
+		const requested = params.contentRevision === undefined ? undefined : String(params.contentRevision);
+		const wanted = typeof params.section === "string" && params.section ? params.section : firstSectionSlug(content);
+		if (requested !== undefined && requested !== this.sectionRevision) {
+			return sectionResult({
+				skillId: String(params.skillId ?? ""),
+				sectionId: wanted,
+				heading: "",
+				text: "",
+				stale: true,
+				contentRevision: this.sectionRevision,
+				diagnostics: [{
+					code: "section-stale-content",
+					message: `section '${wanted}' was read against revision ${requested}; the requested revision ${requested} no longer matches the current content`,
+					skill_id: String(params.skillId ?? ""),
+				}],
+			});
+		}
+		const sections: Array<{ id: string; heading: string; text: string }> = [];
+		const lines = content.split("\n");
+		let current: { id: string; heading: string; body: string[] } | null = null;
+		for (const line of lines) {
+			const heading = /^(?:#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+			if (heading) {
+				if (current) sections.push({ id: current.id, heading: current.heading, text: current.body.join("\n").trim() });
+				current = { id: firstSectionSlug(line), heading: heading[1] ?? "", body: [] };
+			} else if (current) {
+				current.body.push(line);
+			}
+		}
+		if (current) sections.push({ id: current.id, heading: current.heading, text: current.body.join("\n").trim() });
+		const found = sections.find((entry) => entry.id === wanted) ?? sections[0];
+		if (!found) {
+			return sectionResult({
+				skillId: String(params.skillId ?? ""),
+				sectionId: wanted,
+				heading: "",
+				text: "",
+				stale: false,
+				contentRevision: this.sectionRevision,
+				diagnostics: [{ code: "section-unknown", message: `parsed headings contain no section '${wanted}'`, skill_id: String(params.skillId ?? "") }],
+			});
+		}
+		return sectionResult({
+			skillId: String(params.skillId ?? ""),
+			sectionId: found.id,
+			heading: found.heading,
+			text: found.text,
+			sectionTotal: found.text.length,
+			contentRevision: this.sectionRevision,
+		});
+	}
 
 	searchResponse(params: Record<string, unknown>): SkillsSearchResult {
 		const query = String(params.query ?? "");
@@ -710,6 +923,9 @@ class ScriptedSkillsClient {
 			case "skills.preview_route":
 				if (this.previewError) throw this.previewError;
 				return previewResult({ reasons: [`request=${String(params.request)} [user]`] }) as T;
+			case "skills.section":
+				if (this.sectionError) throw this.sectionError;
+				return this.sectionResponse(params) as T;
 			default:
 				return {} as T;
 		}
@@ -842,6 +1058,64 @@ test("U04 preview never starts a turn and records zero non-preview RPCs", async 
 	assert.match(screen(), /Skills:/);
 });
 
+test("A6 real App: details → s reads skills.section with the shown revision and records no other RPCs", async (t) => {
+	const { app, tui, client, type, screen } = await boot();
+	t.after(() => app.exit());
+	client.candidates = [candidate({ skillId: "web-build", name: "web-build" })];
+	type("/skills");
+	type("\r");
+	await settle();
+	type("web");
+	await delay(200);
+	type("\r"); // details
+	await settle();
+	const mark = client.requests.length;
+
+	type("s"); // read the first declared section
+	await settle();
+	tui.renderNow(true);
+	const calls = client.requests.slice(mark).filter((entry) => entry.method === "skills.section");
+	assert.equal(calls.length, 1, "one versioned section read");
+	assert.deepEqual(calls[0]!.params, {
+		skillId: "web-build",
+		contentRevision: "rev0000000000",
+		section: "orientation",
+		budget: 800,
+	});
+	const unexpected = client.requests.slice(mark).filter((entry) => entry.method !== "skills.section");
+	assert.deepEqual(unexpected, [], "the read path records zero non-section RPCs (no turn, provider, install or approval change)");
+	assert.equal(client.requests.filter((entry) => entry.method === "prompt.submit").length, 0, "no turn was started");
+	const pane = (app as unknown as { skillsPicker: SkillsPicker }).skillsPicker;
+	assert.equal(pane.getView().sectionStatus, "ready");
+	let flat = screen().replace(/\s+/g, " ");
+	assert.match(flat, /section: Orientation \(11 of 11 chars · declared · content rev00000\)/);
+	assert.match(flat, /Start here\./);
+
+	// The skill is edited between reads: the pane serves the honest stale state,
+	// then re-reads against the revision the server reported as current.
+	client.sectionRevision = "aaaabbbbccccdddd";
+	type("s");
+	await settle();
+	tui.renderNow(true);
+	flat = screen().replace(/\s+/g, " ");
+	assert.match(flat, /section stale: orientation was requested at content rev00000, but the skill changed to aaaabbbb/);
+	assert.match(flat, /press s to re-read content aaaabbbb/);
+	assert.doesNotMatch(flat, /Start here\./, "no passage is served from the edited content");
+	type("s");
+	await settle();
+	tui.renderNow(true);
+	const reads = client.requests.filter((entry) => entry.method === "skills.section");
+	assert.equal(reads.at(-1)!.params.contentRevision, "aaaabbbbccccdddd");
+	assert.match(screen().replace(/\s+/g, " "), /Start here\./);
+
+	// A failing read is an honest error state.
+	client.sectionError = new Error("gateway disconnected");
+	type("s");
+	await settle();
+	tui.renderNow(true);
+	assert.match(screen().replace(/\s+/g, " "), /\(section read failed: gateway disconnected\)/);
+});
+
 test("U06 a gateway failure shows an honest state and keeps the filter", async (t) => {
 	const { app, tui, client, type, screen } = await boot();
 	t.after(() => app.exit());
@@ -926,7 +1200,7 @@ test("U05 the picker delete action routes through the legacy confirmation", asyn
 	assert.deepEqual(deletes[0]!.params, { name: "local-skill" });
 });
 
-test("U07 /skills list keeps the legacy printed table and does not open the overlay", async (t) => {
+test("U07 a typed /skills list opens the interactive directory on overlay hosts (legacy table remains the no-surface fallback)", async (t) => {
 	const { app, tui, client, type, screen } = await boot();
 	t.after(() => app.exit());
 	client.candidates = [candidate({ name: "web-build" })];
@@ -935,10 +1209,15 @@ test("U07 /skills list keeps the legacy printed table and does not open the over
 	type("\r");
 	await settle();
 	tui.renderNow(true);
-	assert.equal((app as unknown as { skillsPicker: SkillsPicker | undefined }).skillsPicker, undefined, "the legacy list path stays non-interactive");
-	assert.ok(client.requests.slice(before).some((entry) => entry.method === "skills.list"), "the legacy table path still uses skills.list");
-	assert.equal(client.requests.slice(before).some((entry) => entry.method === "skills.search"), false, "the legacy path issues no new search RPC");
-	const rendered = screen();
-	assert.match(rendered, /Name\s+Uses\s+Triggers\s+Description/);
-	assert.match(rendered, /web-build/);
+	// The interactive directory is the product surface for a typed `list` too
+	// (features/skills.ts); the byte-identical printed table is asserted for
+	// hosts without that surface in features.test.ts (U07 fallback).
+	const pane = (app as unknown as { skillsPicker: SkillsPicker | undefined }).skillsPicker;
+	assert.ok(pane, "the interactive picker opens for /skills list on an overlay host");
+	assert.match(screen(), /Skills:/);
+	assert.equal(
+		client.requests.slice(before).some((entry) => entry.method === "skills.list"),
+		false,
+		"the interactive path issues no legacy list RPC",
+	);
 });

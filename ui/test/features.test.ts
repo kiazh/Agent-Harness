@@ -2154,7 +2154,7 @@ test("/mcp connection confirmation shows the reviewed safe configuration", async
 
 // ─── A5: interactive /skills directory + legacy compatibility (spec §12.3) ──
 
-test("/skills list stays byte-identical to the legacy printed table (U07)", async () => {
+test("without a host surface /skills list keeps the byte-identical legacy table (U07 fallback)", async () => {
 	const host = new FakeHost();
 	host.responses["skills.list"] = {
 		skills: [
@@ -2206,6 +2206,15 @@ test("bare /skills opens the interactive directory when the host provides it (U0
 	assert.deepEqual(opened, [undefined, "make me a website"], "/skills search prefills the picker query");
 	await run("/skills search", host);
 	assert.deepEqual(opened, [undefined, "make me a website", undefined]);
+});
+
+test("/skills list opens the same interactive directory on overlay hosts (no wall of text)", async () => {
+	const host = new FakeHost();
+	const opened: Array<string | undefined> = [];
+	host.skillsSurface = { openSkillsPicker: (query) => opened.push(query) };
+	await run("/skills list", host);
+	assert.deepEqual(opened, [undefined], "/skills list opens the picker");
+	assert.equal(host.calls.length, 0, "no skills.list RPC is issued on the interactive path");
 });
 
 test("without a host surface the legacy table is the fallback (U07)", async () => {
