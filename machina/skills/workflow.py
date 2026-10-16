@@ -14,8 +14,16 @@ from machina.core.intent import (
     classify_task,
     conversational,
 )
+from machina.skills.planned_steps import (
+    PlannedStep,
+    StageState,
+    build_planned_steps,
+    normalize_stage_state,
+    task_revision_from,
+)
 from machina.skills.registry import Skill, SkillRegistry
 from machina.skills.runtime import _words
+from machina.skills.search import catalog_revision
 
 #: Skill that anchors research-mode verification; never reused as the domain
 #: fallback, otherwise its stage label collapses onto "domain".
@@ -24,9 +32,20 @@ _RESEARCH_ANCHOR = "ecc-deep-research"
 
 @dataclass
 class SkillWorkflow:
+    """One coherent plan: steps define selection, display, and disclosure order.
+
+    ``skills`` and ``stages`` are derived views of ``steps`` (spec §10.1) —
+    they are kept as plain lists because existing callers read them, but no
+    second ordering is ever computed.
+    """
+
     kind: str
     skills: list[Skill]
     stages: list[tuple[str, str]]
+    steps: tuple[PlannedStep, ...] = ()
+    stage_state: StageState | None = None
+    task_revision: int = 0
+    catalog_revision: str = ""
 
     def render(self) -> str:
         if not self.skills:
@@ -76,6 +95,8 @@ def plan_workflow(
     recent: list[dict[str, Any]] | None = None,
     goal: str | None = None,
     skill_weights: dict[str, float] | None = None,
+    task_state: dict[str, Any] | None = None,
+    task_revision: int = 0,
 ) -> SkillWorkflow:
     from machina.skills.runtime import _TECHNOLOGIES, _words, rank_skills
 
@@ -130,14 +151,14 @@ def plan_workflow(
     coding = bool(mentioned | (task_words & CODING_TASK_WORDS))
     research = bool(task_words & RESEARCH_TASK_WORDS) and not coding
     kind = "coding" if coding else "research" if research else "task"
-    selected: list[Skill] = []
-    stages: list[tuple[str, str]] = []
+    chosen: dict[str, Skill] = {}
+    specs: list[tuple[str, str]] = []
 
     def add(stage: str, name: str) -> None:
         skill = skills.get(name)
-        if skill and skill.enabled and name not in {s.name for s in selected} and len(selected) < 6:
-            selected.append(skill)
-            stages.append((stage, name))
+        if skill and skill.enabled and name not in chosen and len(chosen) < 6:
+            chosen[name] = skill
+            specs.append((stage, name))
 
     # Specific language/framework workflow anchors the plan; broad local triggers remain useful.
     # Only strong matches anchor or specialize — weak overlap contributes nothing. In research
@@ -215,15 +236,24 @@ def plan_workflow(
     else:
         for match in strong[:3]:
             add("specialist", match.name)
-    if coding:
-        order = {
-            "requested workflow": 0,
-            "inspect and plan": 0,
-            "domain": 1,
-            "security preflight and review": 2,
-            "implement and test": 3,
-            "specialist": 4,
-            "verify": 5,
-        }
-        stages.sort(key=lambda item: order[item[0]])
-    return SkillWorkflow(kind, selected, stages)
+    state = normalize_stage_state(task_state)
+    effective_revision = max(0, int(task_revision)) or task_revision_from(task_state)
+    steps = build_planned_steps(
+        specs,
+        kind=kind,
+        skills_by_name=chosen,
+        content_for=skills.get_skill_content,
+        stage_state=state,
+        task_revision=effective_revision,
+    )
+    selected = [chosen[step.skill_id] for step in steps]
+    stages = [(step.label, step.skill_id) for step in steps]
+    return SkillWorkflow(
+        kind,
+        selected,
+        stages,
+        steps=steps,
+        stage_state=state,
+        task_revision=effective_revision,
+        catalog_revision=catalog_revision(selected) if selected else "",
+    )

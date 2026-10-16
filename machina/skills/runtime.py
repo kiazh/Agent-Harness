@@ -10,6 +10,14 @@ from collections import Counter
 import machina.skills.registry as skills_module
 import machina.skills.search as search_module
 from machina.core.assembler import get_token_count, truncate_to_tokens
+from machina.skills.planned_steps import (
+    DisclosurePlan,
+    StageState,
+    normalize_constraints,
+    normalize_stage_state,
+    plan_disclosure,
+    task_revision_from,
+)
 from machina.skills.registry import Skill, SkillRegistry
 
 _INDEXES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
@@ -162,8 +170,22 @@ def automatic_skill_context(
     goal: str | None = None,
     skill_weights: dict[str, float] | None = None,
     activated: list[str] | None = None,
+    task_state: dict | None = None,
+    stage_state: object = None,
 ) -> str:
-    """Activate relevant workflows before the first model call, never all bodies."""
+    """Activate relevant workflows before the first model call, never all bodies.
+
+    Disclosure derives from ``SkillWorkflow.steps`` (spec §10.1): the same
+    authoritative order the workflow line displays — never a ``skills[:2]``
+    prefix. With an explicit stage fact (``stage_state``, or the
+    ``stage``/``stage_source`` keys of ``task_state``) the current-stage
+    sections and their prerequisites are disclosed; without one, only
+    bootstrap material is loaded and later sections stay discoverable through
+    locators (spec §10.2). Skills without metadata/sections keep the pre-A3
+    whole-body excerpt path byte-for-byte. The rollback switch
+    ``skills_disclosure_planner`` (read via ``config.get``; default ON)
+    restores the legacy path entirely.
+    """
     skills = skills or skills_module.skill_registry
     budget = min(1200, max(0, budget))
     if budget < 100:
@@ -171,9 +193,13 @@ def automatic_skill_context(
     from machina.skills.workflow import plan_workflow
 
     workflow = plan_workflow(
-        query, skills=skills, recent=recent, goal=goal, skill_weights=skill_weights
+        query,
+        skills=skills,
+        recent=recent,
+        goal=goal,
+        skill_weights=skill_weights,
+        task_state=task_state,
     )
-    matches = workflow.skills[:2]
     header = (
         "\n\n## Automatic skills\n"
         "Relevant references for this task — consult a workflow only if the task calls "
@@ -208,10 +234,67 @@ def automatic_skill_context(
         header += workflow.render()
     if get_token_count(header) > budget:
         return ""
-    if not matches:
+    if not workflow.steps:
         # No skill evidence: inject nothing. The system prompt already
         # covers general conduct — every turn need not pay ~116 tokens
         # of discovery boilerplate.
+        return ""
+    raw_state = stage_state if stage_state is not None else task_state
+    state = normalize_stage_state(raw_state)
+    constraints = (
+        normalize_constraints(task_state.get("constraints")) if isinstance(task_state, dict) else ()
+    )
+    if not _disclosure_planner_enabled():
+        return _legacy_disclosure(header, workflow, skills, budget, can_read, activated)
+    return _planned_disclosure(
+        header=header,
+        workflow=workflow,
+        skills=skills,
+        budget=budget,
+        can_read=can_read,
+        state=state,
+        constraints=constraints,
+        task_state=task_state,
+        activated=activated,
+    )
+
+
+#: Rollback switch for stage-aware disclosure. Read via ``config.get`` so no
+#: ``machina/core/config.py`` edit is needed; an unregistered/missing key means
+#: the planner is ON. TODO(A4/A6): register ``skills_disclosure_planner: bool =
+#: True`` in config DEFAULTS for schema visibility.
+_DISCLOSURE_PLANNER_KEY = "skills_disclosure_planner"
+
+
+def _config_flag(raw: object) -> bool:
+    """Boolean-ish reader for an unregistered config key (safe default ON)."""
+    if raw is None:
+        return True
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().casefold() not in ("0", "false", "no", "off", "disabled")
+
+
+def _disclosure_planner_enabled() -> bool:
+    try:
+        from machina.core.config import config
+
+        return _config_flag(config.get(_DISCLOSURE_PLANNER_KEY))
+    except (ImportError, AttributeError, ValueError):
+        return True
+
+
+def _legacy_disclosure(
+    header: str,
+    workflow: object,
+    skills: SkillRegistry,
+    budget: int,
+    can_read: bool,
+    activated: list[str] | None,
+) -> str:
+    """Pre-A3 first-two whole-body excerpt path (rollback switch target)."""
+    matches = workflow.skills[:2]
+    if not matches:
         return ""
     result = header
     per_skill = max(0, (budget - get_token_count(header) - 120) // len(matches))
@@ -243,4 +326,106 @@ def automatic_skill_context(
         skills.record_use(skill.name)
         if activated is not None:
             activated.append(skill.name)
+    return result
+
+
+def _not_loaded_reminder(plan: DisclosurePlan, can_read: bool) -> list[str]:
+    """Compact locator lines for sections that were not loaded (bounded)."""
+    entries: list[str] = []
+    seen: set[str] = set()
+    locators = [item.locator for item in plan.omitted if item.reason != "unavailable"]
+    locators.extend(item.locator for item in plan.unresolved_prerequisites if item.locator)
+    for locator in locators:
+        if not locator.section_id:
+            continue
+        text = locator.describe()
+        if text in seen:
+            continue
+        seen.add(text)
+        entries.append(text)
+    if not entries:
+        return []
+    shown = entries[:6]
+    first = "Not loaded now: " + "; ".join(shown) + "."
+    if len(entries) > len(shown):
+        first = first[:-1] + f" (+{len(entries) - len(shown)} more)."
+    lines = [first]
+    if can_read:
+        lines.append("Read each section with skill_read before its step.")
+    return lines
+
+
+def _planned_disclosure(
+    *,
+    header: str,
+    workflow: object,
+    skills: SkillRegistry,
+    budget: int,
+    can_read: bool,
+    state: StageState | None,
+    constraints: tuple[str, ...],
+    task_state: dict | None,
+    activated: list[str] | None,
+) -> str:
+    """Stage-aware disclosure derived from ``workflow.steps`` (spec §10.1–10.3)."""
+    result = header
+    if constraints:
+        result += "\nTask constraints: " + "; ".join(constraints) + ".\n"
+    if state is not None:
+        result += f"\nCurrent stage ({state.source}): {state.stage}.\n"
+    plan = plan_disclosure(
+        workflow.steps,
+        skill_for=skills.get,
+        content_for=skills.get_skill_content,
+        budget=max(0, budget - get_token_count(result)),
+        stage_state=state,
+        task_revision=task_revision_from(task_state),
+        catalog_revision=workflow.catalog_revision,
+        constraints=constraints,
+        token_count=get_token_count,
+        token_basis="assembler.get_token_count",
+    )
+    revealed: dict[str, None] = {}
+    for entry in plan.chosen:
+        block = f"\n### {entry.skill_id} \u00b7 {entry.heading}\n{entry.text}\n"
+        if get_token_count(result + block) > budget:
+            break
+        result += block
+        revealed.setdefault(entry.skill_id, None)
+    if plan.whole_body:
+        per_unit = max(0, (budget - get_token_count(result) - 120) // len(plan.whole_body))
+        for unit in plan.whole_body:
+            excerpt = truncate_to_tokens(unit.content, per_unit)
+            if not unit.content.startswith(excerpt):
+                limit = min(len(unit.content), len(excerpt))
+                prefix_length = 0
+                while (
+                    prefix_length < limit and unit.content[prefix_length] == excerpt[prefix_length]
+                ):
+                    prefix_length += 1
+                excerpt = unit.content[:prefix_length]
+            block = f"\n### {unit.skill_id}\n{excerpt}\n"
+            if len(excerpt) < len(unit.content):
+                if can_read:
+                    block += (
+                        "[Instruction excerpt ends; continue skill_read at "
+                        f"offset={len(excerpt)}, limit=8000.]\n"
+                    )
+                else:
+                    block += (
+                        f"[Excerpt ends; full instructions at {unit.file_path}, "
+                        "if an authorized file reader is available.]\n"
+                    )
+            if get_token_count(result + block) > budget:
+                break
+            result += block
+            revealed.setdefault(unit.skill_id, None)
+    for line in _not_loaded_reminder(plan, can_read):
+        if get_token_count(result + "\n" + line) > budget:
+            break
+        result += "\n" + line
+    for skill_id in revealed:
+        skills.record_use(skill_id)
+        if activated is not None:
+            activated.append(skill_id)
     return result
