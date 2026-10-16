@@ -35,6 +35,7 @@ import type { DocumentRecord } from "../editor/model.ts";
 import type { EditorStore } from "../editor/model.ts";
 import type { TabModel } from "../editor/tabs.ts";
 import type { EditorView } from "../editor/view.ts";
+import type { PopupKeyAction } from "./IntelligencePopups.ts";
 
 /** Rows owned by the pane chrome: tab strip, breadcrumb, status row. */
 export const EDITOR_PANE_CHROME_ROWS = 3;
@@ -42,6 +43,8 @@ export const EDITOR_PANE_CHROME_ROWS = 3;
 export const EDITOR_PANE_HEADER_ROWS = 2;
 /** Default pane allocation before the shell calls `layout(rows)`. */
 export const EDITOR_PANE_DEFAULT_ROWS = 23;
+/** Default row budget (header included) for the problems slot. */
+export const EDITOR_PANE_PROBLEMS_DEFAULT_ROWS = 6;
 
 export interface EditorPaneOptions {
 	store: EditorStore;
@@ -51,6 +54,30 @@ export interface EditorPaneOptions {
 	onSelectTab?(documentId: string): void;
 	onCloseTab?(documentId: string): void;
 	onSave?(): void;
+}
+
+/**
+ * Callbacks the app wires so the pane can interpret a mounted popup's
+ * semantic key actions. Hooks are optional: a popup whose action has no hook
+ * is still consumed (the popup is open and owns the key).
+ */
+export interface IntelligenceHooks {
+	/** Enter/Tab on an open popup: accept the current item. */
+	accept?(): void;
+	/** Esc on an open popup: dismiss it. */
+	dismiss?(): void;
+	/** Arrow movement inside the popup list. */
+	move?(direction: 1 | -1): void;
+}
+
+/** Minimal contract a mounted popup exposes for keyboard routing. */
+export interface IntelligenceKeySource {
+	handleInput(data: string): PopupKeyAction;
+}
+
+/** Optional row-budget seam for the bottom problems slot. */
+export interface ProblemsBudgetComponent {
+	setRowBudget(rows: number): void;
 }
 
 interface TabChip {
@@ -163,6 +190,13 @@ export class EditorPane implements Component, Focusable {
 	private allocatedRows = EDITOR_PANE_DEFAULT_ROWS;
 	private viewportRows: number;
 	private lastRenderedWidth = 0;
+	private intelligencePopup: Component | undefined;
+	private intelligenceHooks: IntelligenceHooks | undefined;
+	private problemsComponent: Component | undefined;
+	private problemsRowBudget = EDITOR_PANE_PROBLEMS_DEFAULT_ROWS;
+	/** Popup/problems rows measured during the last render. */
+	private lastIntelligenceRows = 0;
+	private lastProblemsRows = 0;
 
 	/** Focusable proxy: TUI focus on the pane is the view's caret focus. */
 	get focused(): boolean {
@@ -192,8 +226,7 @@ export class EditorPane implements Component, Focusable {
 	 */
 	layout(rows: number): void {
 		this.allocatedRows = clampRows(rows);
-		this.viewportRows = Math.max(1, this.allocatedRows - EDITOR_PANE_CHROME_ROWS);
-		this.view.setViewportRows(this.viewportRows);
+		this.applyViewportAllocation();
 		this.requestRenderCallback();
 	}
 
@@ -203,6 +236,69 @@ export class EditorPane implements Component, Focusable {
 		if (next === this.lspStatus) return;
 		this.lspStatus = next;
 		this.requestRenderCallback();
+	}
+
+	/**
+	 * Mount (or unmount) the intelligence popup slot. The popup renders
+	 * directly below the viewport, above the status row; its measured height
+	 * is honored from the first render and never shrinks the viewport below
+	 * one row. `hooks` connect the popup's semantic key actions to the
+	 * machine behind it (see {@link handleIntelligenceKey}).
+	 */
+	setIntelligence(popup?: Component, hooks?: IntelligenceHooks): void {
+		this.intelligencePopup = popup;
+		this.intelligenceHooks = popup ? hooks : undefined;
+		if (!popup) this.lastIntelligenceRows = 0;
+		this.requestRenderCallback();
+	}
+
+	/**
+	 * Mount (or unmount) the bottom problems section with a fixed row budget
+	 * (header included). The budget is shared with the popup and viewport, and
+	 * the component's `setRowBudget` seam is fed when it exists.
+	 */
+	setProblems(component?: Component, rows?: number): void {
+		this.problemsComponent = component;
+		this.problemsRowBudget =
+			rows === undefined
+				? EDITOR_PANE_PROBLEMS_DEFAULT_ROWS
+				: Math.max(0, Number.isFinite(rows) ? Math.floor(rows) : EDITOR_PANE_PROBLEMS_DEFAULT_ROWS);
+		if (!component) this.lastProblemsRows = 0;
+		if (component) this.feedProblemsBudget(component);
+		this.requestRenderCallback();
+	}
+
+	/**
+	 * Plan §8 priority contract, called by the app focus router BEFORE the
+	 * view sees the key: while a popup is mounted and open, Enter accepts and
+	 * Esc closes it (consumed); everything the popup does not claim falls
+	 * through to the editor unchanged. With no popup every key falls through.
+	 */
+	handleIntelligenceKey(data: string): "consumed" | "fallthrough" {
+		const popup = this.intelligencePopup;
+		if (!popup) return "fallthrough";
+		const source = popup as Partial<IntelligenceKeySource>;
+		const handler = source.handleInput;
+		if (typeof handler !== "function") return "fallthrough";
+		const action = handler.call(popup, data);
+		switch (action.kind) {
+			case "accept":
+				this.intelligenceHooks?.accept?.();
+				return "consumed";
+			case "close":
+				this.intelligenceHooks?.dismiss?.();
+				return "consumed";
+			case "next":
+				this.intelligenceHooks?.move?.(1);
+				return "consumed";
+			case "prev":
+				this.intelligenceHooks?.move?.(-1);
+				return "consumed";
+			case "insert-text":
+				return "fallthrough";
+			default:
+				return "fallthrough";
+		}
 	}
 
 	/** Viewport rows currently allocated to the editor view. */
@@ -246,6 +342,34 @@ export class EditorPane implements Component, Focusable {
 			}
 			return undefined;
 		}
+		// Slot bands (below the viewport, above/around the status row): popups
+		// and the problems section receive their own local coordinates. Drag and
+		// release keep flowing to the view once a viewport gesture captured the
+		// pointer; the slots only claim fresh (press/click/move) events.
+		const y = Math.floor(event.y);
+		const pointerGesture = event.type === "drag" || event.type === "release";
+		const popupTop = EDITOR_PANE_HEADER_ROWS + this.viewportRows;
+		if (!pointerGesture && this.intelligencePopup && this.lastIntelligenceRows > 0) {
+			if (y >= popupTop && y < popupTop + this.lastIntelligenceRows) {
+				return this.intelligencePopup.handleMouse?.({
+					...event,
+					y: y - popupTop,
+					width,
+					height: this.lastIntelligenceRows,
+				});
+			}
+		}
+		const problemsTop = popupTop + this.lastIntelligenceRows + 1;
+		if (!pointerGesture && this.problemsComponent && this.lastProblemsRows > 0) {
+			if (y >= problemsTop && y < problemsTop + this.lastProblemsRows) {
+				return this.problemsComponent.handleMouse?.({
+					...event,
+					y: y - problemsTop,
+					width,
+					height: this.lastProblemsRows,
+				});
+			}
+		}
 		if (event.type === "drag" || event.type === "release" || this.inViewport(event.y)) {
 			// Viewport-local coordinates: chrome rows sit above the view.
 			return this.view.handleMouse({
@@ -262,13 +386,35 @@ export class EditorPane implements Component, Focusable {
 		const safeWidth = normalizeWidth(width);
 		this.lastRenderedWidth = safeWidth;
 		const strip = this.tabStrip(safeWidth);
+
+		// The popup and problems slots share one budget with the viewport: at
+		// least one viewport row always survives, and the popup wins contested
+		// rows because it carries the focused interaction.
+		const slotBudget = Math.max(0, this.allocatedRows - EDITOR_PANE_CHROME_ROWS - 1);
+		const popupLines = this.intelligencePopup ? this.intelligencePopup.render(safeWidth) : [];
+		const popupShown = popupLines.slice(0, slotBudget);
+		const problemsRows = this.problemsComponent
+			? Math.min(this.problemsRowBudget, Math.max(0, slotBudget - popupShown.length))
+			: 0;
+		const viewportRows = Math.max(
+			1,
+			this.allocatedRows - EDITOR_PANE_CHROME_ROWS - popupShown.length - problemsRows,
+		);
+		this.lastIntelligenceRows = popupShown.length;
+		this.lastProblemsRows = problemsRows;
+		this.viewportRows = viewportRows;
+		this.view.setViewportRows(viewportRows);
+
 		const viewLines = this.view.render(safeWidth);
-		while (viewLines.length < this.viewportRows) viewLines.push(" ".repeat(safeWidth));
+		while (viewLines.length < viewportRows) viewLines.push(" ".repeat(safeWidth));
+		const problemLines = problemsRows > 0 ? this.renderProblems(safeWidth, problemsRows) : [];
 		const lines = [
 			strip.text,
 			this.breadcrumb(safeWidth),
-			...viewLines.slice(0, this.viewportRows),
+			...viewLines.slice(0, viewportRows),
+			...popupShown,
 			this.statusRow(),
+			...problemLines,
 		];
 		return lines
 			.slice(0, this.allocatedRows)
@@ -280,6 +426,35 @@ export class EditorPane implements Component, Focusable {
 	}
 
 	// ------------------------------------------------------------- internals
+
+	/** Recomputed viewport from the last measured slot heights. */
+	private applyViewportAllocation(): void {
+		const slotBudget = Math.max(0, this.allocatedRows - EDITOR_PANE_CHROME_ROWS - 1);
+		const popupRows = Math.min(this.lastIntelligenceRows, slotBudget);
+		const problemsRows = this.problemsComponent
+			? Math.min(this.problemsRowBudget, Math.max(0, slotBudget - popupRows))
+			: 0;
+		this.viewportRows = Math.max(
+			1,
+			this.allocatedRows - EDITOR_PANE_CHROME_ROWS - popupRows - problemsRows,
+		);
+		this.view.setViewportRows(this.viewportRows);
+	}
+
+	private feedProblemsBudget(component: Component): void {
+		const target = component as Partial<ProblemsBudgetComponent>;
+		if (typeof target.setRowBudget === "function") target.setRowBudget(this.problemsRowBudget);
+	}
+
+	/** Render the bottom section to exactly its reserved rows. */
+	private renderProblems(width: number, rows: number): string[] {
+		const component = this.problemsComponent;
+		if (!component || rows <= 0) return [];
+		const rendered = component.render(width);
+		const out = rendered.slice(0, rows).map((line) => truncateDisplay(line, width));
+		while (out.length < rows) out.push(" ".repeat(width));
+		return out;
+	}
 
 	private activeRecord(): DocumentRecord | undefined {
 		const documentId = this.tabModel.activeDocumentId();
