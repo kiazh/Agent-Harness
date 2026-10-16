@@ -7,6 +7,15 @@
 
 export const ACTIVITY_INTERVAL_MS = 200;
 
+/**
+ * Focus-caret blink cadence. The block caret is painted only while the
+ * coordinator's `cursor.blink` frame is on, so the two-frame phase flips once
+ * per interval (500 ms on, 500 ms off). Reduced motion pins the caret static
+ * (frame 0) and the app retires the subscription entirely, so there is no
+ * timer at all.
+ */
+export const CURSOR_BLINK_INTERVAL_MS = 500;
+
 export interface AnimationSubscription {
 	stop(): void;
 }

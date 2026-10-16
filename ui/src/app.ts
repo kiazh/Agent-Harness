@@ -19,10 +19,10 @@ import {
 import { ArgumentAwareAutocompleteProvider } from "./autocomplete.ts";
 import { parseCommand, splitSub, type ParsedCommand } from "./commands.ts";
 import { ComposerBox, Footer, header, Picker, SecretForm, TextForm, ThinkingIndicator } from "./components.ts";
-import { Menu } from "./components/Menu.ts";
+import { DEFAULT_MENU_VISIBLE_ROWS, Menu } from "./components/Menu.ts";
 import { OAuthProgress } from "./components/OAuthProgress.ts";
-import { SkillsPicker, type SkillsDetailsSkill, type SkillsPreviewResult, type SkillsSearchParams, type SkillsSearchResult, type SkillsSectionParams, type SkillsSectionResult } from "./components/SkillsPicker.ts";
-import { HELP_KEYS, HelpPalette, helpPaletteCommands } from "./components/HelpPalette.ts";
+import { SkillsMenu, type SkillsCandidate, type SkillsDetailsSkill, type SkillsFilters, type SkillsPreviewResult, type SkillsSearchParams, type SkillsSearchResult, type SkillsSectionParams, type SkillsSectionResult } from "./components/SkillsMenu.ts";
+import { HELP_KEYS, HelpMenu, helpMenuCommands } from "./components/HelpMenu.ts";
 import { ApprovalCard, type ApprovalDecision } from "./components/ApprovalCard.ts";
 import { AppShell } from "./components/AppShell.ts";
 import { EditorPane, uriDisplayPath } from "./components/EditorPane.ts";
@@ -32,7 +32,7 @@ import {
 	CompletionPopup,
 	completionPopupModelFrom,
 } from "./components/IntelligencePopups.ts";
-import { AnimationCoordinator } from "./design/motion.ts";
+import { AnimationCoordinator, CURSOR_BLINK_INTERVAL_MS } from "./design/motion.ts";
 import type { AnimationSubscription } from "./design/motion.ts";
 import { NowPlayingBar } from "./components/NowPlayingBar.ts";
 import { NowPlayingController } from "./nowplaying/controller.ts";
@@ -75,7 +75,7 @@ import {
 } from "./editor/intelligence.ts";
 import { offsetToPosition, positionToOffset } from "./editor/positions.ts";
 import { SessionTailStore, tailEntries, trimSupersededHistory, type SessionTail, type TailBlock } from "./tail.ts";
-import { editorTheme, getSkin, setSkin, SKIN_NAMES, skinDescription } from "./theme.ts";
+import { editorTheme, getSkin, isOpaqueBackground, setOpaqueBackground, setSkin, SKIN_NAMES, skinDescription } from "./theme.ts";
 import { Transcript } from "./transcript.ts";
 import {
 	WorkspaceController,
@@ -92,7 +92,7 @@ import {
 	UiPreferencesPersistence,
 	type UiPreferences,
 } from "./workspace/preferences.ts";
-import { computeLayout } from "./workspace/layout.ts";
+import { computeLayout, explorerTreeRowBudget } from "./workspace/layout.ts";
 import type {
 	FocusRegion,
 	LayoutInput,
@@ -186,6 +186,13 @@ const SHIFT_F12_SEQUENCE = "\x1b[24;2~";
  * editor region owns focus (the composer keeps its word motion).
  */
 const WORKSPACE_FOOTER_HINTS = "Ctrl+T explorer · Ctrl+←/→ panes";
+
+/**
+ * Row cap for the keyboard-shortcuts menu. The documented list is long, so it
+ * gets a couple more rows than the shared default
+ * ({@link DEFAULT_MENU_VISIBLE_ROWS}) while still scrolling within the box.
+ */
+const SHORTCUTS_VISIBLE_ROWS = 14;
 
 /** Basename for notices (scheme-stripped, percent-decoded; never the raw URI). */
 function displayUriName(uri: string): string {
@@ -291,6 +298,14 @@ export class App implements FeatureHost {
 	private readonly nowPlayingBar: NowPlayingBar;
 	private nowPlayingController: NowPlayingController | undefined;
 	private nowPlayingAnim: AnimationSubscription | undefined;
+	/**
+	 * The single caret-blink subscription (key `cursor.blink`). Present only
+	 * while a text surface owns the caret; its presence is the source of
+	 * truth for "blinking is active" so focus changes can never stack loops.
+	 */
+	private cursorBlinkSub: AnimationSubscription | undefined;
+	/** Wall-clock start of the current blink phase (kept across re-subscribes). */
+	private cursorBlinkStartedAt = 0;
 	private lastPrompt = "";
 	private lastEscAt = 0;
 	private version = "";
@@ -405,12 +420,10 @@ export class App implements FeatureHost {
 	private completionRefilterSeq = 0;
 	private quickOpenPane: QuickOpenPane | undefined;
 	private quickOpenHandle: OverlayHandle | undefined;
-	/** `/skills` interactive directory overlay (A5, spec §12.3). */
-	private skillsPicker: SkillsPicker | undefined;
-	private skillsPickerHandle: OverlayHandle | undefined;
-	/** `/help` searchable command/keybinding palette overlay. */
-	private helpPane: HelpPalette | undefined;
-	private helpPaletteHandle: OverlayHandle | undefined;
+	/** `/skills` Menu dialog (A5, spec §12.3): the mounted component (dedup + tests). */
+	private skillsMenu: SkillsMenu | undefined;
+	/** `/help` searchable command/keybinding Menu dialog. */
+	private helpMenu: HelpMenu | undefined;
 	/** Re-entrancy guard for the dirty-exit review. */
 	private dirtyExitInProgress = false;
 	/** Stored workspace_ui_state captured BEFORE open (open overwrites it). */
@@ -459,6 +472,11 @@ export class App implements FeatureHost {
 
 		this.composer = new ComposerBox(tui, editorTheme, { paddingX: 1 });
 		this.editor = this.composer.editor;
+		// Caret blink: the composer's block obeys the shared phase, and every
+		// draft edit re-derives whether a caret is actually on screen (an empty
+		// composer shows only the placeholder, so it must not burn renders).
+		this.composer.editor.cursorBlockVisible = () => this.cursorBlinkOn();
+		this.composer.editor.onChange = () => this.syncCursorBlink();
         this.composer.editor.onPaste = (text) => this.acceptImageDrop(text);
         this.composer.editor.onSubmitBlocked = () => {
             if (!this.pendingImageLoads) return false;
@@ -495,11 +513,18 @@ export class App implements FeatureHost {
 			this.tui.addChild(this.footer);
 		}
 		this.tui.setFocus(this.editor);
+		this.syncCursorBlink();
 		this.inputListenerDisposer = this.tui.addInputListener((data) => this.onKey(data));
 
 		this.footer.cwd = process.cwd();
 		this.footer.status = "offline";
 		this.transcript.addNotice("Starting Machina…");
+		// Transparent background: apply the override before the first frame so
+		// there is never a flash of the opaque canvas. The launcher exports the
+		// saved value as MACHINA_TRANSPARENT_BACKGROUND; the persisted file value
+		// (read below) restyles with a full repaint if it differs.
+		const transparentEnv = /^(1|true|on|yes)$/i.test((process.env.MACHINA_TRANSPARENT_BACKGROUND ?? "").trim());
+		setOpaqueBackground(!transparentEnv);
 		this.tui.start();
 
 		this.client.onEvent = (event) => this.onEvent(event);
@@ -529,6 +554,15 @@ export class App implements FeatureHost {
 					// The startup frame is already on screen. Use the same
 					// cache invalidation/full redraw as live theme selection.
 					this.restyle();
+				}
+				if (typeof config.transparent_background === "boolean") {
+					const opaque = !config.transparent_background;
+					if (opaque !== isOpaqueBackground()) {
+						setOpaqueBackground(opaque);
+						// Same full redraw as a skin change: every painted cell
+						// (including empty viewport rows) must drop the fill.
+						this.restyle();
+					}
 				}
 				// Kick off the pinned now-playing bar here, but never await it
 				// before the session exists (finding 8). start() joins the
@@ -785,6 +819,50 @@ export class App implements FeatureHost {
 		} else if (!playing && this.nowPlayingAnim) {
 			this.nowPlayingAnim.stop();
 			this.nowPlayingAnim = undefined;
+		}
+	}
+
+	// ─── caret blink (one coordinator subscription) ──────────────────────────
+
+	/**
+	 * True while a typing caret is actually on screen: the workspace editor
+	 * (focused, with an open document) or the composer (focused, with a
+	 * non-empty draft — an empty composer shows only the placeholder, so
+	 * blinking it would burn renders with nothing to blink).
+	 */
+	private cursorCaretVisible(): boolean {
+		if (this.exiting) return false;
+		const integration = this.integration;
+		if (integration?.view.focused && integration.tabs.count() > 0) return true;
+		return this.editor.focused && this.editor.getText().length > 0;
+	}
+
+	/**
+	 * The caret's current blink phase. When no blink subscription is live
+	 * there is no caret to toggle, so "on" keeps an unexpected render static;
+	 * under reduced motion the caret is pinned on (documented policy: focus
+	 * must stay visible) and no timer exists at all.
+	 */
+	cursorBlinkOn(): boolean {
+		if (!this.cursorBlinkSub || this.coordinator.isReducedMotion) return true;
+		return this.coordinator.frame(["on", "off"], CURSOR_BLINK_INTERVAL_MS, this.cursorBlinkStartedAt) === "on";
+	}
+
+	/**
+	 * Reconcile the single blink subscription with the focused caret. The
+	 * stored handle guards subscribing, so repeated focus changes can never
+	 * stack loops (the coordinator also replaces by key). Retired whenever no
+	 * text surface owns the caret: explorer/problems focus, an overlay/dialog,
+	 * an empty composer or an empty editor.
+	 */
+	private syncCursorBlink(): void {
+		const needed = this.cursorCaretVisible() && !this.coordinator.isReducedMotion;
+		if (needed && !this.cursorBlinkSub) {
+			this.cursorBlinkStartedAt = Date.now();
+			this.cursorBlinkSub = this.coordinator.subscribe("cursor.blink", CURSOR_BLINK_INTERVAL_MS);
+		} else if (!needed && this.cursorBlinkSub) {
+			this.cursorBlinkSub.stop();
+			this.cursorBlinkSub = undefined;
 		}
 	}
 
@@ -1097,14 +1175,15 @@ export class App implements FeatureHost {
 	}
 
 	pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined> {
-		// The overlay is full-screen: Menu derives its row budget from the
-		// live viewport with its own chrome rows (plus one slack row) reserved.
-		return this.openDialog<SelectItem>((close) => new Picker(title, items, close, () => close(), undefined, undefined, this.tui));
+		// The overlay is full-screen, but the menu itself is bounded to the
+		// documented default so a long list scrolls instead of covering the
+		// page; Menu reserves its own chrome rows within the live viewport.
+		return this.openDialog<SelectItem>((close) => new Picker(title, items, close, () => close(), DEFAULT_MENU_VISIBLE_ROWS, undefined, this.tui));
 	}
 
 	pickMany(title: string, items: SelectItem[]): Promise<SelectItem[] | undefined> {
 		return this.openDialog<SelectItem[]>((close) => {
-			const menu = new Menu(title, items, { multiSelect: true, tui: this.tui });
+			const menu = new Menu(title, items, { multiSelect: true, visibleRows: DEFAULT_MENU_VISIBLE_ROWS, tui: this.tui });
 			menu.onConfirm = close;
 			menu.onCancel = () => close();
 			return menu;
@@ -1126,7 +1205,7 @@ export class App implements FeatureHost {
 					label: `${skin}${skin === previous ? " (current)" : ""}`,
 					description: skinDescription(skin),
 				})),
-				{ hint: "↑↓ preview · enter apply · esc restore", tui: this.tui, initialValue: previous },
+				{ hint: "↑↓ preview · enter apply · esc restore", visibleRows: DEFAULT_MENU_VISIBLE_ROWS, tui: this.tui, initialValue: previous },
 			);
 			menu.onSelectionChange = (item) => {
 				setSkin(item.value);
@@ -1282,6 +1361,7 @@ export class App implements FeatureHost {
 				// route through the region router so activeRegion agrees, or the
 				// editor-scoped gates would still think the editor owns keys.
 				else if (!this.exiting) this.setFocusForRegion("chat-composer");
+				this.syncCursorBlink();
 				this.tui.requestRender();
 				done(value);
 			};
@@ -1299,6 +1379,7 @@ export class App implements FeatureHost {
 			// Late management RPCs may finish after an approval arrives. Preserve
 			// their draft invisibly until the bound decision releases focus.
 			if (this.approvalDialogs.size) { handle.setHidden(true); this.showApprovalDock(); }
+			this.syncCursorBlink();
 			this.tui.requestRender();
 		});
 	}
@@ -1364,6 +1445,8 @@ export class App implements FeatureHost {
 		this.nowPlayingController?.stop();
 		this.nowPlayingAnim?.stop();
 		this.nowPlayingAnim = undefined;
+		this.cursorBlinkSub?.stop();
+		this.cursorBlinkSub = undefined;
 		this.coordinator.dispose();
 		for (const dialog of [...this.dialogs].reverse()) dialog.cancel();
 		this.inputListenerDisposer?.();
@@ -1483,13 +1566,6 @@ export class App implements FeatureHost {
 		this.syncWorkspaceShellIfChanged();
 		if (this.dialogs.length || this.approvalDialogs.size) return undefined; // focused dialogs own their keys
 
-		// The skills directory overlay owns its keys (layered esc: preview →
-		// details → filters → close), exactly like the dialog early return
-		// above. Without this passthrough, escape reached the double-esc
-		// prompt-refill branch and ctrl+c reached the exit branch — the
-		// overlay could not be dismissed (review finding, reproduced).
-		if (this.skillsPicker) return undefined;
-
 		// ── integrated workspace (plan §8 focus priority) ────────────────────
 		// The Quick Open overlay owns every key except Esc/Ctrl+C (which would
 		// otherwise reach the stop/exit branches below): returning early lets
@@ -1497,16 +1573,6 @@ export class App implements FeatureHost {
 		if (this.quickOpenPane) {
 			if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 				this.quickOpenPane.dismiss();
-				return { consume: true };
-			}
-			return undefined;
-		}
-		// The `/help` palette owns every key the same way: Esc/Ctrl+C close it
-		// explicitly (the idle double-Esc refill below would otherwise steal
-		// the first Esc) and every other key reaches the focused palette.
-		if (this.helpPane) {
-			if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-				this.helpPane.dismiss();
 				return { consume: true };
 			}
 			return undefined;
@@ -1571,7 +1637,7 @@ export class App implements FeatureHost {
 					const command = parseCommand("/help");
 					if (command) void runCommand(command, this);
 				}
-			}, () => close(), undefined, "↑↓ browse · enter/esc close", this.tui));
+			}, () => close(), SHORTCUTS_VISIBLE_ROWS, "↑↓ browse · enter/esc close", this.tui));
 			return { consume: true };
 		}
 
@@ -1678,6 +1744,8 @@ export class App implements FeatureHost {
 				this.tui.requestRender();
 			},
 			requestRender: () => this.tui.requestRender(),
+			// Editor caret shares the app's single blink phase (coordinator).
+			isCursorBlockVisible: () => this.cursorBlinkOn(),
 			// The view's clipboard seam: copy through the real system clipboard
 			// (clipboard.ts), paste through the text reader (images.ts, "" when
 			// empty or unavailable → null so the view never inserts "").
@@ -2023,9 +2091,11 @@ export class App implements FeatureHost {
 		const chrome = this.shell.chromeRows();
 		if (layout.editor) integration.pane.layout(Math.max(1, layout.editor.rows - chrome));
 		if (layout.explorer) {
-			// The docked tree owns its own windowing: keep the selection visible
-			// inside the same visible column height as the editor pane.
-			integration.explorerPane.setRowBudget(Math.max(3, layout.explorer.rows - chrome - 2));
+			// The docked tree owns its own windowing inside a bounded panel:
+			// the drawer gets the rows the panes area can spare, capped so a
+			// long tree never paints a full-page surface rectangle. Keep the
+			// selection visible inside that budget.
+			integration.explorerPane.setRowBudget(explorerTreeRowBudget(layout.explorer.rows - chrome - 2));
 		}
 		// Focus reconciliation (finding 1): the recomposed geometry may have
 		// hidden the region that owns focus (e.g. chat maximized while the
@@ -2113,6 +2183,7 @@ export class App implements FeatureHost {
 		}
 		integration?.controller.noteFocus(region);
 		this.syncWorkspaceShellIfChanged();
+		this.syncCursorBlink();
 		this.tui.requestRender();
 	}
 
@@ -2122,6 +2193,7 @@ export class App implements FeatureHost {
 		this.activeRegion = region;
 		this.integration?.controller.noteFocus(region);
 		this.syncWorkspaceShellIfChanged();
+		this.syncCursorBlink();
 	}
 
 	// ─── workspace keys (plan §8) ───────────────────────────────────────────
@@ -2652,6 +2724,7 @@ export class App implements FeatureHost {
 		const active = integration.tabs.activeDocumentId();
 		if (active) integration.view.setDocument(active);
 		this.refreshLspStatus();
+		this.syncCursorBlink();
 		this.tui.requestRender();
 	}
 
@@ -2670,6 +2743,7 @@ export class App implements FeatureHost {
 			integration.view.setDocument(outcome.documentId);
 			void this.refreshProblemsForActiveDocument();
 			this.refreshLspStatus();
+			this.syncCursorBlink();
 			this.tui.requestRender();
 		}
 	}
@@ -2807,6 +2881,7 @@ export class App implements FeatureHost {
 		});
 		pane.activate();
 		this.tui.setFocus(pane);
+		this.syncCursorBlink();
 		this.tui.requestRender();
 	}
 
@@ -2838,107 +2913,84 @@ export class App implements FeatureHost {
 	// ─── skills directory (A5, spec §12.3) ──────────────────────────────────
 
 	/**
-	 * `/skills`: bounded overlay over `skills.search`, with `skills.show`
-	 * details and a call-free `skills.preview_route` view. The picker holds no
-	 * authority: delete is routed back through the legacy `/skills delete`
-	 * command (same confirmation/authorization), and preview cannot start a
-	 * turn, call a provider, run tools, install skills or change approvals.
+	 * `/skills`: a bounded, bottom-anchored Menu dialog over `skills.search`,
+	 * with `skills.show` details and a call-free `skills.preview_route` view
+	 * (the same `openDialog` + `Menu` pattern as the theme menu). The menu
+	 * holds no authority: delete is routed back through the legacy
+	 * `/skills delete` command (same confirmation/authorization), and preview
+	 * cannot start a turn, call a provider, run tools, install skills or
+	 * change approvals.
 	 */
 	private openSkillsPicker(initialQuery = ""): void {
-		if (this.skillsPicker) return;
-		const pane = new SkillsPicker(
-			{
-				search: (params) => this.skillsSearch(params),
-				details: (skillId) => this.skillsDetails(skillId),
-				preview: (request) => this.skillsPreview(request),
-				section: (params) => this.skillsSection(params),
-			},
-			{
-				onChange: () => this.tui.requestRender(),
-				initialQuery,
-			},
-		);
-		pane.onClose = () => this.closeSkillsPicker();
-		pane.onDelete = (skillName) => {
+		if (this.skillsMenu) return;
+		void this.openDialog<{ delete: string }>((close) => {
+			const menu = new SkillsMenu(
+				{
+					search: (params) => this.skillsSearch(params),
+					catalog: () => this.skillsCatalog(),
+					details: (skillId) => this.skillsDetails(skillId),
+					preview: (request) => this.skillsPreview(request),
+					section: (params) => this.skillsSection(params),
+				},
+				{
+					initialQuery,
+					title: "Skills",
+					tui: this.tui,
+					visibleRows: DEFAULT_MENU_VISIBLE_ROWS,
+					onChange: () => this.tui.requestRender(),
+					onClose: () => close(),
+					onDelete: (skillName) => close({ delete: skillName }),
+				},
+			);
+			this.skillsMenu = menu;
+			menu.activate();
+			return menu;
+		}).then((result) => {
+			this.skillsMenu = undefined;
 			// Keep the legacy command as the only delete path: same
 			// confirmation, same authorization, same RPC as `/skills delete`.
-			this.closeSkillsPicker();
-			const command = parseCommand(`/skills delete ${skillName}`);
+			if (result?.delete === undefined) return;
+			const command = parseCommand(`/skills delete ${result.delete}`);
 			if (command) void runCommand(command, this);
-		};
-		this.skillsPicker = pane;
-		this.skillsPickerHandle = this.tui.showOverlay(pane, {
-			width: "100%",
-			maxHeight: "100%",
-			// Palettes open above: top-anchored so the directory reads
-			// top-down and never sits as a bottom strip over the composer.
-			anchor: "top-center",
 		});
-		pane.activate();
-		this.tui.setFocus(pane);
-		this.tui.requestRender();
-	}
-
-	private closeSkillsPicker(): void {
-		const pane = this.skillsPicker;
-		if (!pane) return;
-		this.skillsPicker = undefined;
-		this.skillsPickerHandle?.hide();
-		this.skillsPickerHandle = undefined;
-		pane.focused = false;
-		if (!this.exiting) this.setFocusForRegion("chat-composer");
-		this.tui.requestRender();
 	}
 
 	// ─── help palette (searchable /help) ────────────────────────────────────
 
 	/**
-	 * `/help`: the searchable command/keybinding palette (menu-shaped surface
-	 * rule). Enter on a no-argument command closes the overlay and dispatches
+	 * `/help`: the searchable command/keybinding Menu (menu-shaped surface
+	 * rule). Enter on a no-argument command closes the dialog and dispatches
 	 * through the same parseCommand/runCommand path as typed input; a command
 	 * with an argument hint closes and prefills `/name ` into the composer
 	 * instead. Key rows are read-only reference; Esc closes.
 	 */
 	private openHelpPalette(initialQuery = ""): void {
-		if (this.helpPane) return;
-		const pane = new HelpPalette({
-			commands: helpPaletteCommands(SLASH_COMMANDS),
-			keys: HELP_KEYS,
-			initialQuery,
-			onChange: () => this.tui.requestRender(),
+		if (this.helpMenu) return;
+		void this.openDialog<{ run?: string; prefill?: string }>((close) => {
+			const menu = new HelpMenu({
+				commands: helpMenuCommands(SLASH_COMMANDS),
+				keys: HELP_KEYS,
+				initialQuery,
+				title: "Help",
+				tui: this.tui,
+				visibleRows: DEFAULT_MENU_VISIBLE_ROWS,
+				onChange: () => this.tui.requestRender(),
+				onClose: () => close(),
+				onRun: (name) => close({ run: name }),
+				onPrefill: (text) => close({ prefill: text }),
+			});
+			this.helpMenu = menu;
+			menu.activate();
+			return menu;
+		}).then((result) => {
+			this.helpMenu = undefined;
+			if (result?.run !== undefined) {
+				const parsed = parseCommand(`/${result.run}`);
+				if (parsed) void runCommand(parsed, this);
+			} else if (result?.prefill !== undefined) {
+				this.prefillInput(result.prefill);
+			}
 		});
-		pane.onClose = () => this.closeHelpPalette();
-		pane.onRun = (command) => {
-			this.closeHelpPalette();
-			const parsed = parseCommand(`/${command.name}`);
-			if (parsed) void runCommand(parsed, this);
-		};
-		pane.onPrefill = (text) => {
-			this.closeHelpPalette();
-			this.prefillInput(text);
-		};
-		this.helpPane = pane;
-		this.helpPaletteHandle = this.tui.showOverlay(pane, {
-			width: "100%",
-			maxHeight: "100%",
-			// Same palette family as the skills directory / quick open: open
-			// above so the list reads top-down and the composer stays visible.
-			anchor: "top-center",
-		});
-		pane.activate();
-		this.tui.setFocus(pane);
-		this.tui.requestRender();
-	}
-
-	private closeHelpPalette(): void {
-		const pane = this.helpPane;
-		if (!pane) return;
-		this.helpPane = undefined;
-		this.helpPaletteHandle?.hide();
-		this.helpPaletteHandle = undefined;
-		pane.focused = false;
-		if (!this.exiting) this.setFocusForRegion("chat-composer");
-		this.tui.requestRender();
 	}
 
 	/** `skills.search` binding: the pane's closed filter object goes as-is. */
@@ -2949,6 +3001,57 @@ export class App implements FeatureHost {
 			limit: params.limit,
 			...(params.cursor ? { cursor: params.cursor } : {}),
 		});
+	}
+
+	/**
+	 * Empty-query browse for the skills menu: the full catalog (`skills.list`,
+	 * the legacy authorization-guarded handler) shaped like a search result so
+	 * opening `/skills` lists every skill immediately. Disabled skills are
+	 * shown honestly (applicability `excluded`, reason `disabled`) — browsing
+	 * intentionally surfaces them; the automatic selector never does.
+	 */
+	private async skillsCatalog(): Promise<SkillsSearchResult> {
+		const { skills } = await this.request<{
+			skills: Array<{ name: string; description: string; sourceType?: string; enabled?: boolean }>;
+		}>("skills.list", {});
+		const candidates: SkillsCandidate[] = (Array.isArray(skills) ? skills : []).map((skill) => {
+			const enabled = skill.enabled !== false;
+			return {
+				skillId: skill.name,
+				name: skill.name,
+				contentRevision: "",
+				score: 0,
+				scoreComponents: {},
+				matchedPhrases: [],
+				matchedCapabilities: [],
+				applicability: enabled ? "applicable" : "excluded",
+				reasons: enabled ? [] : ["disabled"],
+				workflowStages: [],
+				explanation: "catalog browse",
+				sourceType: skill.sourceType ?? "",
+				trust: skill.sourceType === "builtin-ecc" ? "bundled" : "local",
+				enabled,
+			};
+		});
+		const filters: SkillsFilters = {
+			task_family: "",
+			capability: "",
+			source: [],
+			enabled: null,
+			include_excluded: true,
+		};
+		return {
+			query: "",
+			filters,
+			limit: candidates.length,
+			browse: true,
+			candidates,
+			catalogRevision: "",
+			queryDescriptorRevision: "",
+			policyRevision: "",
+			nextCursor: null,
+			diagnostics: {},
+		};
 	}
 
 	/** Details read: the legacy `skills.show` contract (case-insensitive id). */
@@ -3557,6 +3660,7 @@ export class App implements FeatureHost {
 			else if (!this.exiting) this.setFocusForRegion("chat-composer");
 			if (this.footer.status === "awaiting_approval") this.footer.status = this.running ? "working" : "ready";
 		}
+		this.syncCursorBlink();
 		this.tui.requestRender();
 	}
 

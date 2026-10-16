@@ -24,12 +24,13 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
-import { theme } from "../src/design/theme.ts";
+import { isOpaqueBackground, setOpaqueBackground, theme } from "../src/design/theme.ts";
 import { runCommand } from "../src/features/index.ts";
 import { RpcError } from "../src/protocol.ts";
 import type { GatewayClient } from "../src/gateway.ts";
 import type { GatewayEvent, SessionInfo } from "../src/protocol.ts";
 import type { WorkspaceEvent } from "../src/workspace/protocol.ts";
+import { LAYOUT_BUDGETS } from "../src/workspace/state.ts";
 
 const SESSION_A: SessionInfo = {
 	id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1306,6 +1307,53 @@ test("/settings menu: tab width applies to the viewport and persists", async () 
 	await app.exit();
 });
 
+test("/settings appearance: transparent background toggles live and persists", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	const before = isOpaqueBackground();
+	try {
+		const picks = scriptPicks(app, ["cat-appearance", "transparent", undefined]);
+		await runCommand({ name: "settings", args: "" }, app);
+		assert.ok(
+			picks.calls.some((call) => call.title === "Appearance" && call.items.some((item) => item.value === "transparent")),
+			"the transparency row is present in Appearance",
+		);
+		const saved = client.requests.filter(
+			(entry) => entry.method === "config.set" && entry.params.key === "transparent_background",
+		);
+		assert.equal(saved.length, 1, "exactly one transparent_background save");
+		assert.equal(saved[0]?.params.persist, true, "persisted");
+		assert.equal(saved[0]?.params.value, true, "the new value is saved");
+		assert.equal(isOpaqueBackground(), false, "the canvas switched off live");
+	} finally {
+		await app.exit();
+		setOpaqueBackground(before);
+	}
+});
+
+test("/settings appearance: a failed transparency save keeps the session behavior and says so", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	const before = isOpaqueBackground();
+	const notices = captureNotices(app);
+	client.handlers.set("config.set", (params) => {
+		if (params.key === "transparent_background") throw new Error("save denied");
+		return { model: "m", provider: "openrouter", key: String(params.key), value: params.value };
+	});
+	try {
+		scriptPicks(app, ["cat-appearance", "transparent", undefined]);
+		await runCommand({ name: "settings", args: "" }, app);
+		assert.equal(isOpaqueBackground(), false, "the setting stays applied for this session");
+		assert.ok(
+			notices.some((notice) => /could not save/i.test(notice.text)),
+			"the failed save is reported honestly",
+		);
+	} finally {
+		await app.exit();
+		setOpaqueBackground(before);
+	}
+});
+
 test("/settings menu: chat side and ratio reset follow the workspace surface", async () => {
 	const { app } = makeApp();
 	await app.start();
@@ -1529,4 +1577,95 @@ test("the editor status row shows the LSP state right-aligned without repeating 
 	assert.match(statusRow, /ready$/);
 	assert.doesNotMatch(statusRow, /python ready/, "the language name is never repeated");
 	await app.exit();
+});
+
+// ─── docked explorer: bounded panel (owner layout fix) ──────────────────────
+
+interface ExplorerPaneHandle {
+	render(width: number): string[];
+	getRowBudget(): number | undefined;
+}
+
+/** Wire the real explorer pane/model handles the app owns. */
+function explorerInternals(app: App): {
+	explorerModel: { reload(path: string): Promise<void> };
+	explorerPane: ExplorerPaneHandle;
+} {
+	return internals(app).integration as unknown as {
+		explorerModel: { reload(path: string): Promise<void> };
+		explorerPane: ExplorerPaneHandle;
+	};
+}
+
+function listMany(count: number) {
+	return () => ({
+		entries: Array.from({ length: count }, (_, index) => ({
+			path: `src/dir${index}/file${index}.ts`,
+			name: `file${index}.ts`,
+			kind: "file" as const,
+		})),
+		nextCursor: null,
+		exclusions: [],
+		truncated: false,
+	});
+}
+
+test("a populated docked explorer paints a bounded panel, never a full-page rectangle", async () => {
+	const { app, tui, client } = await bootFramed(160, 48);
+	try {
+		client.handlers.set("workspace.list", listMany(60));
+		const { explorerModel, explorerPane } = explorerInternals(app);
+		await explorerModel.reload("");
+		await settle();
+		tui.renderNow(true);
+
+		const layout = internals(app).workspaceLayout;
+		if (!layout?.explorer) assert.fail("the drawer is docked at 160 cols");
+		const { x: explorerX, columns: explorerWidth } = layout.explorer;
+		assert.equal(
+			explorerPane.getRowBudget(),
+			LAYOUT_BUDGETS.explorerMaxTreeRows,
+			"the docked tree budget is capped",
+		);
+
+		const rendered = explorerPane.render(explorerWidth);
+		const panelRows = rendered.length;
+		const plain = rendered.map(stripTerminalSequences).join("\n");
+		assert.match(plain, /^workspace/m, "the header stays");
+		assert.match(plain, /\+\d+ more/, "hidden rows are disclosed, not dropped");
+		assert.ok(
+			panelRows <= LAYOUT_BUDGETS.explorerMaxTreeRows + 2,
+			`the painted panel is bounded by the cap + at most two markers: ${panelRows}`,
+		);
+		assert.ok(panelRows < 42, `the panel is shorter than the panes area: ${panelRows}`);
+
+		// The explorer column below the painted panel stays blank: the surface
+		// fill never stretches to the composer (no full-page rectangle).
+		const frame = tui.getScreenLines().map(stripTerminalSequences);
+		assert.equal(frame.length, 48);
+		const composerRow = frame.findIndex((line) => line.includes("Ask anything"));
+		assert.ok(composerRow > panelRows, "the composer sits below the panel");
+		for (let row = panelRows; row < composerRow - 1; row++) {
+			const cell = frame[row]!.slice(explorerX, explorerX + explorerWidth);
+			assert.equal(cell.trim(), "", `explorer column blank below the panel at row ${row}: <${cell}>`);
+		}
+	} finally {
+		await app.exit();
+	}
+});
+
+test("a short docked explorer stays content-sized while its budget stays capped", async () => {
+	const { app, tui } = await bootFramed(160, 48);
+	try {
+		tui.renderNow(true);
+		const layout = internals(app).workspaceLayout;
+		if (!layout?.explorer) assert.fail("the drawer is docked at 160 cols");
+		const { explorerPane } = explorerInternals(app);
+		assert.equal(explorerPane.getRowBudget(), LAYOUT_BUDGETS.explorerMaxTreeRows, "the cap is still applied");
+		const rendered = explorerPane.render(layout.explorer.columns);
+		assert.equal(rendered.length, 2, "an empty tree paints only its header + placeholder (no padding)");
+		assert.match(rendered.map(stripTerminalSequences).join("\n"), /\(empty\)/);
+	} finally {
+		await app.exit();
+	}
 });

@@ -66,6 +66,14 @@ export const LAYOUT_BUDGETS = {
 	explorerPreferred: 28,
 	explorerMin: 20,
 	explorerMax: 40,
+	/**
+	 * Maximum tree rows the docked explorer windows before it scrolls. The
+	 * drawer is a bounded panel: a long tree must never paint its surface fill
+	 * across the whole panes column (which reads as a full-page rectangle), so
+	 * the painted panel is capped well below the page and the tree scrolls
+	 * inside it with `+N more` disclosure. A short tree stays content-sized.
+	 */
+	explorerMaxTreeRows: 16,
 	/** Ordinary persisted ratio range. */
 	minSplitRatio: 0.25,
 	maxSplitRatio: 0.75,

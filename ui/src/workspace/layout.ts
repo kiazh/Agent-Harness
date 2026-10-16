@@ -25,6 +25,19 @@ export function adjustSplitRatio(ratio: number, direction: 1 | -1): number {
 }
 
 /**
+ * Tree-area row budget for the docked explorer drawer. The drawer is a bounded
+ * panel: it gets the rows the panes area can spare (chrome already subtracted),
+ * capped so a long tree window never paints its surface fill across the whole
+ * column as a full-page rectangle. A short tree stays content-sized because the
+ * pane windows only when the loaded rows exceed the budget. Values below 3 are
+ * raised so one row and two `+N more` markers always fit.
+ */
+export function explorerTreeRowBudget(availableRows: number): number {
+	const available = Math.max(0, Math.floor(availableRows));
+	return Math.max(3, Math.min(available, LAYOUT_BUDGETS.explorerMaxTreeRows));
+}
+
+/**
  * Explorer column budget when docked.
  * Docked only when the editor keeps its minimum after the drawer takes its share;
  * otherwise the drawer is an editor-local overlay (plan §2).

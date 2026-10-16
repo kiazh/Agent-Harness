@@ -9,6 +9,7 @@ import {
 	computeLayout,
 	dividerRect,
 	explorerColumnBudget,
+	explorerTreeRowBudget,
 } from "../src/workspace/layout.ts";
 import { LAYOUT_BUDGETS, SPLIT_MINIMUM_COLUMNS, type LayoutInput } from "../src/workspace/state.ts";
 
@@ -175,4 +176,23 @@ test("degenerate widths never produce negative rectangles", () => {
 			}
 		}
 	}
+});
+
+test("the docked explorer's tree budget is a bounded panel, never the whole page", () => {
+	// A tall pane area is capped so a long tree cannot paint a full-page surface
+	// rectangle; the tree scrolls with `+N more` disclosure instead.
+	assert.equal(
+		explorerTreeRowBudget(40),
+		LAYOUT_BUDGETS.explorerMaxTreeRows,
+		"a tall page caps the painted panel well below the page height",
+	);
+	assert.ok(
+		LAYOUT_BUDGETS.explorerMaxTreeRows < 40,
+		"the cap is strictly less than a typical panes area",
+	);
+	// A short page keeps its available rows; tiny budgets keep the marker floor.
+	assert.equal(explorerTreeRowBudget(10), 10, "a short page uses its spare rows");
+	assert.equal(explorerTreeRowBudget(2), 3, "the marker floor is 3 rows");
+	assert.equal(explorerTreeRowBudget(0), 3, "degenerate areas never go below the floor");
+	assert.equal(explorerTreeRowBudget(-5), 3, "negative areas never go below the floor");
 });

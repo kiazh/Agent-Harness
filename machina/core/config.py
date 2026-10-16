@@ -226,6 +226,13 @@ DEFAULTS: dict[str, Any] = {
     # cacheable prompt length plus real-turn prefix stability.
     "prompt_cache_enabled": False,
     "theme": "codex",
+    # Transparent canvas: ON renders the UI on the terminal's own default
+    # background (no background SGR anywhere; foreground styling is unchanged
+    # and selection rows switch to reverse video). OFF (default) keeps the
+    # opaque theme canvas. The UI reads it at boot (env override
+    # MACHINA_TRANSPARENT_BACKGROUND applied before the first frame) and via
+    # the /settings Appearance row.
+    "transparent_background": False,
     # API keys and service URLs
     "openrouter_api_key": "",
     "openai_api_key": "",
@@ -583,6 +590,10 @@ class Config:
     rrf_dense_weight: float = 0.25
     prompt_cache_enabled: bool = False
     theme: str = "codex"
+    # Transparent canvas (default OFF = opaque theme background); contract in
+    # DEFAULTS. Config.save() reads getattr(self, key) once per DEFAULTS key, so
+    # this typed field is mandatory — without it every save() raises.
+    transparent_background: bool = False
     # API keys and service URLs
     openrouter_api_key: str = field(default="", repr=False)
     openai_api_key: str = field(default="", repr=False)

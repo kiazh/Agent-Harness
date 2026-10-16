@@ -9,7 +9,7 @@
 
 import { keyValues, resolvePrefix, shortId, table } from "../format.ts";
 import type { LearningReviewInfo, SkillInfo } from "../protocol.ts";
-import { classificationLabel, type SkillsSearchResult } from "../components/SkillsPicker.ts";
+import { classificationLabel, type SkillsSearchResult } from "../components/SkillsMenu.ts";
 import { splitSub } from "../commands.ts";
 import { confirm, options, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
 import { isFullUuid, scopedMiss } from "./memory.ts";

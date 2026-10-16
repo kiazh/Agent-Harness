@@ -4,7 +4,7 @@
 // original theme; Enter commits. Persistence happens exactly once through
 // `config.theme`, and a failed save is reported as temporary — never claimed.
 
-import { SKIN_NAMES, setSkin, skinDescription } from "../theme.ts";
+import { SKIN_NAMES, setOpaqueBackground, setSkin, skinDescription } from "../theme.ts";
 import { options, type Command, type FeatureHost } from "./types.ts";
 
 export const themeCommand: Command = {
@@ -41,4 +41,30 @@ export async function applySkin(host: FeatureHost, name: string): Promise<void> 
 		return;
 	}
 	host.print(`Skin: ${name} — ${skinDescription(name)}`, "success");
+}
+
+/**
+ * Toggle the transparent-background setting and persist it exactly once. The
+ * same single persistence path the theme row uses: the session keeps the new
+ * behavior even if the save fails, and a failed save is reported honestly.
+ */
+export async function applyBackgroundTransparency(host: FeatureHost, transparent: boolean): Promise<void> {
+	setOpaqueBackground(!transparent);
+	host.restyle();
+	try {
+		await host.request("config.set", { key: "transparent_background", value: transparent, persist: true });
+	} catch {
+		// The setting stays applied for this session; persistence failed.
+		host.print(
+			transparent
+				? "Transparent background applied for now (could not save)."
+				: "Opaque background applied for now (could not save).",
+			"warning",
+		);
+		return;
+	}
+	host.print(
+		transparent ? "Transparent background on — using the terminal default." : "Transparent background off — theme canvas restored.",
+		"success",
+	);
 }

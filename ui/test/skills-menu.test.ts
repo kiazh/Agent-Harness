@@ -1,12 +1,14 @@
-// A5 interactive skills directory (spec §12.3, §18 U01–U07).
+// A5 interactive skills directory rebuilt on the house searchable `Menu`
+// (owner directive: do it like the theme menu — bounded size, info/hints in
+// the bottom hint row — replacing the custom full-screen SkillsPicker).
 //
-// Part A drives the SkillsPicker component directly (real layout, real row
-// mapping, real key handling) over scripted providers whose payloads mirror
-// the gateway `skills.search` / `skills.show` / `skills.preview_route`
+// Part A drives SkillsMenu directly (real Menu layout, real row budget, real
+// key handling) over scripted providers whose payloads mirror the gateway
+// `skills.search` / `skills.show` / `skills.preview_route` / `skills.section`
 // handlers field-for-field (machina/gateway/features/skills.py).
 //
-// Part B boots the real App on a TuiAltScreen with a scripted terminal and
-// a recording client: `/skills` opens the overlay through the real command
+// Part B boots the real App on a TuiAltScreen with a scripted terminal and a
+// recording client: `/skills` opens the Menu dialog through the real command
 // path, typing searches over `skills.search`, ctrl+r previews over
 // `skills.preview_route`, and the preview path is proven to record zero
 // non-preview RPCs (no turn, no provider, no install, no approval change).
@@ -18,26 +20,26 @@ import {
 	TuiAltScreen,
 	visibleWidth,
 	type Terminal,
-	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
+import { DEFAULT_MENU_VISIBLE_ROWS } from "../src/components/Menu.ts";
 import {
 	SKILLS_SECTION_BUDGET,
 	SKILLS_SOURCES,
 	SKILLS_TASK_FAMILIES,
-	SkillsPicker,
+	SkillsMenu,
 	classificationLabel,
 	firstSectionSlug,
 	skillDeletable,
 	type SkillsCandidate,
 	type SkillsDetailsSkill,
-	type SkillsPickerProviders,
+	type SkillsMenuProviders,
 	type SkillsPreviewResult,
 	type SkillsSearchParams,
 	type SkillsSearchResult,
 	type SkillsSectionParams,
 	type SkillsSectionResult,
-} from "../src/components/SkillsPicker.ts";
+} from "../src/components/SkillsMenu.ts";
 import type { GatewayClient } from "../src/gateway.ts";
 import type { SessionInfo } from "../src/protocol.ts";
 
@@ -124,7 +126,6 @@ function detailsSkill(overrides: Partial<SkillsDetailsSkill> = {}): SkillsDetail
 	};
 }
 
-/** `skills.section` payload builder (handler `_section_payload` shape). */
 function sectionResult(overrides: Partial<SkillsSectionResult> = {}): SkillsSectionResult {
 	return {
 		skillId: "web-build",
@@ -241,7 +242,7 @@ interface Recorder {
 	details: string[];
 	previews: string[];
 	sections: SkillsSectionParams[];
-	providers: SkillsPickerProviders;
+	providers: SkillsMenuProviders;
 }
 
 function recorder(
@@ -281,38 +282,21 @@ function recorder(
 	};
 }
 
-function lines(pane: SkillsPicker, width = 70): string[] {
-	return pane.render(width).map((line) => stripTerminalSequences(line).trimEnd());
+function lines(menu: SkillsMenu, width = 200): string[] {
+	return menu.render(width).map((line) => stripTerminalSequences(line).trimEnd());
 }
 
-function plain(pane: SkillsPicker, width = 70): string {
-	return lines(pane, width).join("\n");
+function plain(menu: SkillsMenu, width = 200): string {
+	return lines(menu, width).join("\n");
 }
 
-/** Wrapped content lines joined into one normalized stream (details/preview prose). */
-function flow(pane: SkillsPicker, width = 70): string {
-	return lines(pane, width).join(" ").replace(/\s+/g, " ");
+/** Wrapped content lines joined into one normalized stream (details/preview). */
+function flow(menu: SkillsMenu, width = 200): string {
+	return lines(menu, width).join(" ").replace(/\s+/g, " ");
 }
 
-function rowOf(pane: SkillsPicker, needle: string, width = 70): number {
-	return lines(pane, width).findIndex((line) => line.includes(needle));
-}
-
-function mouse(type: "press" | "click", y: number, clickCount = 1, width = 70): TuiMouseEvent {
-	return {
-		type,
-		button: "left",
-		x: 3,
-		y,
-		screenX: 3,
-		screenY: y,
-		width,
-		height: 24,
-		shift: false,
-		alt: false,
-		ctrl: false,
-		clickCount,
-	};
+function type(menu: SkillsMenu, text: string): void {
+	for (const char of text) menu.handleInput(char);
 }
 
 function delay(ms: number): Promise<void> {
@@ -321,106 +305,103 @@ function delay(ms: number): Promise<void> {
 
 // ─── Part A: component ──────────────────────────────────────────────────────
 
-test("U01 activate searches immediately and shows loading, then results", async () => {
-	const rec = recorder(async (params) =>
-		searchResult({ query: params.query, candidates: [candidate(), candidate({ skillId: "deploy", name: "deploy", applicability: "conditional", reasons: ["declared stack not confirmed: kubernetes (query does not mention it)"] })] }),
-	);
-	const pane = new SkillsPicker(rec.providers);
-	pane.activate();
-	assert.equal(rec.searches.length, 1, "activate requests the empty query immediately");
-	assert.equal(rec.searches[0]!.query, "");
-	assert.equal(pane.getView().status, "loading");
-	assert.match(plain(pane), /\(searching…\)/);
+test("SM-01 bounded: ≤ DEFAULT_MENU_VISIBLE_ROWS item rows + chrome, hint pinned last", async () => {
+	const many = Array.from({ length: 40 }, (_v, index) =>
+		candidate({ skillId: `skill-${index}`, name: `skill-${index}` }));
+	const rec = recorder(async (params) => searchResult({ query: params.query, candidates: many }));
+	const menu = new SkillsMenu(rec.providers);
+	menu.activate();
 	await delay(0);
-	assert.equal(pane.getView().status, "ready");
-	const screen = plain(pane);
-	assert.match(screen, /Skills:/);
+	const frame = lines(menu, 100);
+	assert.equal(frame.length, DEFAULT_MENU_VISIBLE_ROWS + 3, "bounded to the default cap plus title/filter/hint");
+	assert.ok(frame.length < 24, "the dialog is shorter than a 24-row page");
+	assert.match(frame[0]!, /Skills/, "title stays on top");
+	assert.match(frame[1]!, /Type to filter/, "filter row sits under the title");
+	assert.match(frame.at(-1)!, /enter details/, "actions live in the bottom hint row");
+	assert.match(frame.at(-1)!, /esc close/);
+	assert.doesNotMatch(frame.join("\n"), /skill-12\b/, "rows past the cap scroll out of view");
+});
+
+test("SM-02 activate searches immediately; loading first row, then results", async () => {
+	const rec = recorder(async (params) =>
+		searchResult({ query: params.query, candidates: [candidate(), candidate({ skillId: "deploy", name: "deploy", applicability: "conditional", reasons: ["declared stack not confirmed: kubernetes (query does not mention it)"] })] }));
+	const menu = new SkillsMenu(rec.providers);
+	menu.activate();
+	assert.equal(rec.searches.length, 1, "activate requests the query immediately");
+	assert.equal(rec.searches[0]!.query, "");
+	assert.equal(menu.getView().status, "loading");
+	assert.match(plain(menu), /\(searching…\)/, "loading is a distinct first row, never a blank box");
+	await delay(0);
+	assert.equal(menu.getView().status, "ready");
+	const screen = plain(menu);
 	assert.match(screen, /web-build/);
 	assert.match(screen, /\[applicable\]/);
 	assert.match(screen, /\[conditional\]/);
 });
 
-test("U01 empty/loading/unavailable/invalid/conditional states are distinct", async () => {
+test("SM-02 empty/unavailable/invalid/conditional states are distinct", async () => {
 	const empty = recorder(async (params) => searchResult({ query: params.query, candidates: [] }));
-	const pane = new SkillsPicker(empty.providers);
-	pane.activate();
+	const menu = new SkillsMenu(empty.providers);
+	menu.activate();
 	await delay(0);
-	assert.match(plain(pane), /\(no query yet — type to search the skill catalog\)/);
+	assert.match(plain(menu), /\(no query yet — type to search the skill catalog\)/);
 
-	pane.handleInput("z");
+	type(menu, "z");
 	await delay(200);
-	assert.match(plain(pane), /\(no lexical evidence for "z"\)/);
+	assert.match(plain(menu), /\(no lexical evidence for "z"\)/);
 	assert.notEqual(classificationLabel("no_lexical_evidence", "z"), classificationLabel("invalid_catalog", "z"));
 
-	pane.handleInput("z");
-	await delay(200);
-	assert.match(plain(pane), /no lexical evidence/);
-
-	// invalid catalog: distinct from an empty query.
 	const invalid = recorder(async () => searchResult({
 		candidates: [],
 		diagnostics: { classification: "invalid_catalog", catalog_size: 0, retrieved: 0, applicable: 0, conditional: 0, excluded: 0, corrections: [], weights_applied: false },
 	}));
-	const invalidPane = new SkillsPicker(invalid.providers);
-	invalidPane.activate();
+	const invalidMenu = new SkillsMenu(invalid.providers);
+	invalidMenu.activate();
 	await delay(0);
-	assert.match(plain(invalidPane), /\(catalog unavailable — no skills loaded\)/);
+	assert.match(plain(invalidMenu), /\(catalog unavailable — no skills loaded\)/);
 
-	// conditional-only: rows exist but the state is disclosed.
 	const conditional = recorder(async () => searchResult({ candidates: [candidate({ applicability: "conditional", reasons: ["unverified precondition: tests run"] })] }));
-	const conditionalPane = new SkillsPicker(conditional.providers);
-	conditionalPane.activate();
+	const conditionalMenu = new SkillsMenu(conditional.providers);
+	conditionalMenu.activate();
 	await delay(0);
-	const screen = plain(conditionalPane);
+	const screen = plain(conditionalMenu);
 	assert.match(screen, /! conditional matches only — no applicable skill/);
 	assert.match(screen, /\[conditional\]/);
 });
 
-test("U01 unavailable gateway is an honest error state, never a fake success", async () => {
+test("SM-02 unavailable gateway is an honest error state, never a fake success", async () => {
 	const rec = recorder(async () => {
 		throw new Error("Method not found: skills.search");
 	});
-	const pane = new SkillsPicker(rec.providers);
-	pane.activate();
+	const menu = new SkillsMenu(rec.providers);
+	menu.activate();
 	await delay(0);
-	assert.equal(pane.getView().status, "error");
-	assert.match(plain(pane), /\(search failed: Method not found: skills\.search\)/);
-	assert.equal(pane.getView().candidates.length, 0);
+	assert.equal(menu.getView().status, "error");
+	assert.match(plain(menu), /\(search failed: Method not found: skills\.search\)/);
+	assert.equal(menu.getView().candidates.length, 0);
 });
 
-test("U01 typing debounces provider calls; filters round-trip the closed filter object", async () => {
-	const rec = recorder(async (params) => searchResult({ query: params.query, candidates: [candidate()] }));
-	const pane = new SkillsPicker(rec.providers, { debounceMs: 15 });
-	pane.activate();
-	for (const char of ["w", "e", "b"]) pane.handleInput(char);
+test("SM-02 typing debounces skills.search; filter narrows the rows", async () => {
+	const rec = recorder(async (params) => {
+		const all = [candidate({ skillId: "web-build", name: "web-build" }), candidate({ skillId: "deploy", name: "deploy" })];
+		const matched = params.query ? all.filter((row) => row.name.includes(params.query)) : all;
+		return searchResult({ query: params.query, candidates: matched });
+	});
+	const menu = new SkillsMenu(rec.providers, { debounceMs: 15 });
+	menu.activate();
 	assert.equal(rec.searches.length, 1, "no provider call while typing");
+	type(menu, "web");
+	assert.equal(rec.searches.length, 1);
 	await delay(40);
 	assert.deepEqual(rec.searches.map((call) => call.query), ["", "web"]);
-	assert.equal(pane.getQuery(), "web");
-
-	// tab → filter row; ↓ cycles the task family; → moves slots.
-	pane.handleInput("\t");
-	pane.handleInput("\x1b[B");
-	assert.equal(pane.getView().filters.task_family, SKILLS_TASK_FAMILIES[0]);
-	pane.handleInput("\x1b[C");
-	pane.handleInput("layout");
-	assert.equal(pane.getView().filters.capability, "layout");
-	pane.handleInput("\x1b[C");
-	pane.handleInput("\x1b[B");
-	assert.deepEqual(pane.getView().filters.source, [SKILLS_SOURCES[0]]);
-	pane.handleInput("\x1b[C");
-	pane.handleInput("\x1b[B");
-	assert.equal(pane.getView().filters.enabled, true);
-	assert.equal(pane.getView().filters.include_excluded, false);
-	await delay(40);
-	const last = rec.searches.at(-1)!;
-	assert.equal(last.filters.task_family, SKILLS_TASK_FAMILIES[0]);
-	assert.equal(last.filters.capability, "layout");
-	assert.deepEqual(last.filters.source, [SKILLS_SOURCES[0]]);
-	assert.equal(last.filters.enabled, true);
+	assert.equal(menu.getView().query, "web");
+	const screen = plain(menu);
+	assert.match(screen, /web-build/);
+	assert.doesNotMatch(screen, /deploy/, "the server-narrowed result set is what shows");
+	assert.match(plain(menu), /Filter: web/, "the filter line echoes the query (Menu's own filter)");
 });
 
-test("U02 selection is preserved by stable skill ID across refresh, filtering and resize", async () => {
+test("SM-03 selection follows the stable skill ID across a reorder and a resize", async () => {
 	let call = 0;
 	const rec = recorder(async () => {
 		call += 1;
@@ -428,68 +409,27 @@ test("U02 selection is preserved by stable skill ID across refresh, filtering an
 			? searchResult({ candidates: [candidate({ skillId: "a", name: "alpha" }), candidate({ skillId: "b", name: "beta" }), candidate({ skillId: "c", name: "gamma" })] })
 			: searchResult({ candidates: [candidate({ skillId: "c", name: "gamma" }), candidate({ skillId: "b", name: "beta" }), candidate({ skillId: "a", name: "alpha" })] });
 	});
-	const pane = new SkillsPicker(rec.providers, { debounceMs: 5 });
-	pane.activate();
+	const menu = new SkillsMenu(rec.providers, { debounceMs: 5 });
+	menu.activate();
 	await delay(10);
-	pane.handleInput("\x1b[B"); // select beta (index 1)
-	assert.equal(pane.getView().selectedSkillId, "b");
+	menu.handleInput("\x1b[B");
+	assert.equal(menu.getView().selectedSkillId, "b");
 
-	pane.handleInput("x"); // narrower query; a fresh provider response reorders the list
+	menu.handleInput("x");
 	await delay(25);
-	assert.deepEqual(pane.getView().candidates.map((row) => row.skillId), ["c", "b", "a"]);
-	assert.equal(pane.getView().selectedSkillId, "b", "selection follows the ID, not the row index");
+	assert.deepEqual(menu.getView().candidates.map((row) => row.skillId), ["c", "b", "a"]);
+	assert.equal(menu.getView().selectedSkillId, "b", "selection follows the ID, not the row index");
 
-	// resize: a smaller row budget and narrower width keep the same identity
-	pane.setVisibleRows(2);
-	const screen = plain(pane, 30);
-	assert.equal(pane.getView().selectedSkillId, "b");
-	assert.ok(screen.includes("beta"), "the selected candidate stays in the viewport");
-	for (const line of pane.render(30)) {
+	menu.setVisibleRows(2);
+	assert.equal(menu.getView().selectedSkillId, "b");
+	const narrow = lines(menu, 30);
+	assert.ok(narrow.some((row) => row.includes("beta")), "the selected candidate stays in the viewport");
+	for (const line of menu.render(30)) {
 		assert.ok(visibleWidth(line) <= 30, `row wider than 30: ${JSON.stringify(stripTerminalSequences(line))}`);
 	}
 });
 
-test("U03 hostile labels stay on one physical row and mouse maps to the rendered row", async () => {
-	const hostile = candidate({
-		skillId: "evil",
-		name: "evil\n\u001b[31mrow\u001b[0m\ttwo",
-	});
-	const rec = recorder(async () => searchResult({ candidates: [hostile, candidate({ skillId: "beta", name: "beta-skill" })] }));
-	const pane = new SkillsPicker(rec.providers);
-	pane.activate();
-	await delay(0);
-	const rendered = pane.render(70);
-	// header + filters + 2 candidates + footer: the newline and controls never
-	// create extra physical rows or shift the next candidate.
-	assert.equal(rendered.length, 5, "hostile label adds no physical rows");
-	for (const line of rendered) assert.ok(visibleWidth(line) <= 70);
-
-	const betaRow = rowOf(pane, "beta-skill");
-	assert.ok(betaRow > 0);
-	pane.handleMouse(mouse("press", betaRow));
-	pane.handleMouse(mouse("click", betaRow));
-	assert.equal(pane.getView().selectedSkillId, "beta", "click selects the row under the pointer");
-
-	const evilRow = rowOf(pane, "evil");
-	pane.handleMouse(mouse("click", evilRow));
-	assert.equal(pane.getView().selectedSkillId, "evil");
-	pane.handleMouse(mouse("click", 0)); // the header row never selects a candidate
-	assert.equal(pane.getView().selectedSkillId, "evil");
-
-	// A wrapped notice line adds physical rows below the filter row; the hit
-	// map must account for the extra span (narrow width forces the wrap).
-	pane.handleInput("\x12"); // ctrl+r with an empty query → notice row
-	const narrow = lines(pane, 30);
-	const noticeHead = narrow.findIndex((line) => line.includes("type a request"));
-	const noticeTail = narrow.findIndex((line) => line.includes("box first"));
-	assert.ok(noticeHead >= 0 && noticeTail > noticeHead, "the notice wraps onto more than one physical row at width 30");
-	const betaNarrowRow = narrow.findIndex((line) => line.includes("beta-skill"));
-	assert.ok(betaNarrowRow > 0);
-	pane.handleMouse(mouse("click", betaNarrowRow, 1, 30));
-	assert.equal(pane.getView().selectedSkillId, "beta", "the wrapped notice never shifts the hit target");
-});
-
-test("U05 details show purpose, applicability, provenance, prerequisites, tools, resources and gated actions", async () => {
+test("SM-04 details is a second Menu: purpose, provenance, revisions, prereqs, tools, stages, actions", async () => {
 	const rec = recorder(
 		async () => searchResult({
 			candidates: [candidate({
@@ -501,14 +441,15 @@ test("U05 details show purpose, applicability, provenance, prerequisites, tools,
 		}),
 		async () => detailsSkill(),
 	);
-	const pane = new SkillsPicker(rec.providers);
-	pane.activate();
+	const menu = new SkillsMenu(rec.providers);
+	menu.activate();
 	await delay(0);
-	pane.handleInput("\r");
+	menu.handleInput("\r");
 	await delay(0);
 	assert.deepEqual(rec.details, ["web-build"]);
-	const screen = flow(pane);
-	assert.match(screen, /web-build — conditional/);
+	const screen = flow(menu);
+	assert.match(screen, /web-build/);
+	assert.match(screen, /applicability: conditional/);
 	assert.match(screen, /purpose: Build a website from a plain request/);
 	assert.match(screen, /source: bundled \(builtin-ecc\) · version 1\.2\.0 · content rev00000/);
 	assert.match(screen, /reasons: tool availability unknown: node, git; unverified precondition: repo has a test runner/);
@@ -518,53 +459,49 @@ test("U05 details show purpose, applicability, provenance, prerequisites, tools,
 	assert.match(screen, /usage: 4 · enabled: yes/);
 	assert.match(screen, /matched: build a website, layout/);
 	assert.match(screen, /stages: inspect, implement/);
-
-	// bundled defaults must not acquire an unsupported delete control
-	assert.match(screen, /delete unavailable \(bundled default\)/);
+	assert.match(screen, /delete unavailable \(bundled default\)/, "bundled defaults expose no unsupported destructive action");
 	assert.doesNotMatch(screen, /d delete/);
 	assert.equal(skillDeletable({ sourceType: "builtin-ecc" }), false);
 	assert.equal(skillDeletable({ sourceType: "learned" }), true);
-
-	pane.handleInput("\x1b"); // back to results
-	assert.equal(pane.getView().mode, "results");
 });
 
-test("U05 deletable skills expose the delete action and its confirmation hookup", async () => {
+test("SM-04 a deletable skill exposes the delete action and routes through the host", async () => {
 	const rec = recorder(
 		async () => searchResult({
 			candidates: [candidate({ skillId: "local-skill", name: "local-skill", sourceType: "learned", trust: "external", applicability: "excluded", enabled: false, reasons: ["disabled: skill 'local-skill' is disabled"] })],
 		}),
 		async () => detailsSkill({ name: "local-skill", sourceType: "learned", enabled: false }),
 	);
-	const pane = new SkillsPicker(rec.providers);
+	const menu = new SkillsMenu(rec.providers);
 	const deletions: string[] = [];
-	pane.onDelete = (name) => deletions.push(name);
-	pane.activate();
+	menu.onDelete = (name) => deletions.push(name);
+	menu.activate();
 	await delay(0);
-	pane.handleInput("\r");
+	menu.handleInput("\r");
 	await delay(0);
-	const screen = plain(pane);
+	const screen = plain(menu);
 	assert.match(screen, /disabled: skill 'local-skill' is disabled/);
 	assert.match(screen, /d delete/);
 	assert.match(screen, /enabled: no/);
-	pane.handleInput("d");
+	menu.handleInput("d");
 	assert.deepEqual(deletions, ["local-skill"]);
 });
 
-test("U04 preview renders descriptor, selection and disclosure estimates from the response", async () => {
+test("SM-04 preview is read-only: one preview call, zero search/details/section calls", async () => {
 	const rec = recorder(async (params) => searchResult({ query: params.query, candidates: [candidate()] }));
-	const pane = new SkillsPicker(rec.providers, { debounceMs: 5 });
-	pane.activate();
-	pane.handleInput("m");
+	const menu = new SkillsMenu(rec.providers, { debounceMs: 5 });
+	menu.activate();
+	menu.handleInput("m");
 	await delay(25);
 	const searchesBefore = rec.searches.length;
-	pane.handleInput("\x12"); // ctrl+r → preview this request
+	menu.handleInput("\x12"); // ctrl+r → preview this request
 	await delay(0);
 	assert.deepEqual(rec.previews, ["m"]);
 	assert.equal(rec.searches.length, searchesBefore, "the preview action issues no search RPC");
 	assert.equal(rec.details.length, 0, "the preview action issues no details RPC");
-	assert.equal(pane.getView().mode, "preview");
-	const screen = flow(pane);
+	assert.equal(rec.sections.length, 0, "the preview action issues no section RPC");
+	assert.equal(menu.getView().mode, "preview");
+	const screen = flow(menu);
 	assert.match(screen, /Route preview: m/);
 	assert.match(screen, /class: coding · scope: create · families: web-build/);
 	assert.match(screen, /reasons: task_class=coding \[intent:action-verb\]/);
@@ -573,113 +510,75 @@ test("U04 preview renders descriptor, selection and disclosure estimates from th
 	assert.match(screen, /disclosure: included 340\/1200 tok \(char\/4\) · chosen: web-build · Implementation/);
 	assert.match(screen, /omitted: 1 section\(s\) — budget exhausted/);
 	assert.match(screen, /preview only — no turn, no provider call, no installation, no approval change/);
-	pane.handleInput("\x1b");
-	assert.equal(pane.getView().mode, "results");
+	menu.handleInput("\x1b");
+	assert.equal(menu.getView().mode, "results");
 });
 
-test("U06 a provider failure keeps the draft/filter and never fakes success", async () => {
+test("SM-04 a provider failure keeps the draft/filter and never fakes success", async () => {
 	let fail = true;
 	const rec = recorder(async (params) => {
 		if (fail) throw new Error("gateway disconnected");
 		return searchResult({ query: params.query, candidates: [candidate()] });
 	});
-	const pane = new SkillsPicker(rec.providers, { debounceMs: 5 });
-	pane.activate();
+	const menu = new SkillsMenu(rec.providers, { debounceMs: 5 });
+	menu.activate();
 	await delay(10);
-	pane.handleInput("w");
+	menu.handleInput("w");
 	await delay(25);
-	assert.equal(pane.getView().status, "error");
-	assert.equal(pane.getQuery(), "w", "the draft filter text survives the failure");
-	assert.match(plain(pane), /search failed: gateway disconnected/);
+	assert.equal(menu.getView().status, "error");
+	assert.equal(menu.getView().query, "w", "the draft filter text survives the failure");
+	assert.match(plain(menu), /search failed: gateway disconnected/);
 
 	fail = false;
-	pane.handleInput("e");
+	menu.handleInput("e");
 	await delay(25);
-	assert.equal(pane.getView().status, "ready");
-	assert.equal(pane.getQuery(), "we");
-	assert.match(plain(pane), /web-build/);
+	assert.equal(menu.getView().status, "ready");
+	assert.equal(menu.getView().query, "we");
+	assert.match(plain(menu), /web-build/);
 });
 
-test("U01 pagination: nextCursor loads more through the same provider", async () => {
-	let call = 0;
-	const rec = recorder(async (params) => {
-		call += 1;
-		if (call === 1) {
-			assert.equal(params.cursor, undefined);
-			return searchResult({ query: params.query, candidates: [candidate({ skillId: "a", name: "alpha" })], nextCursor: "offset:10" });
-		}
-		assert.equal(params.cursor, "offset:10");
-		return searchResult({ query: params.query, candidates: [candidate({ skillId: "a", name: "alpha" }), candidate({ skillId: "b", name: "beta" })], nextCursor: null });
-	});
-	const pane = new SkillsPicker(rec.providers);
-	pane.activate();
-	await delay(0);
-	assert.equal(pane.getView().nextCursor, "offset:10");
-	assert.match(plain(pane), /ctrl\+n more/);
-	pane.handleInput("\x0e"); // ctrl+n
-	await delay(0);
-	assert.deepEqual(pane.getView().candidates.map((row) => row.skillId), ["a", "b"]);
-	assert.equal(pane.getView().nextCursor, null);
-});
-
-test("U06 details and preview failures each render an honest error state", async () => {
-	const detailsRec = recorder(
-		async (params) => searchResult({ query: params.query, candidates: [candidate()] }),
-		async () => {
-			throw new Error("show unavailable");
-		},
-	);
-	const pane = new SkillsPicker(detailsRec.providers);
-	pane.activate();
-	await delay(0);
-	pane.handleInput("\r");
-	await delay(0);
-	assert.equal(pane.getView().mode, "details");
-	assert.equal(pane.getView().detailsStatus, "error");
-	assert.match(plain(pane), /\(details unavailable: show unavailable\)/);
-	pane.handleInput("\x1b");
-	assert.equal(pane.getView().mode, "results");
-
-	const previewRec = recorder(
-		async (params) => searchResult({ query: params.query, candidates: [candidate()] }),
-		async () => detailsSkill(),
-		async () => {
-			throw new Error("preview unavailable");
-		},
-	);
-	const previewPane = new SkillsPicker(previewRec.providers, { debounceMs: 5 });
-	previewPane.activate();
-	previewPane.handleInput("q");
+test("SM-05 the filters submenu drives the exact wire filter object", async () => {
+	const rec = recorder(async (params) => searchResult({ query: params.query, filters: params.filters, candidates: [candidate()] }));
+	const menu = new SkillsMenu(rec.providers, { debounceMs: 5 });
+	menu.activate();
+	await delay(10);
+	menu.handleInput("\x06"); // ctrl+f
+	assert.equal(menu.getView().mode, "filters");
+	menu.handleInput("\r"); // choose the first slot (task family)
+	assert.equal(menu.getView().mode, "filter:family");
+	menu.handleInput("\x1b[B"); // "any" → first family
+	menu.handleInput("\r"); // apply
 	await delay(25);
-	previewPane.handleInput("\x12");
-	await delay(0);
-	assert.equal(previewPane.getView().mode, "preview");
-	assert.equal(previewPane.getView().previewStatus, "error");
-	assert.match(plain(previewPane), /\(preview failed: preview unavailable\)/);
-	assert.equal(previewPane.getQuery(), "q", "the request text survives the preview failure");
-	previewPane.handleInput("\x1b");
-	assert.equal(previewPane.getView().mode, "results");
+	assert.equal(menu.getView().mode, "results");
+	const last = rec.searches.at(-1)!;
+	assert.equal(last.filters.task_family, SKILLS_TASK_FAMILIES[0]);
+	assert.deepEqual(last.filters.source, []);
+
+	// source + enabled-state slots + include_excluded semantics stay identical
+	menu.handleInput("\x06");
+	menu.handleInput("\x1b[B"); // capability slot
+	menu.handleInput("\x1b[B"); // source slot
+	menu.handleInput("\r");
+	menu.handleInput("\x1b[B"); // "any" → first source
+	menu.handleInput("\r");
+	await delay(25);
+	assert.deepEqual(rec.searches.at(-1)!.filters.source, [SKILLS_SOURCES[0]]);
+
+	menu.handleInput("\x06");
+	menu.handleInput("\x1b[B");
+	menu.handleInput("\x1b[B");
+	menu.handleInput("\x1b[B"); // enabled state slot
+	menu.handleInput("\r");
+	menu.handleInput("\x1b[B"); // "any" → enabled
+	menu.handleInput("\r");
+	await delay(25);
+	assert.equal(rec.searches.at(-1)!.filters.enabled, true);
+	assert.equal(rec.searches.at(-1)!.filters.include_excluded, false);
 });
 
-test("tab/esc focus contract: esc leaves the filter row before closing", async () => {
-	const rec = recorder();
-	const pane = new SkillsPicker(rec.providers);
-	let closed = 0;
-	pane.onClose = () => { closed += 1; };
-	pane.activate();
-	await delay(0);
-	pane.handleInput("\t");
-	assert.equal(pane.getView().focus, "filters");
-	pane.handleInput("\x1b");
-	assert.equal(pane.getView().focus, "query");
-	assert.equal(closed, 0, "esc in the filter row returns to the query, not out");
-	pane.handleInput("\x1b");
-	assert.equal(closed, 1);
-});
+// ─── A6: Menu-based versioned section reader (§10.4/§12.2) ──────────────────
 
-// ─── A6: in-overlay versioned section reader (§10.4/§12.2) ─────────────────
-
-test("A6 details read fetches the first declared section with the shown revision and pages its continuation", async () => {
+test("SM-06 details read fetches the first declared section with the shown revision and pages its continuation", async () => {
 	assert.equal(firstSectionSlug("## Orientation\nStart here."), "orientation");
 	assert.equal(firstSectionSlug("no headings here"), "", "no heading means the reader falls back to a body offset");
 	let call = 0;
@@ -701,42 +600,36 @@ test("A6 details read fetches the first declared section with the shown revision
 			assert.equal(params.section, "orientation");
 			assert.equal(params.offset, 12);
 			assert.equal(params.contentRevision, "rev0000000000", "continuations keep the exact revision");
-			return sectionResult({
-				text: "Then build it.",
-				start: 26,
-				end: 40,
-				sectionTotal: 26,
-				continuation: null,
-			});
+			return sectionResult({ text: "Then build it.", start: 26, end: 40, sectionTotal: 26, continuation: null });
 		},
 	);
-	const pane = new SkillsPicker(rec.providers);
-	pane.activate();
+	const menu = new SkillsMenu(rec.providers);
+	menu.activate();
 	await delay(0);
-	pane.handleInput("\r"); // details
+	menu.handleInput("\r"); // details
 	await delay(0);
 	assert.equal(rec.sections.length, 0, "opening details does not read the section");
-	assert.match(flow(pane), /s read section/);
+	assert.match(flow(menu), /ctrl\+s read section/);
 
-	pane.handleInput("s");
+	menu.handleInput("s");
 	await delay(0);
 	assert.equal(rec.sections.length, 1);
-	const first = flow(pane);
+	const first = flow(menu);
 	assert.match(first, /section: Orientation \(11 of 26 chars · declared · content rev00000\)/);
 	assert.match(first, /Start here\./);
 	assert.match(first, /\[section continues at offset 12 — press s\]/);
-	assert.match(first, /s continue section/);
+	assert.match(first, /ctrl\+s continue section/);
 
-	pane.handleInput("s");
+	menu.handleInput("s");
 	await delay(0);
 	assert.equal(rec.sections.length, 2);
-	const second = flow(pane);
+	const second = flow(menu);
 	assert.match(second, /Then build it\./);
 	assert.doesNotMatch(second, /continues at offset/);
-	assert.match(second, /s read section/);
+	assert.match(second, /ctrl\+s read section/);
 });
 
-test("A6 a stale section read is honest and the retry uses the revision the server reported", async () => {
+test("SM-06 a stale section read is honest and the retry uses the reported revision", async () => {
 	const rec = recorder(
 		async (params) => searchResult({ query: params.query, candidates: [candidate()] }),
 		async () => detailsSkill(),
@@ -758,23 +651,23 @@ test("A6 a stale section read is honest and the retry uses the revision the serv
 			return sectionResult({ contentRevision: "89abcdef01234567", text: "Fresh orientation." });
 		},
 	);
-	const pane = new SkillsPicker(rec.providers);
-	pane.activate();
+	const menu = new SkillsMenu(rec.providers);
+	menu.activate();
 	await delay(0);
-	pane.handleInput("\r");
+	menu.handleInput("\r");
 	await delay(0);
-	pane.handleInput("s");
+	menu.handleInput("s");
 	await delay(0);
-	const staleScreen = flow(pane);
+	const staleScreen = flow(menu);
 	assert.match(staleScreen, /section stale: orientation was requested at content rev00000, but the skill changed to 89abcdef — nothing from the edited text was served/);
 	assert.match(staleScreen, /press s to re-read content 89abcdef/);
 	assert.doesNotMatch(staleScreen, /Start here\./, "no passage is served from the edited content");
-	pane.handleInput("s");
+	menu.handleInput("s");
 	await delay(0);
-	assert.match(flow(pane), /Fresh orientation\./);
+	assert.match(flow(menu), /Fresh orientation\./);
 });
 
-test("A6 a failing section read is an honest error state, never fabricated text", async () => {
+test("SM-06 a failing section read is an honest error state, never fabricated text", async () => {
 	const rec = recorder(
 		async (params) => searchResult({ query: params.query, candidates: [candidate()] }),
 		async () => detailsSkill(),
@@ -783,18 +676,33 @@ test("A6 a failing section read is an honest error state, never fabricated text"
 			throw new Error("skills.section unavailable");
 		},
 	);
-	const pane = new SkillsPicker(rec.providers);
-	pane.activate();
+	const menu = new SkillsMenu(rec.providers);
+	menu.activate();
 	await delay(0);
-	pane.handleInput("\r");
+	menu.handleInput("\r");
 	await delay(0);
-	pane.handleInput("s");
+	menu.handleInput("s");
 	await delay(0);
-	assert.equal(pane.getView().sectionStatus, "error");
-	assert.match(flow(pane), /\(section read failed: skills\.section unavailable\)/);
-	assert.equal(pane.getView().section, null, "no passage is invented on failure");
-	pane.handleInput("\x1b");
-	assert.equal(pane.getView().mode, "results");
+	assert.equal(menu.getView().sectionStatus, "error");
+	assert.match(flow(menu), /\(section read failed: skills\.section unavailable\)/);
+	assert.equal(menu.getView().section, null, "no passage is invented on failure");
+});
+
+test("SM-07 hostile labels stay on one physical row and never exceed the width", async () => {
+	const hostile = candidate({ skillId: "evil", name: "evil\n\u001b[31mname\u001b[0m\ttwo" });
+	const rec = recorder(async () => searchResult({ candidates: [hostile, candidate({ skillId: "beta", name: "beta-skill" })] }));
+	const menu = new SkillsMenu(rec.providers);
+	menu.activate();
+	await delay(0);
+	const rendered = menu.render(70);
+	assert.equal(rendered.length, 5, "title + filter + 2 rows + hint: a hostile label adds no physical rows");
+	for (const line of rendered) {
+		assert.ok(visibleWidth(line) <= 70, `row wider than 70: ${JSON.stringify(stripTerminalSequences(line))}`);
+	}
+	const flat = plain(menu);
+	assert.match(flat, /evil/);
+	assert.match(flat, /beta-skill/);
+	assert.ok(!flat.includes("\x1b"), "control sequences never survive");
 });
 
 // ─── Part B: real App command path ──────────────────────────────────────────
@@ -805,29 +713,21 @@ class ScriptedSkillsClient {
 	searchError: Error | undefined;
 	previewError: Error | undefined;
 	sectionError: Error | undefined;
-	showSkill: SkillsDetailsSkill = detailsSkill() as unknown as SkillsDetailsSkill;
-	/** Content revision the fake server believes is current (change to simulate edits). */
+	showSkill: SkillsDetailsSkill = detailsSkill();
 	sectionRevision = "rev0000000000";
 
 	start(): void {}
-	stderr(): string[] {
-		return [];
-	}
+	stderr(): string[] { return []; }
 	async stop(): Promise<void> {}
 
-	/** Minimal real-handler behavior: first heading, slug, that section's text. */
 	sectionResponse(params: Record<string, unknown>): SkillsSectionResult {
 		const content = this.showSkill.content ?? "";
 		const requested = params.contentRevision === undefined ? undefined : String(params.contentRevision);
 		const wanted = typeof params.section === "string" && params.section ? params.section : firstSectionSlug(content);
 		if (requested !== undefined && requested !== this.sectionRevision) {
 			return sectionResult({
-				skillId: String(params.skillId ?? ""),
-				sectionId: wanted,
-				heading: "",
-				text: "",
-				stale: true,
-				contentRevision: this.sectionRevision,
+				skillId: String(params.skillId ?? ""), sectionId: wanted, heading: "", text: "",
+				stale: true, contentRevision: this.sectionRevision,
 				diagnostics: [{
 					code: "section-stale-content",
 					message: `section '${wanted}' was read against revision ${requested}; the requested revision ${requested} no longer matches the current content`,
@@ -836,51 +736,35 @@ class ScriptedSkillsClient {
 			});
 		}
 		const sections: Array<{ id: string; heading: string; text: string }> = [];
-		const lines = content.split("\n");
 		let current: { id: string; heading: string; body: string[] } | null = null;
-		for (const line of lines) {
+		for (const line of content.split("\n")) {
 			const heading = /^(?:#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
 			if (heading) {
 				if (current) sections.push({ id: current.id, heading: current.heading, text: current.body.join("\n").trim() });
 				current = { id: firstSectionSlug(line), heading: heading[1] ?? "", body: [] };
-			} else if (current) {
-				current.body.push(line);
-			}
+			} else if (current) current.body.push(line);
 		}
 		if (current) sections.push({ id: current.id, heading: current.heading, text: current.body.join("\n").trim() });
 		const found = sections.find((entry) => entry.id === wanted) ?? sections[0];
 		if (!found) {
 			return sectionResult({
-				skillId: String(params.skillId ?? ""),
-				sectionId: wanted,
-				heading: "",
-				text: "",
-				stale: false,
-				contentRevision: this.sectionRevision,
+				skillId: String(params.skillId ?? ""), sectionId: wanted, heading: "", text: "",
+				stale: false, contentRevision: this.sectionRevision,
 				diagnostics: [{ code: "section-unknown", message: `parsed headings contain no section '${wanted}'`, skill_id: String(params.skillId ?? "") }],
 			});
 		}
 		return sectionResult({
-			skillId: String(params.skillId ?? ""),
-			sectionId: found.id,
-			heading: found.heading,
-			text: found.text,
-			sectionTotal: found.text.length,
-			contentRevision: this.sectionRevision,
+			skillId: String(params.skillId ?? ""), sectionId: found.id, heading: found.heading,
+			text: found.text, sectionTotal: found.text.length, contentRevision: this.sectionRevision,
 		});
 	}
 
 	searchResponse(params: Record<string, unknown>): SkillsSearchResult {
 		const query = String(params.query ?? "");
 		const filters = (params.filters ?? {}) as SkillsSearchResult["filters"];
-		if (!query) {
-			return searchResult({ query, filters, candidates: [], diagnostics: { classification: "no_lexical_evidence", catalog_size: this.candidates.length, retrieved: 0, applicable: 0, conditional: 0, excluded: 0, corrections: [], weights_applied: false } });
-		}
-		const matched = this.candidates.filter((row) => row.name.toLowerCase().includes(query.toLowerCase()));
+		const matched = query ? this.candidates.filter((row) => row.name.toLowerCase().includes(query.toLowerCase())) : this.candidates;
 		return searchResult({
-			query,
-			filters,
-			candidates: matched,
+			query, filters, candidates: matched,
 			diagnostics: {
 				classification: matched.some((row) => row.applicability === "applicable") ? "ok" : matched.some((row) => row.applicability === "conditional") ? "conditional_only" : matched.length ? "all_excluded" : "no_lexical_evidence",
 				catalog_size: this.candidates.length,
@@ -888,8 +772,7 @@ class ScriptedSkillsClient {
 				applicable: matched.filter((row) => row.applicability === "applicable").length,
 				conditional: matched.filter((row) => row.applicability === "conditional").length,
 				excluded: matched.filter((row) => row.applicability === "excluded").length,
-				corrections: [],
-				weights_applied: false,
+				corrections: [], weights_applied: false,
 			},
 		});
 	}
@@ -907,17 +790,7 @@ class ScriptedSkillsClient {
 				if (this.searchError) throw this.searchError;
 				return this.searchResponse(params) as T;
 			case "skills.list":
-				return {
-					skills: this.candidates.map((row) => ({
-						name: row.name,
-						description: `Description of ${row.name}`,
-						triggers: row.matchedPhrases,
-						version: "1.0.0",
-						sourceType: row.sourceType,
-						usageCount: 0,
-						enabled: row.enabled,
-					})),
-				} as T;
+				return { skills: this.candidates.map((row) => ({ name: row.name, description: `Description of ${row.name}`, triggers: row.matchedPhrases, version: "1.0.0", sourceType: row.sourceType, usageCount: 0, enabled: row.enabled })) } as T;
 			case "skills.show":
 				return { skill: this.showSkill } as T;
 			case "skills.preview_route":
@@ -962,25 +835,21 @@ interface Booted {
 	screen: () => string;
 }
 
-async function boot(): Promise<Booted> {
-	const { term, type, resizeTo } = terminal();
+async function boot(columns = 100, rows = 30): Promise<Booted> {
+	const { term, type, resizeTo } = terminal(columns, rows);
 	const tui = new TuiAltScreen(term);
 	const client = new ScriptedSkillsClient();
 	const app = new App(tui, client as unknown as GatewayClient);
 	await app.start();
-	return {
-		app,
-		tui,
-		client,
-		type,
-		resizeTo,
-		screen: () => tui.getScreenLines().map(stripTerminalSequences).join("\n"),
-	};
+	return { app, tui, client, type, resizeTo, screen: () => tui.getScreenLines().map(stripTerminalSequences).join("\n") };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const skillsMenuOf = (app: App) => (app as unknown as { skillsMenu: SkillsMenu | undefined }).skillsMenu;
+const dialogBounds = (app: App) =>
+	(app as unknown as { dialogs: Array<{ handle: { getBounds(): { row: number; height: number } | undefined } }> }).dialogs.at(-1)?.handle.getBounds();
 
-test("U01/U02 real /skills command opens the search overlay and typing filters it", async (t) => {
+test("SM-08 real /skills opens the Menu dialog; typing drives skills.search; ID survives resize", async (t) => {
 	const { app, tui, client, type, resizeTo, screen } = await boot();
 	t.after(() => app.exit());
 	client.candidates = [
@@ -993,13 +862,13 @@ test("U01/U02 real /skills command opens the search overlay and typing filters i
 	type("\r");
 	await settle();
 	tui.renderNow(true);
-	assert.match(screen(), /Skills:/, "bare /skills opens the interactive picker");
-	const pane = (app as unknown as { skillsPicker: SkillsPicker }).skillsPicker;
-	assert.ok(pane, "the overlay is mounted");
-	assert.equal(pane.getView().mode, "results");
+	assert.match(screen(), /Skills/, "bare /skills opens the Menu dialog");
+	const menu = skillsMenuOf(app);
+	assert.ok(menu, "the dialog is mounted");
+	assert.equal(menu.getView().mode, "results");
 
 	type("web");
-	await delay(200); // provider debounce
+	await delay(200);
 	tui.renderNow(true);
 	assert.ok(
 		client.requests.slice(mark).some((entry) => entry.method === "skills.search" && entry.params.query === "web"),
@@ -1009,20 +878,33 @@ test("U01/U02 real /skills command opens the search overlay and typing filters i
 	assert.match(screen(), /\[applicable\]/);
 	assert.doesNotMatch(screen(), /\[conditional\]/, "filtered-out rows disappear");
 
-	// U02: selection identity follows the ID across a terminal resize while
-	// the same result set is on screen (the provider-reorder case is covered
-	// by the component-level test).
-	type("\x1b[B"); // select web-deploy (index 1)
-	assert.equal(pane.getView().selectedSkillId, "web-deploy");
-
+	type("\x1b[B");
+	assert.equal(menu.getView().selectedSkillId, "web-deploy");
 	resizeTo(40, 30);
 	await settle();
 	tui.renderNow(true);
-	assert.equal(pane.getView().selectedSkillId, "web-deploy", "the selected ID survives a terminal resize");
+	assert.equal(menu.getView().selectedSkillId, "web-deploy", "the selected ID survives a terminal resize");
 	assert.match(screen(), /web-deploy/);
 });
 
-test("U04 preview never starts a turn and records zero non-preview RPCs", async (t) => {
+test("SM-08 the dialog is a bottom-anchored bounded box on an 80x24 terminal", async (t) => {
+	const { app, tui, client, type } = await boot(80, 24);
+	t.after(() => app.exit());
+	client.candidates = Array.from({ length: 30 }, (_v, index) => candidate({ skillId: `skill-${index}`, name: `skill-${index}` }));
+	type("/skills");
+	type("\r");
+	await settle();
+	tui.renderNow(true);
+	const bounds = dialogBounds(app);
+	assert.ok(bounds, "the overlay rendered");
+	assert.equal(bounds!.height, DEFAULT_MENU_VISIBLE_ROWS + 3, "default cap + title/filter/hint chrome");
+	assert.equal(bounds!.row, 24 - (DEFAULT_MENU_VISIBLE_ROWS + 3), "bottom-anchored inside the page");
+	const screen = () => tui.getScreenLines().map(stripTerminalSequences).join("\n");
+	assert.match(screen(), /skill-11\b/, "the default twelve rows are visible");
+	assert.doesNotMatch(screen(), /skill-12\b/, "the dialog scrolls instead of filling the page");
+});
+
+test("SM-08 preview never starts a turn and records zero non-preview RPCs", async (t) => {
 	const { app, tui, client, type, screen } = await boot();
 	t.after(() => app.exit());
 	client.candidates = [candidate({ skillId: "web-build", name: "web-build" })];
@@ -1031,34 +913,28 @@ test("U04 preview never starts a turn and records zero non-preview RPCs", async 
 	type("\r");
 	await settle();
 	type("make me a website");
-	await delay(200); // debounce
+	await delay(200);
 	tui.renderNow(true);
-	assert.ok(screen().includes("Route preview") === false, "no preview before the action");
+	assert.ok(!screen().includes("Route preview"), "no preview before the action");
 
 	type("\x12"); // ctrl+r previews the current request text
 	await settle();
 	tui.renderNow(true);
 	const after = client.requests.slice(mark);
-	assert.ok(after.some((entry) => entry.method === "skills.preview_route" && entry.params.request === "make me a website"), "the preview uses the typed request");
-	const unexpected = after.filter((entry) => entry.method !== "skills.search" && entry.method !== "skills.preview_route");
-	assert.deepEqual(unexpected, [], "the preview path records zero non-preview RPCs (no turn, no provider, no install, no approval change)");
+	assert.ok(after.some((entry) => entry.method === "skills.preview_route" && entry.params.request === "make me a website"));
+	const unexpected = after.filter(
+		(entry) => entry.method !== "skills.search" && entry.method !== "skills.list" && entry.method !== "skills.preview_route",
+	);
+	assert.deepEqual(unexpected, [], "the preview path records zero non-preview RPCs (skills.list is the read-only catalog browse)");
 	assert.equal(client.requests.filter((entry) => entry.method === "prompt.submit").length, 0, "no turn was started");
 	const internals = app as unknown as { inFlight: Set<string>; running: boolean };
 	assert.equal(internals.inFlight.size, 0);
 	assert.equal(internals.running, false);
-	const previewScreen = screen();
-	assert.match(previewScreen, /Route preview: make me a website/);
-	assert.match(previewScreen, /class: coding/);
-	assert.match(previewScreen, /selection: coding · skills: web-build/);
-	assert.match(previewScreen, /preview only — no turn, no provider call/);
-
-	type("\x1b"); // back to results
-	await settle();
-	tui.renderNow(true);
-	assert.match(screen(), /Skills:/);
+	assert.match(screen(), /Route preview: make me a website/);
+	assert.match(screen(), /preview only — no turn, no provider call/);
 });
 
-test("A6 real App: details → s reads skills.section with the shown revision and records no other RPCs", async (t) => {
+test("SM-08 real App: details → s reads skills.section with the shown revision; stale + failure honest", async (t) => {
 	const { app, tui, client, type, screen } = await boot();
 	t.after(() => app.exit());
 	client.candidates = [candidate({ skillId: "web-build", name: "web-build" })];
@@ -1071,35 +947,25 @@ test("A6 real App: details → s reads skills.section with the shown revision an
 	await settle();
 	const mark = client.requests.length;
 
-	type("s"); // read the first declared section
+	type("s");
 	await settle();
 	tui.renderNow(true);
 	const calls = client.requests.slice(mark).filter((entry) => entry.method === "skills.section");
 	assert.equal(calls.length, 1, "one versioned section read");
-	assert.deepEqual(calls[0]!.params, {
-		skillId: "web-build",
-		contentRevision: "rev0000000000",
-		section: "orientation",
-		budget: 800,
-	});
+	assert.deepEqual(calls[0]!.params, { skillId: "web-build", contentRevision: "rev0000000000", section: "orientation", budget: 800 });
 	const unexpected = client.requests.slice(mark).filter((entry) => entry.method !== "skills.section");
-	assert.deepEqual(unexpected, [], "the read path records zero non-section RPCs (no turn, provider, install or approval change)");
-	assert.equal(client.requests.filter((entry) => entry.method === "prompt.submit").length, 0, "no turn was started");
-	const pane = (app as unknown as { skillsPicker: SkillsPicker }).skillsPicker;
-	assert.equal(pane.getView().sectionStatus, "ready");
+	assert.deepEqual(unexpected, [], "the read path records zero non-section RPCs");
+	assert.equal(client.requests.filter((entry) => entry.method === "prompt.submit").length, 0);
 	let flat = screen().replace(/\s+/g, " ");
 	assert.match(flat, /section: Orientation \(11 of 11 chars · declared · content rev00000\)/);
 	assert.match(flat, /Start here\./);
 
-	// The skill is edited between reads: the pane serves the honest stale state,
-	// then re-reads against the revision the server reported as current.
 	client.sectionRevision = "aaaabbbbccccdddd";
 	type("s");
 	await settle();
 	tui.renderNow(true);
 	flat = screen().replace(/\s+/g, " ");
 	assert.match(flat, /section stale: orientation was requested at content rev00000, but the skill changed to aaaabbbb/);
-	assert.match(flat, /press s to re-read content aaaabbbb/);
 	assert.doesNotMatch(flat, /Start here\./, "no passage is served from the edited content");
 	type("s");
 	await settle();
@@ -1108,7 +974,6 @@ test("A6 real App: details → s reads skills.section with the shown revision an
 	assert.equal(reads.at(-1)!.params.contentRevision, "aaaabbbbccccdddd");
 	assert.match(screen().replace(/\s+/g, " "), /Start here\./);
 
-	// A failing read is an honest error state.
 	client.sectionError = new Error("gateway disconnected");
 	type("s");
 	await settle();
@@ -1116,63 +981,7 @@ test("A6 real App: details → s reads skills.section with the shown revision an
 	assert.match(screen().replace(/\s+/g, " "), /\(section read failed: gateway disconnected\)/);
 });
 
-test("U06 a gateway failure shows an honest state and keeps the filter", async (t) => {
-	const { app, tui, client, type, screen } = await boot();
-	t.after(() => app.exit());
-	client.candidates = [candidate({ skillId: "web-build", name: "web-build" })];
-	type("/skills");
-	type("\r");
-	await settle();
-	client.searchError = new Error("gateway disconnected");
-	type("web");
-	await delay(200);
-	tui.renderNow(true);
-	assert.match(screen(), /search failed: gateway disconnected/);
-	const pane = (app as unknown as { skillsPicker: SkillsPicker }).skillsPicker;
-	assert.equal(pane.getQuery(), "web", "the draft filter text is retained");
-	client.searchError = undefined;
-	type("\x7f"); // "we" → request again
-	await delay(200);
-	tui.renderNow(true);
-	assert.match(screen(), /web-build/);
-});
-
-test("U05 bundled skills expose no delete control; excluded skills stay honest", async (t) => {
-	const { app, tui, client, type, screen } = await boot();
-	t.after(() => app.exit());
-	client.candidates = [
-		candidate({ skillId: "deploy", name: "deploy", applicability: "excluded", enabled: false, reasons: ["disabled: skill 'deploy' is disabled"], sourceType: "learned", trust: "external" }),
-	];
-	client.showSkill = detailsSkill({ name: "deploy", sourceType: "learned", enabled: false });
-	type("/skills");
-	type("\r");
-	await settle();
-	type("deploy");
-	await delay(200);
-	tui.renderNow(true);
-	assert.match(screen(), /\[excluded\]/);
-	assert.match(screen(), /! all retrieved candidates are excluded/);
-
-	// bundled skill: details show the honest gating, no delete control
-	const pane = (app as unknown as { skillsPicker: SkillsPicker }).skillsPicker;
-	assert.ok(pane);
-	pane.dismiss();
-	await settle();
-	client.candidates = [candidate({ skillId: "web-build", name: "web-build" })];
-	client.showSkill = detailsSkill({ name: "web-build", sourceType: "builtin-ecc" });
-	type("/skills");
-	type("\r");
-	await settle();
-	type("web");
-	await delay(200);
-	type("\r"); // details
-	await settle();
-	tui.renderNow(true);
-	assert.match(screen(), /delete unavailable \(bundled default\)/);
-	assert.doesNotMatch(screen(), /d delete/);
-});
-
-test("U05 the picker delete action routes through the legacy confirmation", async (t) => {
+test("SM-08 the delete action routes through the legacy confirmation and RPC", async (t) => {
 	const { app, tui, client, type, screen } = await boot();
 	t.after(() => app.exit());
 	client.candidates = [candidate({ skillId: "local-skill", name: "local-skill", sourceType: "learned", trust: "external" })];
@@ -1186,13 +995,14 @@ test("U05 the picker delete action routes through the legacy confirmation", asyn
 	await settle();
 	tui.renderNow(true);
 	assert.match(screen(), /d delete/);
-	type("d"); // closes the picker and runs the legacy /skills delete command
+	assert.ok(skillsMenuOf(app), "the dialog is mounted before delete");
+	type("d"); // closes the dialog and runs the legacy /skills delete command
 	await settle();
 	tui.renderNow(true);
-	assert.equal((app as unknown as { skillsPicker: SkillsPicker | undefined }).skillsPicker, undefined, "the picker closes before the confirmation");
+	assert.equal(skillsMenuOf(app), undefined, "the dialog closes before the confirmation");
 	assert.match(screen(), /Delete skill "local-skill"\?/);
 	assert.equal(client.requests.some((entry) => entry.method === "skills.delete"), false, "nothing is deleted before the confirmation");
-	type("\x1b[B"); // move to the Delete action
+	type("\x1b[B");
 	type("\r");
 	await settle();
 	const deletes = client.requests.filter((entry) => entry.method === "skills.delete");
@@ -1200,7 +1010,7 @@ test("U05 the picker delete action routes through the legacy confirmation", asyn
 	assert.deepEqual(deletes[0]!.params, { name: "local-skill" });
 });
 
-test("U07 a typed /skills list opens the interactive directory on overlay hosts (legacy table remains the no-surface fallback)", async (t) => {
+test("SM-08 a typed /skills list opens the Menu dialog and browses the catalog (no wall of text)", async (t) => {
 	const { app, tui, client, type, screen } = await boot();
 	t.after(() => app.exit());
 	client.candidates = [candidate({ name: "web-build" })];
@@ -1209,15 +1019,31 @@ test("U07 a typed /skills list opens the interactive directory on overlay hosts 
 	type("\r");
 	await settle();
 	tui.renderNow(true);
-	// The interactive directory is the product surface for a typed `list` too
-	// (features/skills.ts); the byte-identical printed table is asserted for
-	// hosts without that surface in features.test.ts (U07 fallback).
-	const pane = (app as unknown as { skillsPicker: SkillsPicker | undefined }).skillsPicker;
-	assert.ok(pane, "the interactive picker opens for /skills list on an overlay host");
-	assert.match(screen(), /Skills:/);
-	assert.equal(
-		client.requests.slice(before).some((entry) => entry.method === "skills.list"),
-		false,
-		"the interactive path issues no legacy list RPC",
+	const menu = skillsMenuOf(app);
+	assert.ok(menu, "the Menu dialog opens for /skills list on an overlay host");
+	assert.match(screen(), /Skills/);
+	assert.equal(client.requests.slice(before).some((entry) => entry.method === "skills.list"), true, "the empty query browses the catalog through skills.list");
+});
+
+test("SM-09 bare /skills lists every skill immediately (catalog browse, no typing)", async (t) => {
+	const { app, tui, client, type, screen } = await boot();
+	t.after(() => app.exit());
+	client.candidates = [
+		candidate({ name: "web-build" }),
+		candidate({ name: "rag-pipeline" }),
+		candidate({ name: "deploy" }),
+	];
+	type("/skills");
+	type("\r");
+	await settle();
+	tui.renderNow(true);
+	const frame = screen();
+	assert.match(frame, /web-build/, "the first catalog row is visible without typing");
+	assert.match(frame, /rag-pipeline/, "every catalog skill is listed, not just the first");
+	assert.match(frame, /deploy/);
+	assert.match(frame, /3 shown/, "the footer reports the full catalog count");
+	const emptySearches = client.requests.filter(
+		(entry) => entry.method === "skills.search" && String(entry.params.query ?? "") === "",
 	);
+	assert.equal(emptySearches.length, 0, "empty-query browse goes through skills.list, never an empty skills.search");
 });

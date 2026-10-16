@@ -1,7 +1,7 @@
 // Paint the app's alternate buffer using SGR backgrounds, never OSC palette
 // mutations. Empty rows and erase-to-end operations inherit the same colour.
-import { backgroundAnsi, foregroundAnsi, getTerminalColorMode, parseColor, ProcessTerminal } from "@earendil-works/pi-tui";
-import { getSkin, semanticPalette } from "./theme.ts";
+import { foregroundAnsi, getTerminalColorMode, parseColor, ProcessTerminal } from "@earendil-works/pi-tui";
+import { backgroundColorAnsi, getSkin, semanticPalette } from "./theme.ts";
 
 const ENTER = "\x1b[?1049h";
 const LEAVE = "\x1b[?1049l";
@@ -23,7 +23,10 @@ export class ThemeBackground {
 		const body = leave < 0 ? data : data.slice(0, leave);
 		const palette = semanticPalette(getSkin())!;
 		const mode = getTerminalColorMode();
-		const bg = backgroundAnsi(parseColor(palette.background), mode);
+		// Transparent mode paints no canvas: the fg/ink is still re-asserted so
+		// text resets never leak the terminal profile's foreground, but no
+		// background SGR is emitted and `2K` keeps the terminal's own erase fill.
+		const bg = backgroundColorAnsi(parseColor(palette.background));
 		const fg = foregroundAnsi(parseColor(palette.text), mode);
 		// Preserve panel/selection fills; restore the base only when a style
 		// explicitly resets attributes. Restore default ink as well as the fill:
@@ -50,7 +53,9 @@ export class ThemeBackground {
 		// Apple Terminal and other non-BCE terminals erase to their default
 		// colour rather than the active SGR background. Paint real cells;
 		// save/restore the cursor so subsequent content starts in its place.
-		const fill = Number.isFinite(columns) && columns > 0
+		// In transparent mode `2K` alone is exactly right: erase to the
+		// terminal's default background.
+		const fill = bg !== "" && Number.isFinite(columns) && columns > 0
 			? `${bg}\x1b[2K\x1b7\r${" ".repeat(Math.floor(columns))}\x1b8`
 			: "\x1b[2K";
 		const painted = fg + bg + styled.split("\x1b[2K").join(fill) + RESET;

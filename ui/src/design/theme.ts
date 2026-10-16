@@ -1020,6 +1020,33 @@ const skinColors: Record<string, Record<PaletteName, Color>> = Object.fromEntrie
 
 let currentSkin = "codex";
 
+/**
+ * Opaque canvas switch. ON (the default) paints every theme surface with its
+ * background color exactly as before. OFF emits no background SGR anywhere, so
+ * the UI renders on the terminal's default background while every foreground
+ * color, bold/dim attribute, and text reset is preserved. Selection and
+ * emphasis rows fall back to reverse video + bold (the terminal's own fg/bg
+ * pair is a guaranteed-legible swap), so they stay visible with no fill.
+ */
+let opaqueBackground = true;
+
+/** Central switch for theme background painting. */
+export function setOpaqueBackground(enabled: boolean): void {
+	opaqueBackground = enabled;
+}
+
+/** True when theme surfaces paint an explicit background (the default). */
+export function isOpaqueBackground(): boolean {
+	return opaqueBackground;
+}
+
+/** Background SGR for a color, or "" in transparent mode (single gate). */
+export function backgroundColorAnsi(color: Color): string {
+	return opaqueBackground ? backgroundAnsi(color, mode) : "";
+}
+
+const bgAnsi = backgroundColorAnsi;
+
 function colors(): Record<PaletteName, Color> {
 	return skinColors[currentSkin] ?? skinColors["default"]!;
 }
@@ -1105,8 +1132,13 @@ export function selectionFill(name: string = currentSkin): string {
 
 /** Selected-row fill, Codex style: accent bg with a contrast-checked ink. */
 function selectedRow(text: string): string {
+	if (!opaqueBackground) {
+		// No fill: reverse video swaps the terminal's own default fg/bg — a
+		// pair the terminal guarantees is legible — and bold marks the row.
+		return styleTextWithAnsi(text, undefined, undefined, { bold: true, inverse: true });
+	}
 	const { ink, fill } = selectionColors();
-	return styleTextWithAnsi(text, foregroundAnsi(ink, mode), backgroundAnsi(fill, mode), {
+	return styleTextWithAnsi(text, foregroundAnsi(ink, mode), bgAnsi(fill), {
 		bold: true,
 	});
 }
@@ -1124,7 +1156,9 @@ const FULL_RESET = "\x1b[0m";
  * fill background after each reset so padding never leaks.
  */
 export function repairFill(bg: PaletteName, filledLine: string): string {
-	const open = backgroundAnsi(colors()[bg], mode);
+	const open = bgAnsi(colors()[bg]);
+	// Transparent canvas: there is no fill to re-assert, and nothing to repair.
+	if (!open) return filledLine;
 	let body = filledLine;
 	if (body.endsWith(BG_CLOSE)) body = body.slice(0, -BG_CLOSE.length);
 	const repaired = body
@@ -1142,7 +1176,7 @@ export function repairFill(bg: PaletteName, filledLine: string): string {
 export function surfaceLine(line: string, width: number): string {
 	const palette = semanticPalette(currentSkin)!;
 	const ink = foregroundAnsi(colors().text, mode);
-	const fill = backgroundAnsi(parseColor(palette.surface), mode);
+	const fill = bgAnsi(parseColor(palette.surface));
 	const padded = `${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
 	const body = padded.split(FULL_RESET).join(`${FULL_RESET}${ink}${fill}`)
 		.split("\x1b[39m").join(`\x1b[39m${ink}`)
@@ -1161,20 +1195,29 @@ function stripBackground(line: string): string {
 	return line.split(BG_OPEN).join("").split(BG_CLOSE).join("");
 }
 
-/** True when a rendered line carries the selection background. */
+/** Reverse-video opener used by selection rows when no fill is painted. */
+const REVERSE_SELECTION = "\x1b[7m";
+
+/** True when a rendered line carries the selection background (or, in
+ * transparent mode, the reverse-video selection marker). */
 export function isSelectionRow(line: string): boolean {
-	return line.includes(backgroundAnsi(selectionColors().fill, mode));
+	if (!opaqueBackground) return line.includes(REVERSE_SELECTION);
+	return line.includes(bgAnsi(selectionColors().fill));
 }
 
 /**
  * Extend a selected row to a full-width bar: strip the partial background,
- * pad out, and repaint the whole row. Unselected rows stay unfilled.
+ * pad out, and repaint the whole row. Unselected rows stay unfilled. With no
+ * opaque canvas the bar becomes a reverse-video + bold row instead of a fill.
  */
 export function selectionBar(line: string, width: number): string {
 	const stripped = stripBackground(line);
 	const padded = `${stripped}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
+	if (!opaqueBackground) {
+		return styleTextWithAnsi(padded, undefined, undefined, { bold: true, inverse: true });
+	}
 	const { ink, fill } = selectionColors();
-	return styleTextWithAnsi(padded, foregroundAnsi(ink, mode), backgroundAnsi(fill, mode), {
+	return styleTextWithAnsi(padded, foregroundAnsi(ink, mode), bgAnsi(fill), {
 		bold: true,
 	});
 }
@@ -1212,7 +1255,10 @@ function fg(name: PaletteName, attrs: TextAttributes = {}): (text: string) => st
 }
 
 function bg(name: PaletteName): (text: string) => string {
-	return (text) => styleTextWithAnsi(text, undefined, backgroundAnsi(colors()[name], mode), {});
+	return (text) => {
+		const fill = bgAnsi(colors()[name]);
+		return fill ? styleTextWithAnsi(text, undefined, fill, {}) : text;
+	};
 }
 
 const plain = (attrs: TextAttributes) => (text: string) => styleTextWithAnsi(text, undefined, undefined, attrs);

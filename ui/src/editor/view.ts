@@ -40,7 +40,6 @@
 //   line-ending metadata; the view never normalizes text.
 
 import {
-	backgroundAnsi,
 	CURSOR_MARKER,
 	foregroundAnsi,
 	getTerminalColorMode,
@@ -59,7 +58,7 @@ import {
 // API fails the parity test loudly instead of silently dropping Kitty input.
 import { decodePrintableKey } from "@earendil-works/pi-tui/dist/keys.js";
 import { displayWidth, truncateDisplay } from "../design/text.ts";
-import { selectionFill, selectionInk, theme } from "../design/theme.ts";
+import { backgroundColorAnsi, isOpaqueBackground, selectionFill, selectionInk, theme } from "../design/theme.ts";
 import type { DocumentRecord, EditorViewState } from "./model.ts";
 import { EditorStore } from "./model.ts";
 import {
@@ -103,6 +102,13 @@ export interface EditorViewOptions {
 	softWrap?: boolean;
 	/** Display tab width; default 4 (positions.EDITOR_TAB_WIDTH). */
 	tabWidth?: number;
+	/**
+	 * Blink-phase seam: when this returns false the focused caret cell is
+	 * rendered as plain text (no inverse block) while the zero-width
+	 * CURSOR_MARKER is still emitted for IME placement. Defaults to always
+	 * visible so the view stays usable without a host.
+	 */
+	isCursorBlockVisible?(): boolean;
 }
 
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -171,12 +177,17 @@ interface SyntaxCache {
 	through: number;
 }
 
-/** Selected text: the skin's selection fill with its contrast-checked ink. */
+/** Selected text: the skin's selection fill with its contrast-checked ink.
+ *  In transparent mode there is no fill, so reverse video + bold marks the
+ *  selection on the terminal's own default colors instead. */
 function paintSelected(text: string): string {
+	if (!isOpaqueBackground()) {
+		return styleTextWithAnsi(text, undefined, undefined, { bold: true, inverse: true });
+	}
 	return styleTextWithAnsi(
 		text,
 		foregroundAnsi(parseColor(selectionInk()), terminalColorMode),
-		backgroundAnsi(parseColor(selectionFill()), terminalColorMode),
+		backgroundColorAnsi(parseColor(selectionFill())),
 		{},
 	);
 }
@@ -297,6 +308,8 @@ export class EditorView implements Component, Focusable {
 	private readonly onCursorMoveCallback: (() => void) | undefined;
 	private readonly requestRenderCallback: () => void;
 	private readonly clipboard: EditorClipboard;
+	/** Host-owned blink phase (see {@link EditorViewOptions.isCursorBlockVisible}). */
+	private readonly isCursorBlockVisible: () => boolean;
 	private softWrap: boolean;
 	private tabWidth: number;
 	/** Language-aware highlighting; off by default (the app opts in via prefs). */
@@ -322,6 +335,7 @@ export class EditorView implements Component, Focusable {
 		this.onCursorMoveCallback = options.onCursorMove;
 		this.requestRenderCallback = options.requestRender;
 		this.clipboard = options.clipboard;
+		this.isCursorBlockVisible = options.isCursorBlockVisible ?? (() => true);
 		this.softWrap = options.softWrap ?? false;
 		const tabWidth = options.tabWidth ?? EDITOR_TAB_WIDTH;
 		this.tabWidth = Number.isFinite(tabWidth) ? Math.max(1, Math.floor(tabWidth)) : EDITOR_TAB_WIDTH;
@@ -467,6 +481,10 @@ export class EditorView implements Component, Focusable {
 		const activeLine = offsetToPosition(record.text, cursor).line;
 		const caretRow = this.rowIndexOfOffset(record, starts, contentCells, cursor);
 		const marker = this.focused ? CURSOR_MARKER : "";
+		// The zero-width marker (IME/hardware-cursor placement) is emitted
+		// whenever the view is focused; only the visible inverse block obeys
+		// the blink phase so the two never flicker apart.
+		const blockVisible = this.focused && this.isCursorBlockVisible();
 
 		const cacheKey = [
 			record.id,
@@ -480,6 +498,7 @@ export class EditorView implements Component, Focusable {
 			String(activeLine),
 			String(caretRow),
 			this.focused ? "1" : "0",
+			blockVisible ? "b" : "-",
 			this.softWrap ? "w" : "n",
 			String(this.tabWidth),
 			this.syntaxEnabled ? "s" : "p",
@@ -502,7 +521,7 @@ export class EditorView implements Component, Focusable {
 			const caretCell = this.focused && rowIndex === caretRow ? this.cellInLine(info, cursor) : undefined;
 			const windowFrom = this.softWrap ? row.fromCell : state.horizontalCellOffset;
 			const spans = highlight ? this.syntaxSpansFor(record, starts, language, row.line) : undefined;
-			const content = this.composeRow(info, windowFrom, contentCells, selection, caretCell, marker, spans);
+			const content = this.composeRow(info, windowFrom, contentCells, selection, caretCell, marker, spans, blockVisible);
 			lines.push(padRow(truncateDisplay(`${gutter}  ${content}`, safeWidth), safeWidth));
 		}
 		this.lastFrame = { key: cacheKey, lines };
@@ -957,6 +976,7 @@ export class EditorView implements Component, Focusable {
 		caretCell: number | undefined,
 		marker: string,
 		syntax: readonly SyntaxSpan[] | undefined,
+		blockVisible: boolean,
 	): string {
 		const windowEnd = windowFrom + contentCells;
 		const windowContentTo = Math.min(info.width, windowEnd);
@@ -1037,7 +1057,10 @@ export class EditorView implements Component, Focusable {
 		for (const part of parts) {
 			if (part.style === "caret") {
 				flush();
-				out += marker + paintCaret(part.text);
+				// Block on: inverse cell at the caret. Block off (blink phase):
+				// the same cell renders as plain text so the glyph underneath
+				// shows through; the marker still rides along for IME placement.
+				out += marker + (blockVisible ? paintCaret(part.text) : part.text);
 				continue;
 			}
 			if (part.style === "selected") {

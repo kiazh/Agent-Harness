@@ -197,6 +197,18 @@ export function popAbove(lines: string[], popupHeight: number): string[] {
 }
 
 /**
+ * pi-tui's Editor paints its fake caret by wrapping the grapheme under the
+ * cursor in reverse video (`\x1b[7m<g>\x1b[0m`). When the app's blink phase is
+ * off we unwrap it so the character shows through unchanged. This is the only
+ * `\x1b[7m` the Editor emits, so the match is unambiguous.
+ */
+// eslint-disable-next-line no-control-regex -- matching the Editor's reverse-video caret is the point.
+const COMPOSER_CARET_RE = /\x1b\[7m([\s\S]*?)\x1b\[0m/;
+function stripFakeComposerCursor(line: string): string {
+	return line.replace(COMPOSER_CARET_RE, "$1");
+}
+
+/**
  * Codex-style composer input: the pi-tui Editor with its rules replaced by
  * filled rows, so the input reads as one solid block instead of ruled lines.
  * Scroll position survives via a muted `↑ N more` marker.
@@ -206,6 +218,13 @@ export class ComposerInput extends Editor {
     onSubmitBlocked?: () => boolean;
 	/** ComposerBox's editable-row budget for the draft window (setMaxRows). */
 	windowRows: number = LIMITS.composerMaxRows;
+	/**
+	 * App-owned caret blink phase. When false the fake caret cell renders as
+	 * plain text (the character under it shows through); the zero-width IME
+	 * marker from the base Editor is untouched. Defaults to always visible so
+	 * the composer stays usable without a host.
+	 */
+	cursorBlockVisible: () => boolean = () => true;
     private attachmentPaste: string | undefined;
 
     override handleInput(data: string): void {
@@ -244,7 +263,11 @@ export class ComposerInput extends Editor {
 		const lines = super.render(width);
 		const { renderedAutocompleteHeight: popupHeight } = this as unknown as EditorPopupLayout;
 		const textEnd = lines.length - popupHeight - 1;
-		const colored = lines.map((line, index) => index > 0 && index < textEnd ? styleComposerText(line) : line);
+		const blockVisible = this.cursorBlockVisible();
+		const colored = lines.map((line, index) => {
+			const styled = index > 0 && index < textEnd ? styleComposerText(line) : line;
+			return blockVisible ? styled : stripFakeComposerCursor(styled);
+		});
 		return popAbove(colored, popupHeight);
 	}
 
@@ -365,13 +388,14 @@ export class ComposerBox extends Box {
  * A titled, filterable list shown as an overlay (e.g. the session picker).
  * Implemented over Menu: every picker owns a real filter buffer matched
  * against label, value and description. Kept for existing callers; new code
- * uses Menu directly. The row budget follows the live viewport unless a
- * caller passes an explicit visibleRows cap.
+ * uses Menu directly. The row budget follows Menu's documented bounded
+ * default ({@link DEFAULT_MENU_VISIBLE_ROWS}), clamped by the live viewport;
+ * a caller may pass an explicit cap, or `"full"` to opt out for a huge view.
  */
 export class Picker implements Component {
 	private readonly menu: Menu;
 
-	constructor(title: string, items: SelectItem[], onSelect: (item: SelectItem) => void, onCancel: () => void, visibleRows?: number, hint = "enter select · esc back", tui?: TUI) {
+	constructor(title: string, items: SelectItem[], onSelect: (item: SelectItem) => void, onCancel: () => void, visibleRows?: number | "full", hint = "enter select · esc back", tui?: TUI) {
 		this.menu = new Menu(title, items, { visibleRows, hint, tui });
 		this.menu.onSelect = onSelect;
 		this.menu.onCancel = onCancel;
@@ -391,7 +415,7 @@ export class Picker implements Component {
 }
 
 
-export { Menu } from "./components/Menu.ts";
+export { DEFAULT_MENU_VISIBLE_ROWS, Menu } from "./components/Menu.ts";
 export type { MenuOptions } from "./components/Menu.ts";
 export { SecretForm, SecretInput, TextForm } from "./components/Form.ts";
 export type { SecretFormOptions, TextFormOptions } from "./components/Form.ts";

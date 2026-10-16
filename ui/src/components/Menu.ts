@@ -27,8 +27,13 @@ function isSection(item: SelectItem): boolean {
 
 export interface MenuOptions {
 	hint?: string;
-	/** Explicit row cap; the live viewport still bounds it. Omit for the full viewport. */
-	visibleRows?: number;
+	/**
+	 * Explicit row cap (overrides {@link DEFAULT_MENU_VISIBLE_ROWS}); the live
+	 * viewport still bounds it. Pass `"full"` to opt out of the default cap and
+	 * use the whole live viewport — reserved for legitimately huge views where
+	 * scrolling is undesirable. Omit to use the documented default.
+	 */
+	visibleRows?: number | "full";
 	/** Live viewport for row budgets (title + filter + hint rows reserved). */
 	tui?: TUI;
 	/** Initially selected value (defaults to the first item). */
@@ -41,6 +46,16 @@ export interface MenuOptions {
 // terminal height.
 const MENU_RESERVED_ROWS = 4;
 
+/**
+ * Default number of item rows a Menu (and every Picker wrapping it) shows
+ * before it scrolls. Bounding the viewport keeps a long list — e.g. the
+ * 53-skin theme menu — from covering the page while the title/filter chrome
+ * stays on top and the hint stays pinned at the bottom. Call sites that want
+ * a different height pass an explicit `visibleRows`; a menu that genuinely
+ * needs the whole viewport opts out with `visibleRows: "full"`.
+ */
+export const DEFAULT_MENU_VISIBLE_ROWS = 12;
+
 export class Menu implements Component {
 	onSelect: ((item: SelectItem) => void) | undefined;
 	onCancel: (() => void) | undefined;
@@ -50,7 +65,7 @@ export class Menu implements Component {
 	private readonly title: string;
 	private readonly items: SelectItem[];
 	private readonly hint: string;
-	private visibleRows: number | undefined;
+	private visibleRows: number | "full";
 	private readonly tui: TUI | undefined;
 	private filter = "";
 	private selectedValue: string | undefined;
@@ -62,7 +77,11 @@ export class Menu implements Component {
 		this.items = items;
 		this.multiSelect = options.multiSelect ?? false;
 		this.hint = options.hint ?? (this.multiSelect ? "↑↓ move · space check · enter review · esc cancel" : "enter select · esc back");
-		this.visibleRows = options.visibleRows === undefined ? undefined : Math.max(1, options.visibleRows);
+		this.visibleRows = options.visibleRows === undefined
+			? DEFAULT_MENU_VISIBLE_ROWS
+			: options.visibleRows === "full"
+				? "full"
+				: Math.max(1, options.visibleRows);
 		this.tui = options.tui;
 		const initial = options.initialValue === undefined
 			? undefined
@@ -87,8 +106,8 @@ export class Menu implements Component {
 	}
 
 	/** Update the row budget cap (e.g. on resize), preserving the selection. */
-	setVisibleRows(rows: number): void {
-		this.visibleRows = Math.max(1, rows);
+	setVisibleRows(rows: number | "full"): void {
+		this.visibleRows = rows === "full" ? "full" : Math.max(1, rows);
 		this.clampSelection();
 	}
 
@@ -138,12 +157,12 @@ export class Menu implements Component {
 		else this.checked.add(value);
 	}
 
-	/** Effective row budget: the explicit cap when set, always bounded by the live viewport. */
+	/** Effective row budget: the cap (explicit or default) bounded by the live viewport. */
 	private rowBudget(): number {
 		const cap = this.visibleRows;
-		if (!this.tui) return cap ?? Number.MAX_SAFE_INTEGER;
+		if (!this.tui) return cap === "full" ? Number.MAX_SAFE_INTEGER : cap;
 		const live = Math.max(1, (this.tui.terminal.rows ?? 24) - MENU_RESERVED_ROWS);
-		return cap === undefined ? live : Math.min(cap, live);
+		return cap === "full" ? live : Math.min(cap, live);
 	}
 
 	/** Sanitized title lines. Titles are untrusted (session titles, recall

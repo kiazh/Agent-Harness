@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { CURSOR_MARKER, stripTerminalSequences, TuiAltScreen, type Terminal, type TUI } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
 import { TextForm } from "../src/components.ts";
-import { Menu } from "../src/components/Menu.ts";
+import { DEFAULT_MENU_VISIBLE_ROWS, Menu } from "../src/components/Menu.ts";
 import { SecretForm } from "../src/components/Form.ts";
 import { parseCommand } from "../src/commands.ts";
 import { runCommand } from "../src/features/index.ts";
@@ -222,7 +222,7 @@ test("dialogs request a full-height overlay with no bottom margin", async (t) =>
 	assert.equal(await choice, undefined, "Esc still cancels the full-height picker");
 });
 
-test("a picker on a 24-row terminal fills the viewport beyond the old 10-row cap", async (t) => {
+test("a picker on a 24-row terminal is bounded by the default cap and bottom-anchored", async (t) => {
 	const { app, tui, type } = await boot(80, 24);
 	t.after(() => app.exit());
 	const items = Array.from({ length: 40 }, (_, i) => ({ value: `v${i}`, label: `Item ${i}` }));
@@ -231,32 +231,39 @@ test("a picker on a 24-row terminal fills the viewport beyond the old 10-row cap
 	const dialogs = (app as unknown as { dialogs: Array<{ handle: { getBounds(): { row: number; height: number } | undefined } }> }).dialogs;
 	const bounds = dialogs.at(-1)?.handle.getBounds();
 	assert.ok(bounds, "overlay rendered");
-	assert.equal(bounds!.height, 23, "menu box runs from row 1 to the last line (24 - 1 slack row)");
-	assert.equal(bounds!.row, 1);
+	assert.equal(bounds!.height, DEFAULT_MENU_VISIBLE_ROWS + 3, "default cap plus title/filter/hint chrome");
+	assert.equal(bounds!.row, 24 - (DEFAULT_MENU_VISIBLE_ROWS + 3), "bottom-anchored inside the page");
 	const screen = tui.getScreenLines().map(stripTerminalSequences).join("\n");
-	assert.match(screen, /Item 19\b/, "twenty rows visible, not the old ten");
-	assert.doesNotMatch(screen, /Item 20\b/, "window still bounded by the live budget");
+	assert.match(screen, /Item 11\b/, "the default twelve rows are visible");
+	assert.doesNotMatch(screen, /Item 12\b/, "the menu scrolls instead of filling the page");
 	type("\x1b");
 	assert.equal(await picking, undefined);
 });
 
-test("a menu on a tall terminal exposes the full live budget without the old 10/12 caps", () => {
+test("a menu on a tall terminal is capped by default; \"full\" opts back into the live budget", () => {
 	const tui = { terminal: { rows: 50, columns: 80 } } as unknown as TUI;
 	const items = Array.from({ length: 60 }, (_, i) => ({ value: `v${i}`, label: `Row ${i}` }));
-	const menu = new Menu("Tall", items, { tui });
 	let cancelled = 0;
 	let selected = "";
+	const menu = new Menu("Tall", items, { tui });
 	menu.onCancel = () => void cancelled++;
 	menu.onSelect = (item) => void (selected = item.value);
 	const lines = menu.render(80).map((line) => stripTerminalSequences(line));
-	assert.equal(lines.length, 49, "title + filter + hint plus 46 rows (50 - chrome - one slack row)");
-	assert.match(lines.join("\n"), /Row 45/);
-	assert.doesNotMatch(lines.join("\n"), /Row 46\b/);
+	assert.equal(lines.length, DEFAULT_MENU_VISIBLE_ROWS + 3, "default cap + chrome even on a 50-row terminal");
+	assert.match(lines.join("\n"), /Row 11/);
+	assert.doesNotMatch(lines.join("\n"), /Row 12\b/);
 	menu.handleInput("\x1b[B");
 	menu.handleInput("\r");
-	assert.equal(selected, "v1", "Enter selects the moved row in the full-height window");
+	assert.equal(selected, "v1", "Enter selects the moved row in the bounded window");
 	menu.handleInput("\x1b");
-	assert.equal(cancelled, 1, "Esc still cancels the full-height menu");
+	assert.equal(cancelled, 1, "Esc still cancels the bounded menu");
+
+	// "full" is the documented opt-out for views that legitimately need the page.
+	const full = new Menu("Tall full", items, { visibleRows: "full", tui });
+	const fullLines = full.render(80).map((line) => stripTerminalSequences(line));
+	assert.equal(fullLines.length, 49, "title + filter + hint plus 46 rows (50 - chrome - one slack row)");
+	assert.match(fullLines.join("\n"), /Row 45/);
+	assert.doesNotMatch(fullLines.join("\n"), /Row 46\b/);
 });
 
 test("text forms save and count the expanded contents of a large paste with either shortcut", () => {

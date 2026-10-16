@@ -16,11 +16,11 @@ import type {
 	UsageResult,
 } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
-import { getSkin } from "../theme.ts";
+import { getSkin, isOpaqueBackground } from "../theme.ts";
 import type { ChatSide, WorkspaceMode } from "../workspace/state.ts";
 import { applyModel, CURATED_MODELS, filterCuratedModels, pickCuratedModel } from "./models.ts";
 import { redactSecret } from "./keys.ts";
-import { applySkin } from "./theme.ts";
+import { applyBackgroundTransparency, applySkin } from "./theme.ts";
 import { printLspRows } from "./workspace.ts";
 import {
 	confirm,
@@ -562,8 +562,14 @@ async function settingsEditorCategory(host: FeatureHost, ui: UiSettingsHost): Pr
 async function settingsAppearanceCategory(host: FeatureHost): Promise<SettingsFlow> {
 	for (;;) {
 		const reduced = /^(1|true)$/i.test(process.env.MACHINA_UI_REDUCED_MOTION ?? "");
+		const transparent = !isOpaqueBackground();
 		const choice = await pickBack(host, "Appearance", [
 			{ value: "theme", label: "Theme", description: `current: ${getSkin()} (live preview)` },
+			{
+				value: "transparent",
+				label: "Transparent background (use terminal default)",
+				description: `current: ${onOff(transparent)}`,
+			},
 			{
 				value: "motion",
 				label: "Reduced motion (env)",
@@ -576,6 +582,10 @@ async function settingsAppearanceCategory(host: FeatureHost): Promise<SettingsFl
 			const name = await host.pickTheme();
 			if (!name) continue;
 			await applySkin(host, name);
+			continue;
+		}
+		if (choice.value === "transparent") {
+			await applyBackgroundTransparency(host, !transparent);
 			continue;
 		}
 		// Read-only row: the setting is an environment variable, not config.
