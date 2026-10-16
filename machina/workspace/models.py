@@ -140,6 +140,37 @@ def language_id_for(name: str) -> str:
     return _LANGUAGE_BY_EXTENSION.get(extension, "plaintext")
 
 
+#: Canonical language-server languages this release starts lazily (plan §13/§14).
+#: The language server for an open document is selected by file extension —
+#: never by the client-declared ``languageId`` — so a client cannot route a
+#: path to a different server than the one the profile allowlist names.
+LSP_PROFILE_LANGUAGES = ("python", "typescript")
+
+_LSP_LANGUAGE_BY_EXTENSION = {
+    ".py": "python",
+    ".pyi": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+    ".js": "typescript",
+    ".jsx": "typescript",
+    ".mjs": "typescript",
+    ".cjs": "typescript",
+}
+
+
+def lsp_language_for(path: str) -> str | None:
+    """Canonical language-server language for a path, else ``None``.
+
+    Only the two initial profiles (Python and TypeScript/JavaScript) map to a
+    language server; every other file keeps editing without intelligence.
+    """
+    base = path.replace("\\", "/").rsplit("/", 1)[-1]
+    extension = os.path.splitext(base)[1].lower()
+    return _LSP_LANGUAGE_BY_EXTENSION.get(extension)
+
+
 def revision_from_bytes(data: bytes) -> str:
     """Revision token: ``sha256`` first 32 hex + ``:`` + exact byte size."""
     return f"{hashlib.sha256(data).hexdigest()[:REVISION_HEX_LEN]}:{len(data)}"
@@ -379,3 +410,56 @@ def file_changed_event(
         "revision": revision,
         "origin": origin,
     }
+
+
+def diagnostics_event(
+    workspace_id: str,
+    epoch: int,
+    generation: int,
+    uri: str,
+    version: int | None,
+    source: str,
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """``workspace.diagnostics`` payload (protocol.ts; no chat envelope).
+
+    ``source`` is the producing server profile; ``version`` is the document
+    version the producing server attached (``None`` when it published without
+    one) — the UI must treat that as unversioned, not as exact freshness.
+    """
+    return {
+        "type": "workspace.diagnostics",
+        "workspaceId": workspace_id,
+        "epoch": epoch,
+        "serverGeneration": generation,
+        "uri": uri,
+        "version": version,
+        "source": source,
+        "diagnostics": list(diagnostics),
+    }
+
+
+def lsp_state_event(
+    workspace_id: str,
+    epoch: int,
+    profile: str,
+    state: str,
+    generation: int,
+    detail: str = "",
+) -> dict[str, Any]:
+    """``workspace.lspState`` payload (protocol.ts; no chat envelope).
+
+    ``detail`` is bounded and control-sanitized before it gets here (it is a
+    log surface); it is omitted entirely when empty.
+    """
+    data: dict[str, Any] = {
+        "type": "workspace.lspState",
+        "workspaceId": workspace_id,
+        "epoch": epoch,
+        "profile": profile,
+        "state": state,
+        "generation": generation,
+    }
+    if detail:
+        data["detail"] = detail
+    return data

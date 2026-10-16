@@ -117,6 +117,23 @@ def apply_changes(text: str, changes: list[dict[str, Any]]) -> str:
     return updated
 
 
+def utf16_full_range(text: str) -> dict[str, dict[str, int]]:
+    """LSP range covering an entire document, in UTF-16 code units.
+
+    Used when a deliberate full-snapshot change has to be expressed as an
+    incremental edit (sync kind 2) or when a reopen jumps versions: the range
+    is computed with the same ``\\n``/``\\r\\n``/``\\r`` line rules as
+    :func:`apply_changes`, and the end position counts UTF-16 code units
+    exactly like an LSP client would.
+    """
+    starts = _line_starts(text)
+    tail = text[starts[-1] :]
+    return {
+        "start": {"line": 0, "character": 0},
+        "end": {"line": len(starts) - 1, "character": len(tail.encode("utf-16-le")) // 2},
+    }
+
+
 class DocumentMirrorStore:
     """Per-(uri) client mirrors with versions, epochs and byte budgets."""
 
