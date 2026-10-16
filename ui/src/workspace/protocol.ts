@@ -127,6 +127,49 @@ export interface WorkspaceIntelligenceResult {
 	result: unknown;
 }
 
+/** One protocol text edit (plan §18). Positions are UTF-16 LSP positions. */
+export interface LspTextEdit {
+	range: LspRange;
+	newText: string;
+}
+
+/** A per-file group inside a workspace edit proposal. */
+export interface WorkspaceEditChange {
+	uri: string;
+	/** Document version the ranges were computed against; null when the server omitted it. */
+	version: number | null;
+	edits: LspTextEdit[];
+}
+
+/**
+ * Normalized workspace edit proposal (rename/format/code-action).
+ * Resource operations are never produced until they are implemented and
+ * tested: the payload type has no rename/delete/create fields by design.
+ */
+export interface WorkspaceEditPayload {
+	label: string;
+	changes: WorkspaceEditChange[];
+	/** Files the proposal could not be built against (missing/stale) — refused, not dropped silently. */
+	refused: Array<{ uri: string; reason: string }>;
+}
+
+/** Result payloads per intelligence operation (result field narrowing aids). */
+export interface RenameResultPayload {
+	edits: WorkspaceEditPayload | null;
+	/** True when the server answered prepareRename with a null range (rename not offered here). */
+	unavailable: boolean;
+}
+
+export interface CodeActionPayload {
+	actions: Array<{
+		title: string;
+		kind?: string;
+		edits?: WorkspaceEditPayload;
+		/** Server commands are never executed from the editor; recorded for explicit policy decisions. */
+		command?: { title: string; command: string; arguments?: unknown[] };
+	}>;
+}
+
 export interface WorkspaceLspStatusResult {
 	servers: Array<{
 		profile: string;
