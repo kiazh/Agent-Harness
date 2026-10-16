@@ -176,6 +176,19 @@ This document keeps current evidence separate from historical baseline logs. Nev
 - `W3-A2` (app.ts integration: startup + flag, commands, key routing, dirty-quit review, event subscription) is running; consumed controller API and the IntelligenceRequest adapter bridging `IntelligenceOutcome` → `WorkspaceIntelligenceResult` are documented in its task brief.
 - `T10` (agent awareness + selection attachment) queued behind A2 (self-knowledge token pins require the TUI commands to exist).
 
+### T3/T6 wiring — App integration (status: complete, commit 4242571)
+
+- Files: `ui/src/app.ts` (+1187), `features/workspace.ts` (new commands), `features/index.ts`, `features/types.ts` (optional `WorkspaceHost`), `commands.ts` (help group), small additive focus callbacks in `editor/view.ts`/`explorer.ts`/`ProblemsPane.ts`; tests: 18 integration tests.
+- Delivered: flag-gated background startup on `init.cwd`; persistence via `workspace_ui_state`; shell/editor/explorer/problems wiring; workspace-event subscription; commands `/workspace /editor /explorer /lsp /problems /quickopen`; keys Ctrl+P/S/Space/T/left/right, F12/Shift+F12/F2/F6; popup-owns-Enter/Tab/Esc precedence before the turn-cancel path; save conflict dialog; dirty-exit review (Save all/Discard/Cancel); dispose on exit; graceful fail-closed disable on METHOD_NOT_FOUND or invalid identity.
+- Controller fix (orchestrator): open-time persist now MERGES layout intent with stored documents (regression test added; previously a default write could clobber a prior session's open files before `restore()`).
+- Red evidence: completion popup mounted without model (fixed); reference fixture half-open RPC guard (fixed); controller clobber identified by probe (fixed with merge).
+- Evidence (orchestrator re-run): full gate 788 tests / 782 pass / 6 skip / 0 fail; controller 27/27 after fix.
+- Deferred (documented): hover popup mounting, inline diagnostics in the view, divider keyboard resize, keyboard tab switching, editor Ctrl+C selection copy (pre-existing ADR note).
+
+### T12 (partial) — user documentation
+
+- `docs/design/WORKSPACE.md`: layout, commands, keys + fallbacks, language-server setup/trust, save/conflict semantics, agent privacy contract, persistence, troubleshooting, rollout flag.
+
 ## Task record template (from plan §26)
 
 ```text
