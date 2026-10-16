@@ -284,10 +284,12 @@ DEFAULTS: dict[str, Any] = {
     # for oversized results. Disabled returns to blind truncation only.
     "reducers_enabled": True,
     # B2: wire the shared budgeted request projector into both live loops.
-    # Off by default: the loops always shadow-project and log a bounded
-    # comparison (agent.request_projection.shadow), but outgoing messages stay
-    # byte-identical until B3 ships the runtime coexistence evidence.
-    "request_projection_enabled": False,
+    # ON since the Track B rollout gate: a real deepseek/deepseek-chat turn
+    # through run() and run_stream() accepted the projected payload (pins-first
+    # system messages plus verified ``[machina view: …]`` units); see
+    # docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md §10. Off reverts to
+    # shadow-only (bounded comparison log, byte-identical outgoing payloads).
+    "request_projection_enabled": True,
     # Evidence projection: exact-duplicate removal plus token-budgeted
     # coverage selection across memory/RAG/archive excerpts; omissions are
     # disclosed in the prompt section. 0 tokens disables the budget.
@@ -621,9 +623,9 @@ class Config:
     artifact_max_per_session: int = 500
     artifact_max_chars: int = 2000000
     reducers_enabled: bool = True
-    # B2: wire the shared request projector (both loops); default off (shadow
-    # comparison only) until B3 runtime evidence exists. See DEFAULTS.
-    request_projection_enabled: bool = False
+    # B2: wire the shared request projector (both loops). Default ON since the
+    # Track B live-provider rollout gate succeeded; see DEFAULTS for evidence.
+    request_projection_enabled: bool = True
     retrieval_selection_enabled: bool = True
     retrieval_token_budget: int = 6000
     output_policy: str = "legacy"
