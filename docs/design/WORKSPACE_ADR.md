@@ -47,25 +47,37 @@ Reused primitive patterns (borrowed concepts, not code forks):
 ## 4. Keyboard collision inventory (verified against shipped sources)
 
 Listener order is fixed: `TuiAltScreen` viewport listener (registered in its constructor)
-→ `App.onKey` (registered in `App.start`) → focused component (the composer `Editor`).
+→ `App.onKey` (registered in `App.start`) → focused component (composer `Editor` or
+the workspace components).
 
-| Sequence | Current owner | Plan binding risk | Policy |
+### Full matrix (post UX-batch bindings)
+
+| Sequence | Toolkit owner | App/region policy | Verdict |
 |---|---|---|---|
-| `pageUp`/`pageDown` | Alt-screen viewport (primary ScrollView) | Editor paging never reaches a focused editor | Document; editor pages via `ctrl+pageUp/ctrl+pageDown` (reaches Editor today) and workspace commands |
-| `home`/`end` | Alt-screen viewport | Same | Editor home/end is line home/end and is claimed by the editor only if the alt-screen does not consume; treat as: line-home via `ctrl+a` alternative documented if needed (verify at T4) |
-| `ctrl+up`/`ctrl+down` | Alt-screen (prompt jump) | None planned | Untouched |
-| `ctrl+shift+f` | Alt-screen (transcript search) | Do not reuse for editor search | Editor search gets `ctrl+f` (verify not consumed) |
-| `ctrl+right` | free | `workspace.toggleChatMaximize` candidate | Global binding wins when delivered (per plan); editor word-motion alternative `alt+right` documented; configurable |
-| `ctrl+t` | free in-app | `workspace.toggleExplorer` candidate | Terminal risk (new tab); `Cmd+T`/palette fallback documented |
-| `ctrl+p` | free in-app | `editor.quickOpen` | Palette fallback always |
-| `ctrl+s` | free in-app | `editor.save` | Raw mode disables XOFF; palette fallback |
-| `ctrl+space` | free in-app (legacy NUL) | `editor.completion` | Handle both `\x00` and Kitty form via `matchesKey` |
-| `f12`/`shift+f12`/`f2`/`f6` | free | definition/references/rename/cycleFocus | Verify per terminal; palette fallback |
-| `f1`, `?` | App (shortcuts) | Do not override | Untouched |
-| `esc` | App (stop) + dialogs | Editor popups must dismiss first | Focus-priority dispatch (T3): popup owner consumes Esc before App stop path |
-| `ctrl+c` | App (stop/clear/exit) | Editor copy must claim when selection exists and editor focused | Focus-aware dispatch with visible help; never silent |
-| `ctrl+w` | avoid | — | Terminal close risk; closeTab uses palette plus configurable chord |
-| `ctrl+shift+left/right` | App (family cycle) | Do not reuse | Untouched |
+| `ctrl+w` | **composer Editor: delete-word-backward** | close-tab policy must be EDITOR-REGION-ONLY; composer keeps delete-word | fix required if bound globally |
+| `ctrl+left`/`ctrl+right` | **composer Editor: word motion** (`tui.editor.cursorWordLeft/Right`) | panes toggle must be EDITOR-REGION-ONLY (as of the audit it fires pre-gate: queue fix) | **fix required** |
+| `ctrl+t` | free in toolkit | explorer toggle global (composer does not use it) | ok |
+| `ctrl+p` | free in toolkit | Quick Open global | ok |
+| `ctrl+s` | free in toolkit (raw mode disables XOFF) | save (editor-gated today) | ok |
+| `ctrl+space` | NUL legacy; not in TUI_KEYBINDINGS | completion (editor-gated); **macOS input-source switch may eat it** | ok + document; `/editor complete` fallback queued |
+| `f12`, `shift+f12`, `f2` | free in toolkit | navigation/rename (editor-gated) | ok |
+| `f6`, `shift+f6` | free in toolkit (shift+F-keys need the legacy sequence decode — already handled) | focus cycle (global) | ok |
+| `ctrl+shift+a` | free in toolkit; Kitty-only CSI-u | attach selection (editor-gated); legacy ctrl+a stays select-all | ok |
+| `pageUp/pageDown/home/end`, `ctrl+up/down`, `ctrl+shift+f`, `shift+enter`, `ctrl+b/f/u/k/y/-`, `alt+d/b/f`, `alt+backspace`, `ctrl+j` | alt-screen viewport + composer Editor | NOT reused by the workspace | untouched |
+| `ctrl+c`/`ctrl+d`/`ctrl+l`/`ctrl+shift+left/right`/`f1`/`esc` | existing App bindings | unchanged; popup-Esc precedence documented | untouched |
+
+### Terminal / OS interception risks (documented, with fallbacks)
+
+- **macOS Mission Control** defaults to Ctrl+←/→ ("Move a space"): on stock macOS these
+  keys may never reach the terminal. Fallbacks: `/workspace split|chat|editor`, F6 focus
+  cycle, and the footer workspace hints.
+- **macOS input-source switch** defaults to Ctrl+Space: completion fallback is the
+  command/palette path (`/editor complete`, queued).
+- Some terminals map Ctrl+T (new tab) or Ctrl+Shift+W/Ctrl+W (close tab); `/explorer`
+  and the notch grip remain the fallbacks. Ctrl+W is never bound globally: it stays
+  editor-region-only so the composer's delete-word is intact.
+- Shift+F-keys and Ctrl+Shift+A only arrive fully under the Kitty keyboard protocol;
+  legacy terminals keep Ctrl+A (select all) and get the attach command instead.
 
 ## 5. Source map (integration seams, verified)
 

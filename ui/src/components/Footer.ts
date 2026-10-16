@@ -26,6 +26,12 @@ export class Footer implements Component {
 	mode = "ask";
 	/** Subagents in the visible session's family (0 hides the segment). */
 	subagents = 0;
+	/**
+	 * Workspace key hints (e.g. "Ctrl+T explorer · Ctrl+←/→ panes"), set by
+	 * the App only while the workspace is available. Hidden first when the
+	 * row runs out of room; compact viewports drop it entirely.
+	 */
+	workspaceHints = "";
 	private currentStatus: FooterStatus = "ready";
 	/** Compact single-row mode for short viewports (hints hide first). */
 	compact = false;
@@ -138,8 +144,16 @@ export class Footer implements Component {
 			const budget = Math.max(0, room - visibleWidth(tail) - 3);
 			left = budget >= 4 ? `${truncateToWidth(metadata, budget)} / ${tail}` : truncateToWidth(tail, room);
 		}
-		const right = !this.compact && visibleWidth(left) + visibleWidth(hint) + 5 <= width
+		const baseRight = !this.compact && visibleWidth(left) + visibleWidth(hint) + 5 <= width
 			? `${hint}  ${square}` : square;
+		// Workspace hints sit before the shortcuts hint and are the first
+		// segment dropped when the row is too tight (plan §12 discoverability).
+		let right = baseRight;
+		if (this.workspaceHints && !this.compact) {
+			const ws = theme.dim(this.workspaceHints);
+			const withWs = `${ws} · ${baseRight}`;
+			if (visibleWidth(left) + visibleWidth(withWs) + 5 <= width) right = withWs;
+		}
 		const gap = Math.max(0, width - visibleWidth(left) - visibleWidth(right));
 		return [truncateToWidth(`${left}${" ".repeat(gap)}${right}`, width)];
 	}
