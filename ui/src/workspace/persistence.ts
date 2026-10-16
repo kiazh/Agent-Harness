@@ -115,6 +115,10 @@ function sanitizeCursors(value: unknown): Record<string, CursorPosition> | undef
  * unless the value is an object at the current version; every field falls
  * back to its default instead of propagating junk, and unknown keys are
  * dropped (never copied).
+ *
+ * `explorerRequested` defaults to true when the field is absent (fresh states
+ * and older stored documents open the explorer); an explicitly stored boolean
+ * is honored as-is.
  */
 function sanitizeState(value: unknown): WorkspacePersistedState | undefined {
 	if (!isRecord(value) || value.version !== WORKSPACE_STATE_VERSION) return undefined;
@@ -123,9 +127,10 @@ function sanitizeState(value: unknown): WorkspacePersistedState | undefined {
 		version: WORKSPACE_STATE_VERSION,
 		requestedMode: requestedMode === "chat" || requestedMode === "editor" ? requestedMode : "split",
 		splitRatio: clampSplitRatio(finiteNumber(value.splitRatio) ?? Number.NaN),
-		explorerRequested: value.explorerRequested === true,
+		explorerRequested: value.explorerRequested === undefined ? true : value.explorerRequested === true,
 		openUris: sanitizeUriList(value.openUris),
 	};
+	if (value.chatSide === "left" || value.chatSide === "right") state.chatSide = value.chatSide;
 	const width = finiteNumber(value.explorerWidth);
 	if (width !== undefined && width > 0) state.explorerWidth = Math.floor(width);
 	const activeUri = sanitizeUri(value.activeUri);

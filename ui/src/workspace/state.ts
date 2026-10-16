@@ -18,6 +18,9 @@ export type FocusRegion =
 /** Which single pane a narrow terminal falls back to. */
 export type PanePreference = "chat" | "editor";
 
+/** Which side of a split the chat pane occupies (default "left"). */
+export type ChatSide = "left" | "right";
+
 export interface Rect {
 	x: number;
 	y: number;
@@ -34,6 +37,8 @@ export interface LayoutInput {
 	explorerRequested: boolean;
 	/** Which pane the user last meaningfully focused; drives narrow fallback. */
 	preferredPane: PanePreference;
+	/** Chat placement in a split; absent means "left" (the compatibility default). */
+	chatSide?: ChatSide;
 }
 
 export interface LayoutResult {
@@ -41,6 +46,8 @@ export interface LayoutResult {
 	chat?: Rect;
 	editor?: Rect;
 	explorer?: Rect;
+	/** One-column explorer grip at the viewport's far right (editor visible only). */
+	grip?: Rect;
 	explorerOverlay: boolean;
 	reason?: "narrow" | "short" | "requested";
 }
@@ -53,6 +60,8 @@ export const LAYOUT_BUDGETS = {
 	minEditorColumns: 48,
 	/** Divider between chat and editor. */
 	dividerColumns: 1,
+	/** Explorer grip strip at the viewport's far-right edge (editor modes). */
+	gripColumns: 1,
 	/** Explorer preferred width when docked. */
 	explorerPreferred: 28,
 	explorerMin: 20,
@@ -68,11 +77,14 @@ export const LAYOUT_BUDGETS = {
 } as const;
 
 /**
- * Derived split threshold: both pane minima plus the divider.
+ * Derived split threshold: both pane minima plus the divider and the grip.
  * Never hardcode 89 elsewhere; import this.
  */
 export const SPLIT_MINIMUM_COLUMNS =
-	LAYOUT_BUDGETS.minChatColumns + LAYOUT_BUDGETS.minEditorColumns + LAYOUT_BUDGETS.dividerColumns;
+	LAYOUT_BUDGETS.minChatColumns +
+	LAYOUT_BUDGETS.minEditorColumns +
+	LAYOUT_BUDGETS.dividerColumns +
+	LAYOUT_BUDGETS.gripColumns;
 
 /** Persisted, non-sensitive workspace metadata (plan §21). */
 export interface WorkspacePersistedState {
@@ -81,6 +93,8 @@ export interface WorkspacePersistedState {
 	splitRatio: number;
 	explorerRequested: boolean;
 	explorerWidth?: number;
+	/** Chat placement; absent means "left" (older stored states). */
+	chatSide?: ChatSide;
 	openUris: string[];
 	activeUri?: string;
 	cursorByUri?: Record<string, { offset: number; anchorOffset?: number; scrollLine?: number }>;
@@ -93,7 +107,9 @@ export function defaultWorkspacePersistedState(): WorkspacePersistedState {
 		version: WORKSPACE_STATE_VERSION,
 		requestedMode: "split",
 		splitRatio: LAYOUT_BUDGETS.defaultSplitRatio,
-		explorerRequested: false,
+		// Fresh state opens the explorer: the tree is one click away and the
+		// far-right grip keeps a visible affordance when it is closed.
+		explorerRequested: true,
 		openUris: [],
 	};
 }

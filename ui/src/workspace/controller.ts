@@ -48,6 +48,7 @@ import {
 import { adjustSplitRatio, clampSplitRatio } from "./layout.ts";
 import {
 	WORKSPACE_STATE_VERSION,
+	type ChatSide,
 	type FocusRegion,
 	type LayoutInput,
 	type PanePreference,
@@ -362,8 +363,9 @@ export class WorkspaceController {
 	/** Mode a chat maximize restores to; only "split" | "editor" are non-chat. */
 	private restoreMode: "split" | "editor" = "split";
 	private splitRatioValue = 0.5;
-	private explorerRequested = false;
+	private explorerRequested = true;
 	private preferredPane: PanePreference = "chat";
+	private chatSideValue: ChatSide = "left";
 
 	// Per-document mirror sync.
 	private readonly sync = new Map<string, DocumentSyncState>();
@@ -516,6 +518,7 @@ export class WorkspaceController {
 			splitRatio: clampSplitRatio(this.splitRatioValue),
 			explorerRequested: this.explorerRequested,
 			preferredPane: this.preferredPane,
+			chatSide: this.chatSideValue,
 		};
 	}
 
@@ -568,6 +571,23 @@ export class WorkspaceController {
 	toggleExplorer(): void {
 		this.explorerRequested = !this.explorerRequested;
 		this.afterIntentChange();
+	}
+
+	/**
+	 * Place the chat pane on the given side of a split (persisted like the
+	 * ratio). The explorer drawer always docks at the viewport's far right;
+	 * with "right" it sits right of the chat column.
+	 */
+	setChatSide(side: ChatSide): void {
+		if (side !== "left" && side !== "right") return;
+		if (side === this.chatSideValue) return;
+		this.chatSideValue = side;
+		this.afterIntentChange();
+	}
+
+	/** Current chat placement ("left" unless an explicit swap was stored). */
+	get chatSide(): ChatSide {
+		return this.chatSideValue;
 	}
 
 	/**
@@ -1046,6 +1066,7 @@ export class WorkspaceController {
 				requestedMode: this.requestedMode,
 				splitRatio: clampSplitRatio(this.splitRatioValue),
 				explorerRequested: this.explorerRequested,
+				chatSide: this.chatSideValue,
 			});
 			this.persistFailureNotified = false;
 		} catch (error) {
@@ -1070,6 +1091,9 @@ export class WorkspaceController {
 		this.requestedMode = state.requestedMode;
 		this.splitRatioValue = clampSplitRatio(state.splitRatio);
 		this.explorerRequested = state.explorerRequested === true;
+		// Absent/unknown sides fall back to the default, never to the previous
+		// root's side (each stored document is self-contained).
+		this.chatSideValue = state.chatSide === "right" ? "right" : "left";
 		this.requestRenderSafe();
 	}
 
@@ -1125,6 +1149,7 @@ export class WorkspaceController {
 			requestedMode: this.requestedMode,
 			splitRatio: clampSplitRatio(this.splitRatioValue),
 			explorerRequested: this.explorerRequested,
+			chatSide: this.chatSideValue,
 			openUris,
 		};
 		const activeId = this.tabs.activeDocumentId();

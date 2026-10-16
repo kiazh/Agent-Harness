@@ -1,6 +1,8 @@
-// Workspace composition (plan §7): the divider plus retained editor/explorer
-// columns that AppShell places beside the chat column. Every pane rectangle
-// comes from computeLayout(); this module never re-derives a split.
+// Workspace composition (plan §7 + UX batch): the divider, the far-right
+// explorer grip, and the retained editor/explorer columns that AppShell places
+// beside the chat transcript. Every pane rectangle comes from computeLayout();
+// this module never re-derives a split. The composer lives in the shell root
+// as a full-width row (AppShell), never inside this row.
 //
 // Injected components are never recreated — recomposition only swaps stack
 // wrappers around the same instances, so editor scroll/selection state and
@@ -14,18 +16,23 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { theme } from "../design/theme.ts";
-import { clampSplitRatio, computeLayout } from "../workspace/layout.ts";
+import { chatIsRight, clampSplitRatio, computeLayout } from "../workspace/layout.ts";
 import { LAYOUT_BUDGETS, type LayoutInput, type LayoutResult, type Rect } from "../workspace/state.ts";
 
 export interface WorkspaceShellOptions {
 	/**
-	 * New persisted split ratio computed from a divider drag. Keyboard resize
-	 * (a later task) calls this same hook; the app persists the value and feeds
-	 * it back through AppShell.setWorkspaceState.
+	 * New persisted split ratio computed from a divider drag (or a divider
+	 * double-click reset). The app persists the value and feeds it back through
+	 * AppShell.setWorkspaceState.
 	 */
 	onRatioChange(ratio: number): void;
 	/** The composed columns changed (geometry or injected slots); rebuild the root. */
 	onResizeDemand?(): void;
+	/**
+	 * The far-right grip was clicked: toggle the explorer. Optional so hosts
+	 * without an explorer wiring stay composable (the grip stays inert).
+	 */
+	onExplorerToggle?(): void;
 }
 
 function sameRect(a: Rect | undefined, b: Rect | undefined): boolean {
@@ -41,7 +48,8 @@ export function sameLayoutGeometry(a: LayoutResult | undefined, b: LayoutResult 
 		&& a.explorerOverlay === b.explorerOverlay
 		&& sameRect(a.chat, b.chat)
 		&& sameRect(a.editor, b.editor)
-		&& sameRect(a.explorer, b.explorer);
+		&& sameRect(a.explorer, b.explorer)
+		&& sameRect(a.grip, b.grip);
 }
 
 /** Placeholder occupying a geometry-reserved column until its component arrives. */
@@ -79,17 +87,22 @@ export class WorkspaceDivider implements Component {
 
 	/**
 	 * Map a pointer screen column to a persisted ratio through the last
-	 * snapshot: the pointer column is the chat pane width the user is asking
-	 * for, and the ratio divides the same usable span computeLayout used.
+	 * snapshot: the pointer column is the pane width the user is asking for
+	 * (chat on the left, editor on the right), and the ratio divides the same
+	 * resizable span computeLayout used (divider and grip excluded).
 	 */
 	private ratioAt(screenX: number): number | undefined {
 		const result = this.result;
 		if (!result || result.effectiveMode !== "split" || !result.chat || !result.editor) return undefined;
 		const total = result.chat.columns + LAYOUT_BUDGETS.dividerColumns + result.editor.columns
-			+ (result.explorer?.columns ?? 0);
-		const usable = total - LAYOUT_BUDGETS.dividerColumns;
+			+ (result.explorer?.columns ?? 0) + (result.grip?.columns ?? 0);
+		const usable =
+			total - LAYOUT_BUDGETS.dividerColumns - (result.grip?.columns ?? 0);
 		if (usable <= 0) return undefined;
-		return clampSplitRatio(screenX / usable);
+		// With the chat on the right the pointer column is the EDITOR width
+		// asked for, i.e. the mirror of the same ratio.
+		const requested = chatIsRight(result) ? usable - screenX : screenX;
+		return clampSplitRatio(requested / usable);
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -113,8 +126,19 @@ export class WorkspaceDivider implements Component {
 				if (!this.dragging) return undefined;
 				return { handled: true, render: false };
 			}
-			case "release":
 			case "click": {
+				// Double-click resets the 50/50 split (one click of a double-click
+				// sequence never resized anything, so the first click stays inert).
+				if ((event.clickCount ?? 1) >= 2) {
+					this.dragging = false;
+					this.options.onRatioChange(LAYOUT_BUDGETS.defaultSplitRatio);
+					return { handled: true };
+				}
+				if (!this.dragging) return undefined;
+				this.dragging = false;
+				return { handled: true };
+			}
+			case "release": {
 				if (!this.dragging) return undefined;
 				this.dragging = false;
 				return { handled: true };
@@ -147,13 +171,57 @@ export class WorkspaceDivider implements Component {
 }
 
 /**
- * Owns the workspace half of the shell: the divider, the retained editor and
- * explorer components, and the latest LayoutResult. AppShell asks for
- * fixed-basis HStack entries and does the linear composition itself.
+ * One-column explorer grip at the viewport's far right: a faint notch at the
+ * top and a mid-row hint; a click toggles the explorer through the host's
+ * callback. Deliberately tiny chrome: it never takes focus and never widens
+ * beyond its single geometry column.
+ */
+export class ExplorerGrip implements Component {
+	private readonly options: WorkspaceShellOptions;
+	private result: LayoutResult | undefined;
+
+	constructor(options: WorkspaceShellOptions) {
+		this.options = options;
+	}
+
+	setResult(result: LayoutResult | undefined): void {
+		this.result = result;
+	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.button !== "left") return undefined;
+		// Completed clicks only: a press falls through to the renderer's click
+		// synthesis, so one gesture is exactly one toggle.
+		if (event.type !== "click") return undefined;
+		if (!this.options.onExplorerToggle) return undefined;
+		this.options.onExplorerToggle();
+		return { handled: true, render: true };
+	}
+
+	render(width: number): string[] {
+		if (width <= 0) return [];
+		const rows = this.result?.editor?.rows ?? this.result?.chat?.rows ?? 0;
+		if (rows <= 0) return [];
+		const lines = Array.from({ length: rows }, () => " ");
+		lines[0] = theme.dim("▐");
+		const mid = Math.floor(rows / 2);
+		if (mid > 0 && mid < rows) lines[mid] = theme.dim("‹");
+		return lines;
+	}
+
+	invalidate(): void {}
+}
+
+/**
+ * Owns the workspace half of the shell: the divider, the far-right explorer
+ * grip, the retained editor and explorer components, and the latest
+ * LayoutResult. AppShell asks for fixed-basis HStack entries and does the
+ * linear composition itself.
  */
 export class WorkspaceShell {
 	private readonly options: WorkspaceShellOptions;
 	private readonly dividerComponent: WorkspaceDivider;
+	private readonly gripComponent: ExplorerGrip;
 	private readonly editorPlaceholder = blankComponent();
 	private readonly explorerPlaceholder = blankComponent();
 	private input: LayoutInput | undefined;
@@ -164,6 +232,7 @@ export class WorkspaceShell {
 	constructor(tui: TUI, options: WorkspaceShellOptions) {
 		this.options = options;
 		this.dividerComponent = new WorkspaceDivider(tui, options);
+		this.gripComponent = new ExplorerGrip(options);
 	}
 
 	/** Latest computed geometry (undefined until the first setState). */
@@ -194,6 +263,11 @@ export class WorkspaceShell {
 		return this.dividerComponent;
 	}
 
+	/** The far-right explorer grip (one column, editor modes only). */
+	get grip(): ExplorerGrip {
+		return this.gripComponent;
+	}
+
 	/**
 	 * Store intent and recompute geometry. A rebuild is demanded only when the
 	 * composed tree changes (LayoutResult field compare), so streaming state
@@ -205,6 +279,7 @@ export class WorkspaceShell {
 		const changed = !sameLayoutGeometry(this.result, next);
 		this.result = next;
 		this.dividerComponent.setResult(next);
+		this.gripComponent.setResult(next);
 		if (changed) this.options.onResizeDemand?.();
 	}
 
@@ -223,32 +298,61 @@ export class WorkspaceShell {
 	}
 
 	/**
-	 * HStack entries for the workspace columns, always derived from the given
-	 * LayoutResult (fixed basis widths): divider, editor, docked explorer.
-	 * Pass `layout` from this shell — geometry stays single-sourced.
+	 * HStack entries in visual order for the composed workspace row, always
+	 * derived from the given LayoutResult (fixed basis widths). Pass `layout`
+	 * from this shell — geometry stays single-sourced. When `chatEntry` is
+	 * provided the chat column is spliced in on the geometry's side; the grip
+	 * always closes the row so it sits at the viewport's far right.
 	 */
-	entries(result: LayoutResult | undefined): StackEntry[] {
+	entries(result: LayoutResult | undefined, chatEntry?: StackEntry): StackEntry[] {
 		if (!result) return [];
+		const gripEntry: StackEntry | undefined = result.grip
+			? { component: this.gripComponent, basis: result.grip.columns, shrink: 0, grow: 0 }
+			: undefined;
 		if (result.effectiveMode === "split" && result.chat && result.editor) {
-			const entries: StackEntry[] = [
-				{ component: this.dividerComponent, basis: LAYOUT_BUDGETS.dividerColumns, shrink: 0, grow: 0 },
-				{ component: this.editorComponent ?? this.editorPlaceholder, basis: result.editor.columns, shrink: 0, grow: 0 },
-			];
+			const dividerEntry: StackEntry = {
+				component: this.dividerComponent,
+				basis: LAYOUT_BUDGETS.dividerColumns,
+				shrink: 0,
+				grow: 0,
+			};
+			const editorEntry: StackEntry = {
+				component: this.editorComponent ?? this.editorPlaceholder,
+				basis: result.editor.columns,
+				shrink: 0,
+				grow: 0,
+			};
+			const trailing: StackEntry[] = [];
 			if (result.explorer) {
 				// Docked: its own column. Overlay mode is only reported, not composed.
-				entries.push({
+				trailing.push({
 					component: this.explorerComponent ?? this.explorerPlaceholder,
 					basis: result.explorer.columns,
 					shrink: 0,
 					grow: 0,
 				});
 			}
-			return entries;
+			if (gripEntry) trailing.push(gripEntry);
+			const chat: StackEntry = chatEntry ?? {
+				component: this.editorPlaceholder,
+				basis: result.chat.columns,
+				shrink: 0,
+				grow: 0,
+			};
+			// Chat on the left closes the row's leading edge; on the right it
+			// sits between the divider and the explorer drawer.
+			return chatIsRight(result)
+				? [editorEntry, dividerEntry, chat, ...trailing]
+				: [chat, dividerEntry, editorEntry, ...trailing];
 		}
 		if (result.effectiveMode === "editor" && result.editor) {
-			return [
-				{ component: this.editorComponent ?? this.editorPlaceholder, basis: result.editor.columns, shrink: 0, grow: 0 },
-			];
+			const editorEntry: StackEntry = {
+				component: this.editorComponent ?? this.editorPlaceholder,
+				basis: result.editor.columns,
+				shrink: 0,
+				grow: 0,
+			};
+			return gripEntry ? [editorEntry, gripEntry] : [editorEntry];
 		}
 		return [];
 	}

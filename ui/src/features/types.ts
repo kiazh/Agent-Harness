@@ -3,7 +3,7 @@
 import type { AutocompleteItem, SelectItem, SlashCommand } from "@earendil-works/pi-tui";
 import type { ConfigResult, GatewayEvent, HistoryEntry, SessionInfo } from "../protocol.ts";
 import type { WorkspaceController } from "../workspace/controller.ts";
-import type { WorkspaceMode } from "../workspace/state.ts";
+import type { ChatSide, WorkspaceMode } from "../workspace/state.ts";
 
 export type NoticeKind = "info" | "plain" | "success" | "warning" | "error";
 
@@ -175,12 +175,22 @@ export interface WorkspaceHost {
 	restoreSplit(): void;
 	/** Toggle/open/close the explorer column (loads the listing on open). */
 	setExplorer(open: boolean): void;
+	/** Close the active editor tab through the dirty-guarded decision flow. */
+	closeActiveTab(): void;
+	/** Place the chat pane left/right of a split; persisted like the ratio. */
+	setChatSide(side: ChatSide): void;
 	/** Re-sync shell geometry after a direct controller layout call (setRatio). */
 	layoutChanged(): void;
 	/** Open (or focus) the Problems pane; app-owned layout and focus. */
 	openProblems(): void;
 	/** Open the Quick Open overlay; app-owned overlay and focus. */
 	openQuickOpen(): void;
+	/**
+	 * Explicit user command to reopen the workspace at another folder
+	 * (`/workspace open <path>`). Clean tabs from the previous root close;
+	 * dirty buffers always stay. Optional so other hosts stay compatible.
+	 */
+	openRoot?(path: string): Promise<{ ok: boolean; message: string }>;
 	/** Dirty local buffers for the close confirmation (bounded basenames). */
 	dirtyBuffers(): { count: number; names: string[] };
 }

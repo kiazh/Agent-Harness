@@ -560,7 +560,8 @@ export class EditorView implements Component, Focusable {
 		const x = Math.floor(event.x);
 		if (x < gutterCells) {
 			// Gutter: claim focus but never move the caret (plan §2 chrome).
-			if (event.type === "press" && event.button === "left") {
+			// A synthesized click (no press delivered to the view) still claims it.
+			if ((event.type === "press" || event.type === "click") && event.button === "left") {
 				this.onFocusRequested?.();
 				return { focus: true, handled: true };
 			}
@@ -593,6 +594,12 @@ export class EditorView implements Component, Focusable {
 				} else {
 					this.moveCaret(documentId, offset, false);
 				}
+			} else {
+				// Self-sufficient single click: position the caret even when the
+				// press was not delivered to the view, so a direct viewport click
+				// restores the caret immediately (never waits for a keystroke).
+				// With a delivered press this is the same offset and a no-op.
+				this.moveCaret(documentId, offset, false);
 			}
 			this.onFocusRequested?.();
 			return { handled: true, focus: true };

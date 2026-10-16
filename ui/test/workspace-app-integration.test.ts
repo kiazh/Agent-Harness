@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+	CURSOR_MARKER,
 	isViewportTUI,
 	stripTerminalSequences,
 	TuiAltScreen,
@@ -239,6 +240,7 @@ function configureClient(client: FakeClient): void {
 	client.responses.set("workspace.close", { closed: true });
 	client.responses.set("workspace.save", { ok: true, revision: "rev-2", savedUiVersion: 0 });
 	client.responses.set("workspace.lspStatus", { servers: [] });
+	client.responses.set("workspace.list", { entries: [], nextCursor: null, exclusions: [], truncated: false });
 	client.responses.set("workspace.quickOpen", {
 		entries: [],
 		total: 0,
@@ -273,9 +275,10 @@ function captureNotices(app: App): Array<{ text: string; kind: unknown }> {
 /** Internal handles the production wiring owns (read-only test access). */
 function internals(app: App): {
 	integration?: {
-		controller: { phase: string; identity?: { workspaceId: string }; getLayoutInput(): { requestedMode: string; explorerRequested: boolean } };
-		store: { documents(): Array<{ id: string; uri: string; dirty: boolean }>; insertText(id: string, text: string): unknown; getViewState(id: string): { cursorOffset: number } | undefined };
-		tabs: { activeDocumentId(): string | null; count(): number };
+		controller: { phase: string; identity?: { workspaceId: string }; getLayoutInput(): { requestedMode: string; explorerRequested: boolean; splitRatio: number; preferredPane: string; chatSide?: string }; mode: string; setChatSide(side: "left" | "right"): void };
+		store: { documents(): Array<{ id: string; uri: string; dirty: boolean }>; insertText(id: string, text: string): unknown; setSelection(id: string, selection: { cursorOffset: number }): unknown; getViewState(id: string): { cursorOffset: number } | undefined; applyEdit(id: string, edits: Array<{ range: { startOffset: number; endOffset: number }; text: string }>): unknown };
+		tabs: { activeDocumentId(): string | null; count(): number; list(): Array<{ documentId: string }> };
+		view: { focused: boolean };
 		pane: {
 			render(width: number): string[];
 			handleIntelligenceKey(data: string): string;
@@ -283,7 +286,7 @@ function internals(app: App): {
 		};
 		problemsModel: { rows(): Array<{ message: string }> };
 	};
-	workspaceLayout?: { effectiveMode: string; editor?: { columns: number }; chat?: { columns: number } };
+	workspaceLayout?: { effectiveMode: string; editor?: { columns: number; x: number }; chat?: { columns: number; x: number }; grip?: { columns: number; x: number }; explorer?: { columns: number; x: number } };
 	workspaceLayoutActive: boolean;
 	activeRegion: string;
 	problemsOpen: boolean;
@@ -292,6 +295,8 @@ function internals(app: App): {
 	workspaceUnsupported: boolean;
 	running: boolean;
 	exiting: boolean;
+	editor: object;
+	shell: { onWorkspaceExplorerToggle?: () => void };
 	openWorkspacePath(path: string, options?: { preview?: boolean }): Promise<void>;
 } {
 	return app as unknown as ReturnType<typeof internals>;
@@ -418,6 +423,7 @@ test("a persisted state restores mode, remembered files and cursors", async () =
 				requestedMode: "editor",
 				splitRatio: 0.6,
 				explorerRequested: false,
+				chatSide: "right",
 				openUris: ["file:///ws/a.ts"],
 				activeUri: "file:///ws/a.ts",
 				cursorByUri: { "file:///ws/a.ts": { offset: 3 } },
@@ -430,6 +436,11 @@ test("a persisted state restores mode, remembered files and cursors", async () =
 	await settle();
 
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "editor", "stored editor mode applied");
+	assert.equal(
+		internals(app).integration?.controller.getLayoutInput().chatSide,
+		"right",
+		"the stored chat side survives the open-time intent merge",
+	);
 	const reads = client.requests.filter((entry) => entry.method === "workspace.read");
 	assert.equal(reads.length, 1, "remembered file reopened");
 	assert.equal(reads[0]?.params.uri, "file:///ws/a.ts");
@@ -447,6 +458,8 @@ interface MockTerminal extends Terminal {
 	writes: string[];
 	columns: number;
 	rows: number;
+	/** Captured by start(): the exact path real terminal input takes. */
+	onInput?: (data: string) => void;
 }
 
 function mockTerminal(columns: number, rows: number): MockTerminal {
@@ -455,7 +468,9 @@ function mockTerminal(columns: number, rows: number): MockTerminal {
 		columns,
 		rows,
 		kittyProtocolActive: false,
-		start() {},
+		start(onInput: (data: string) => void) {
+			this.onInput = onInput;
+		},
 		stop() {},
 		async drainInput() {},
 		write(data: string) {
@@ -470,6 +485,11 @@ function mockTerminal(columns: number, rows: number): MockTerminal {
 		setTitle() {},
 		setProgress() {},
 	};
+}
+
+/** SGR mouse sequence; columns/rows are 0-based like the events the TUI emits. */
+function sgr(button: number, x: number, y: number, release = false): string {
+	return `\x1b[<${button};${x + 1};${y + 1}${release ? "m" : "M"}`;
 }
 
 async function bootFramed(columns: number, rows: number): Promise<{
@@ -522,24 +542,293 @@ test("at 80 columns the frame stays a single chat pane (narrow fallback)", async
 	}
 });
 
+test("a direct viewport click restores the caret with no key input (item 1)", async () => {
+	const { app, tui, term } = await bootFramed(160, 48);
+	try {
+		const state = internals(app);
+		await state.openWorkspacePath("src/a.ts");
+		await settle();
+		tui.renderNow(true);
+		// Capture the frame before the toolkit extracts the cursor marker.
+		const captured: string[] = [];
+		const original = (tui as unknown as { extractCursorPosition(lines: string[], height: number): unknown }).extractCursorPosition;
+		(tui as unknown as { extractCursorPosition(lines: string[], height: number): unknown }).extractCursorPosition = function (
+			lines: string[],
+			height: number,
+		) {
+			captured.length = 0;
+			captured.push(...lines);
+			return original.call(this, lines, height);
+		};
+
+		// The composer had focus; the region tracker still says so (mouse focus
+		// on the composer never rewrote it), so the A2 path must fire on click.
+		tui.setFocus(state.editor as never);
+		(state as unknown as { activeRegion: string }).activeRegion = "chat-composer";
+		tui.renderNow(true);
+		assert.equal(state.integration?.view.focused, false, "editor view starts unfocused");
+		const frame = tui.getScreenLines().map(stripTerminalSequences);
+		const row = frame.findIndex((line) => line.includes("hello"));
+		assert.ok(row >= 0, `editor viewport row visible: ${frame.slice(0, 6).join(" | ")}`);
+		const layout = state.workspaceLayout;
+		if (!layout?.editor) assert.fail("split geometry missing");
+
+		// Click inside the viewport (not the tab strip): press + release, no keys.
+		const inject = term.onInput!;
+		const x = layout.editor.x + 4;
+		inject(sgr(0, x, row));
+		inject(sgr(0, x, row, true));
+		tui.renderNow(true);
+
+		const markers = captured.join("\n").split(CURSOR_MARKER).length - 1;
+		assert.equal(markers, 1, "exactly one CURSOR_MARKER after the click, with no key input");
+		assert.equal(state.integration?.view.focused, true, "the view owns the caret");
+		assert.equal(state.activeRegion, "editor", "A2's onFocusRequested → noteRegionFocus fired");
+		assert.equal(state.integration?.controller.getLayoutInput().preferredPane, "editor");
+		const caretLine = captured.find((line) => line.includes(CURSOR_MARKER));
+		assert.ok(caretLine !== undefined, "a caret line exists");
+		assert.ok(
+			stripTerminalSequences(caretLine).includes("hello"),
+			`the caret sits on the clicked viewport line: ${stripTerminalSequences(caretLine ?? "")}`,
+		);
+	} finally {
+		await app.exit();
+	}
+});
+
 // ─── keys ───────────────────────────────────────────────────────────────────
 
-test("Ctrl+Right toggles chat maximize and back to split (global wins when delivered)", async () => {
+test("Ctrl+Right maximizes chat; Ctrl+Left always returns to the 50/50 split", async () => {
 	const { app, tui } = makeApp();
 	await app.start();
 	await waitForWorkspace(app);
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split");
 
+	// Ctrl+Left while already split is a no-op, never a second toggle.
+	tui.press("\x1b[1;5D");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "already split: no-op");
+	assert.equal(internals(app).integration?.controller.getLayoutInput().requestedMode, "split");
+
 	tui.press("\x1b[1;5C");
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat", "chat maximized");
+	tui.press("\x1b[1;5D");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "Ctrl+Left restores the split");
+	assert.equal(internals(app).integration?.controller.getLayoutInput().requestedMode, "split");
+
+	// The mode-hop sequence that used to strand the editor: editor maximize →
+	// chat → Ctrl+Left must still land on the split, not back on editor.
+	await runCommand({ name: "editor", args: "maximize" }, app);
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "editor");
 	tui.press("\x1b[1;5C");
-	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "restored to the split");
-	// The workspace host records the persistence intent too.
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat");
+	tui.press("\x1b[1;5D");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "the 50/50 split stays reachable");
 	assert.equal(internals(app).integration?.controller.getLayoutInput().requestedMode, "split");
 	await app.exit();
 });
 
-test("F6 cycles composer → editor and retargets TUI focus", async () => {
+test("Ctrl+W closes the active tab and guards dirty buffers with the decision dialog", async () => {
+	const { app, tui, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	await internals(app).openWorkspacePath("a.ts");
+	const integration = internals(app).integration!;
+	assert.equal(integration.tabs.count(), 1);
+
+	// Clean close: one keypress, no dialog.
+	tui.press("\x17");
+	await settle();
+	assert.equal(integration.tabs.count(), 0, "the clean tab closed");
+	assert.equal(internals(app).activeRegion, "editor");
+
+	// Dirty close: the Save/Discard/Cancel decision owns the flow.
+	await internals(app).openWorkspacePath("b.ts");
+	const documentId = integration.tabs.activeDocumentId()!;
+	integration.store.insertText(documentId, "dirty!");
+	const picks: Array<{ title: string }> = [];
+	(app as unknown as { pick: (title: string) => Promise<{ value: string }> }).pick = async (title: string) => {
+		picks.push({ title });
+		return { value: "cancel" };
+	};
+	tui.press("\x17");
+	await settle();
+	assert.equal(integration.tabs.count(), 1, "Cancel keeps the dirty tab open");
+	assert.equal(picks.length, 1, "the decision dialog appeared exactly once");
+	assert.match(picks[0]!.title, /Close b\.ts\?/);
+	assert.equal(client.requests.filter((entry) => entry.method === "workspace.save").length, 0);
+
+	(app as unknown as { pick: () => Promise<{ value: string }> }).pick = async () => ({ value: "discard" });
+	tui.press("\x17");
+	await settle();
+	assert.equal(integration.tabs.count(), 0, "Discard closes through the same flow");
+	await app.exit();
+});
+
+test("/editor close closes the active tab through the dirty-guarded flow", async () => {
+	const { app } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	await internals(app).openWorkspacePath("a.ts");
+	const integration = internals(app).integration!;
+	assert.equal(internals(app).activeRegion, "editor");
+	await runCommand({ name: "editor", args: "close" }, app);
+	await settle();
+	assert.equal(integration.tabs.count(), 0, "/editor close closed the clean tab");
+	await app.exit();
+});
+
+test("/workspace ratio validates, clamps and resets", async () => {
+	const { app } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const printed: string[] = [];
+	(app as unknown as { print(text: string): void }).print = (text: string) => printed.push(text);
+
+	await runCommand({ name: "workspace", args: "ratio 0.62" }, app);
+	assert.equal(internals(app).integration?.controller.getLayoutInput().splitRatio, 0.62);
+	await runCommand({ name: "workspace", args: "ratio 0.9" }, app);
+	assert.equal(internals(app).integration?.controller.getLayoutInput().splitRatio, 0.75, "out-of-range clamps");
+	assert.ok(printed.at(-1)?.includes("0.75") && printed.at(-1)?.includes("clamped"), `clamp notice: ${printed.at(-1)}`);
+	await runCommand({ name: "workspace", args: "ratio 0.1" }, app);
+	assert.equal(internals(app).integration?.controller.getLayoutInput().splitRatio, 0.25, "clamps at the minimum");
+	await runCommand({ name: "workspace", args: "ratio reset" }, app);
+	assert.equal(internals(app).integration?.controller.getLayoutInput().splitRatio, 0.5, "reset is 0.5");
+	await runCommand({ name: "workspace", args: "ratio bogus" }, app);
+	assert.match(printed.at(-1) ?? "", /Usage: \/workspace ratio/);
+	assert.equal(internals(app).integration?.controller.getLayoutInput().splitRatio, 0.5, "junk never mutates the ratio");
+	await app.exit();
+});
+
+test("/workspace side swaps the panes; tabs and cursors are never reset", async () => {
+	const { app } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	await internals(app).openWorkspacePath("a.ts");
+	const integration = internals(app).integration!;
+	const documentId = integration.tabs.activeDocumentId()!;
+	integration.store.setSelection(documentId, { cursorOffset: 3 });
+
+	// Show the split geometry, then swap sides.
+	await runCommand({ name: "workspace", args: "split" }, app);
+	const before = internals(app).workspaceLayout;
+	if (!before?.chat || !before.editor) assert.fail("split geometry missing");
+	assert.ok(before.chat.x < before.editor.x);
+	await runCommand({ name: "workspace", args: "side right" }, app);
+	const after = internals(app).workspaceLayout;
+	if (!after?.chat || !after.editor) assert.fail("right-side geometry missing");
+	assert.equal(after.editor.x, 0, "the editor leads after the swap");
+	assert.ok(after.chat.x > after.editor.x, "the chat column moved right");
+	assert.ok(after.chat.columns >= 40 && after.editor.columns >= 48, "minima hold on both sides");
+	assert.equal(integration.tabs.count(), 1, "the swap never closes tabs");
+	assert.equal(integration.tabs.activeDocumentId(), documentId, "the active tab survives");
+	assert.equal(integration.store.getViewState(documentId)?.cursorOffset, 3, "cursor state survives");
+	assert.equal(internals(app).integration?.controller.getLayoutInput().chatSide, "right", "the side persists in intent");
+
+	await runCommand({ name: "workspace", args: "side left" }, app);
+	assert.equal(internals(app).integration?.controller.getLayoutInput().chatSide, "left");
+	await runCommand({ name: "workspace", args: "side sideways" }, app);
+	assert.equal(internals(app).integration?.controller.getLayoutInput().chatSide, "left", "junk sides are refused");
+	await app.exit();
+});
+
+test("the far-right grip toggles the explorer through the app's request path", async () => {
+	const { app, tui } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const state = internals(app);
+	assert.equal(state.integration!.controller.getLayoutInput().explorerRequested, true, "fresh state opens the explorer");
+	assert.ok(internals(app).workspaceLayout?.explorer, "the tree is docked in the split");
+	internals(app).shell.onWorkspaceExplorerToggle?.();
+	assert.equal(state.integration!.controller.getLayoutInput().explorerRequested, false, "the grip closes the explorer");
+	assert.equal(internals(app).workspaceLayout?.explorer, undefined, "the drawer column is gone");
+	internals(app).shell.onWorkspaceExplorerToggle?.();
+	assert.equal(state.integration!.controller.getLayoutInput().explorerRequested, true, "the grip reopens it");
+	assert.ok(internals(app).workspaceLayout?.explorer, "the drawer docks again");
+	// Ctrl+T keeps its behavior alongside the grip.
+	tui.press("\x14");
+	assert.equal(state.integration!.controller.getLayoutInput().explorerRequested, false, "Ctrl+T still toggles");
+	tui.press("\x14");
+	assert.equal(state.integration!.controller.getLayoutInput().explorerRequested, true);
+	await app.exit();
+});
+
+test("a fresh workspace persists the explorer open; an explicit stored false stays closed", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	// The open-time intent write keeps the default (explorer open).
+	const writes = client.requests.filter((entry) => entry.method === "config.set");
+	const last = writes.at(-1)?.params.value;
+	assert.equal(typeof last, "string");
+	const document = JSON.parse(last as string) as { byRoot: Record<string, { explorerRequested: boolean }> };
+	assert.equal(document.byRoot["/ws"]?.explorerRequested, true, "fresh state is written open");
+	await app.exit();
+
+	// A stored document with an explicit false keeps it closed.
+	const explicit = JSON.stringify({
+		version: 1,
+		byRoot: {
+			"/ws": {
+				version: 1,
+				requestedMode: "split",
+				splitRatio: 0.5,
+				explorerRequested: false,
+				openUris: [],
+			},
+		},
+	});
+	const second = makeApp();
+	second.client.handlers.set("config.get", () => ({ config: { workspace_ui_state: explicit }, secrets: [] }));
+	await second.app.start();
+	await waitForWorkspace(second.app);
+	assert.equal(
+		internals(second.app).integration?.controller.getLayoutInput().explorerRequested,
+		false,
+		"the explicit stored false is honored",
+	);
+	assert.equal(internals(second.app).workspaceLayout?.explorer, undefined, "no drawer column");
+	await second.app.exit();
+
+	// An older stored document without the field parses to open.
+	const absent = JSON.stringify({
+		version: 1,
+		byRoot: {
+			"/ws": {
+				version: 1,
+				requestedMode: "split",
+				splitRatio: 0.5,
+				openUris: [],
+			},
+		},
+	});
+	const third = makeApp();
+	third.client.handlers.set("config.get", () => ({ config: { workspace_ui_state: absent }, secrets: [] }));
+	await third.app.start();
+	await waitForWorkspace(third.app);
+	assert.equal(
+		internals(third.app).integration?.controller.getLayoutInput().explorerRequested,
+		true,
+		"absent field defaults to explorer open",
+	);
+	assert.ok(internals(third.app).workspaceLayout?.explorer, "the drawer docks for older states too");
+	await third.app.exit();
+});
+
+test("the shortcuts picker lists Ctrl+W, drops /attach and documents the split keys", async () => {
+	const { app } = makeApp();
+	const items = (app as unknown as { shortcutItems(): Array<{ value: string; label: string; description?: string }> }).shortcutItems();
+	const values = items.map((item) => item.value);
+	assert.ok(values.includes("closetab"), "Ctrl+W row present");
+	assert.equal(values.includes("attach"), false, "/attach removed from the shortcut picker");
+	const closetab = items.find((item) => item.value === "closetab");
+	assert.equal(closetab?.label, "Ctrl+W — close tab");
+	const chatmax = items.find((item) => item.value === "chatmax");
+	assert.match(chatmax?.label ?? "", /Ctrl\+→ maximize chat · Ctrl\+← back to the 50\/50 split/);
+	const wsroot = items.find((item) => item.value === "wsroot");
+	assert.match(wsroot?.description ?? "", /ratio\|side/, "workspace subcommands stay discoverable");
+});
+
+test("F6 cycles composer → editor → explorer and retargets TUI focus", async () => {
 	const { app, tui } = makeApp();
 	await app.start();
 	await waitForWorkspace(app);
@@ -549,9 +838,16 @@ test("F6 cycles composer → editor and retargets TUI focus", async () => {
 	assert.equal(internals(app).activeRegion, "editor");
 	assert.equal(tui.focused, internals(app).integration?.pane, "editing focus moved to the pane");
 
+	// The explorer is open by default (fresh state), so it is part of the cycle.
+	tui.press("\x1b[17~");
+	assert.equal(internals(app).activeRegion, "explorer");
+	assert.notEqual(tui.focused, internals(app).integration?.pane);
+
 	tui.press("\x1b[17~");
 	assert.equal(internals(app).activeRegion, "chat-composer", "cycles back");
-	assert.notEqual(tui.focused, internals(app).integration?.pane);
+	// Shift+F6 walks backwards from the composer to the explorer.
+	tui.press("\x1b[17;2~");
+	assert.equal(internals(app).activeRegion, "explorer", "shift+F6 cycles in reverse");
 	await app.exit();
 });
 
@@ -790,5 +1086,80 @@ test("/editor maximize and /workspace split drive the shell through the host", a
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "editor");
 	await runCommand({ name: "workspace", args: "split" }, app);
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split");
+	await app.exit();
+});
+
+test("workspace.open prefers the authenticated absolute cwd over the redacted basename", async () => {
+	const { app, client } = makeApp();
+	client.responses.set("initialize", {
+		version: "1.0.0",
+		model: "m",
+		provider: "openrouter",
+		cwd: "ws-basename",
+		cwdFull: "/real/absolute/ws",
+		branch: "main",
+	});
+	await app.start();
+	await waitForWorkspace(app);
+	const opens = client.requests.filter((entry) => entry.method === "workspace.open");
+	assert.equal(opens.length, 1);
+	assert.equal(opens[0]?.params.root, "/real/absolute/ws", "absolute root, never the display basename");
+	await app.exit();
+});
+
+test("a backend exposing only the redacted basename stays chat-only (no bogus root)", async () => {
+	const { app, client } = makeApp();
+	client.responses.set("initialize", {
+		version: "1.0.0",
+		model: "m",
+		provider: "openrouter",
+		cwd: "ws-basename",
+		branch: "main",
+	});
+	await app.start();
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(internals(app).integration, undefined, "workspace never opens against a basename");
+	assert.equal(client.requests.filter((entry) => entry.method === "workspace.open").length, 0);
+	await app.exit();
+});
+
+test("/workspace open switches the root, closing clean tabs and keeping dirty ones", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	client.responses.set("workspace.list", { entries: [], nextCursor: null, exclusions: [], truncated: false });
+	await internals(app).openWorkspacePath("clean.ts", { preview: false });
+	await internals(app).openWorkspacePath("dirty.ts", { preview: false });
+	const integration = internals(app).integration!;
+	const dirtyTab = integration.tabs
+		.list()
+		.find((tab) => integration.store.documents().some((doc) => doc.id === tab.documentId && doc.uri.endsWith("dirty.ts")));
+	assert.ok(dirtyTab, "dirty document opened");
+	integration.store.applyEdit(dirtyTab.documentId, [{ range: { startOffset: 0, endOffset: 0 }, text: "x" }]);
+	assert.ok(integration.store.documents().some((doc) => doc.dirty), "buffer is dirty");
+
+	// The switch: the next workspace.open returns a different root binding.
+	client.handlers.set("workspace.open", () => ({
+		...workspaceIdentity(),
+		workspaceId: "ws2",
+		clientId: "cl2",
+		epoch: 2,
+		rootLabel: "other",
+		resolvedRoot: "/other",
+	}));
+	const printed: string[] = [];
+	(app as unknown as { print(text: string): void }).print = (text: string) => printed.push(text);
+	await runCommand({ name: "workspace", args: "open /other" }, app);
+
+	const lastOpen = client.requests.filter((entry) => entry.method === "workspace.open").at(-1);
+	assert.equal(lastOpen?.params.root, "/other", "requested the new folder explicitly");
+	assert.ok(printed.some((line) => line.includes("workspace: other")), "root label reported");
+	const remaining = integration.tabs
+		.list()
+		.map((tab) => integration.store.documents().find((doc) => doc.id === tab.documentId)?.uri ?? "");
+	assert.ok(remaining.some((uri) => uri.endsWith("dirty.ts")), "dirty tab kept across the switch");
+	assert.ok(!remaining.some((uri) => uri.endsWith("clean.ts")), "clean tab from the previous root closed");
+	// The kept dirty buffer triggers the quit review; answer it explicitly.
+	(app as unknown as { pick: () => Promise<{ value: string }> }).pick = async () => ({ value: "discard" });
 	await app.exit();
 });

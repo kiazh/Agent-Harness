@@ -13,6 +13,7 @@ import {
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import { EditorPane, disambiguatedTabLabels, uriDisplayPath } from "../src/components/EditorPane.ts";
+import { theme } from "../src/design/theme.ts";
 import { EditorStore, type DocumentRecord } from "../src/editor/model.ts";
 import { TabModel } from "../src/editor/tabs.ts";
 import { EditorView } from "../src/editor/view.ts";
@@ -162,7 +163,7 @@ test("pane renders tab strip, breadcrumb, viewport and status within its allocat
 	harness.pane.layout(10);
 	const rows = plain(harness.pane.render(80));
 	assert.equal(rows.length, 10);
-	assert.match(rows[0] ?? "", /\[main\.ts\]/);
+	assert.match(rows[0] ?? "", /\[main\.ts ✕\]/, "the active chip carries the close cell");
 	assert.match(rows[1] ?? "", /\/w\/src\/main\.ts/);
 	assert.match(rows[1] ?? "", /typescript/);
 	assert.match(rows[2] ?? "", /1 hello/);
@@ -174,6 +175,25 @@ test("pane renders tab strip, breadcrumb, viewport and status within its allocat
 			assert.ok(visibleWidth(row) <= width, `row exceeds ${width}: ${stripTerminalSequences(row)}`);
 		}
 	}
+});
+
+test("the tab strip and status rows carry a continuous surface fill", () => {
+	const harness = setup("hello");
+	harness.pane.layout(8);
+	const rows = harness.pane.render(80);
+	// eslint-disable-next-line no-control-regex -- terminal SGR sequences carry ESC
+	const fill = /\x1b\[48;[^m]*m/.exec(theme.toolBg("x"))?.[0] ?? "";
+	assert.ok(fill.length > 0, "the theme exposes a tool surface background");
+	assert.ok(rows[0]!.includes(fill), "tab strip row is grounded by the surface fill");
+	assert.ok(rows[7]!.includes(fill), "status row is grounded by the surface fill");
+	assert.ok(!rows[3]!.includes(fill), "viewport text stays on the plain surface");
+	for (const row of plain(rows)) assert.ok(visibleWidth(row) <= 80);
+	// Text markers survive the fill untouched.
+	assert.ok(harness.store.insertText(harness.doc.id, "!").ok);
+	const dirty = harness.pane.render(80);
+	assert.match(plain(dirty)[0] ?? "", /●/);
+	assert.match(plain(dirty)[7] ?? "", /●/);
+	assert.ok(dirty[0]!.includes(fill) && dirty[7]!.includes(fill));
 });
 
 test("layout() allocates viewport rows and render stays exactly that tall", () => {
@@ -274,13 +294,16 @@ test("clicking a tab selects it and its document; middle-click asks to close", (
 	const rows = plain(harness.pane.render(60));
 	const firstRow = rows[0] ?? "";
 	const x = firstRow.indexOf("[main.ts]");
-	assert.ok(x >= 0, `tab labels present: ${firstRow}`);
+	assert.ok(x >= 0, `inactive tab labels present: ${firstRow}`);
+	// Only the ACTIVE chip renders the close cell.
+	assert.ok(firstRow.includes("[other.ts ✕]"), `active chip carries the close cell: ${firstRow}`);
 	const click = harness.pane.handleMouse(mouseEvent({ type: "press", x: x + 1, y: 0, width: 60 }));
 	assert.deepEqual(click, { handled: true, focus: true });
 	assert.equal(harness.tabModel.activeDocumentId(), harness.doc.id);
 	assert.equal(harness.view.getViewState()?.documentId, harness.doc.id);
 	assert.deepEqual(harness.selected, [harness.doc.id]);
 	assert.ok(harness.renders() > 0);
+	assert.deepEqual(harness.closed, [], "a label click never closes");
 
 	const middle = harness.pane.handleMouse(
 		mouseEvent({ type: "press", button: "middle", x: x + 1, y: 0, width: 60 }),
@@ -288,6 +311,40 @@ test("clicking a tab selects it and its document; middle-click asks to close", (
 	assert.equal(middle?.handled, true);
 	assert.deepEqual(harness.closed, [harness.doc.id]);
 	assert.equal(harness.tabModel.count(), 2, "the pane never closes a tab by itself");
+});
+
+test("the active tab's ✕ cell closes through onCloseTab; the label still selects", () => {
+	const harness = setup("first");
+	const second = openDoc(harness.store, "second", { uri: "file:///w/src/other.ts" });
+	harness.openTab(second);
+	harness.pane.layout(6);
+	const rows = plain(harness.pane.render(80));
+	const strip = rows[0] ?? "";
+	const closeX = strip.indexOf("✕");
+	assert.ok(closeX >= 0, `close cell present: ${strip}`);
+	// Dirty + read-only + conflict markers survive alongside the close cell.
+	assert.ok(harness.store.insertText(second.id, "!").ok);
+	assert.ok(harness.store.noteExternalChange(second.id, "rev-9").ok);
+	const marked = plain(harness.pane.render(80))[0] ?? "";
+	assert.match(marked, /\[other\.ts ● ! ✕\]/);
+	const markedX = marked.indexOf("✕");
+	// Clicking the ✕ asks to close the ACTIVE tab (dirty decision flow is the app's).
+	const closed = harness.pane.handleMouse(mouseEvent({ type: "press", x: markedX, y: 0, width: 80 }));
+	assert.deepEqual(closed, { handled: true, focus: true });
+	assert.deepEqual(harness.closed, [second.id]);
+	// The dirty marker on the tab strip means the pane never dropped the tab.
+	assert.equal(harness.tabModel.count(), 2);
+	assert.equal(harness.tabModel.activeDocumentId(), second.id, "closing decision belongs to the app");
+	// A press on the label region of the active chip selects it instead (no close).
+	harness.closed.length = 0;
+	const labelClick = harness.pane.handleMouse(mouseEvent({ type: "press", x: markedX - 6, y: 0, width: 80 }));
+	assert.equal(labelClick?.handled, true);
+	assert.deepEqual(harness.closed, [], "label presses select, never close");
+	// A right press on the ✕ is not the close affordance.
+	const right = harness.pane.handleMouse(mouseEvent({ type: "press", button: "right", x: markedX, y: 0, width: 80 }));
+	assert.equal(right, undefined);
+	assert.deepEqual(harness.closed, []);
+	assert.equal(harness.tabModel.activeDocumentId(), second.id);
 });
 
 test("viewport mouse events are translated into view-local coordinates", () => {
@@ -373,7 +430,7 @@ test("pane boots as a real alt-screen root: focus, mouse dispatch and capture en
 	try {
 		const frame = plain(tui.getScreenLines());
 		assert.equal(frame.length, 12, "the pane fills the terminal frame");
-		assert.match(frame[0] ?? "", /\[main\.ts\]/);
+		assert.match(frame[0] ?? "", /\[main\.ts ✕\]/);
 		assert.match(frame[1] ?? "", /main\.ts/);
 		assert.match(frame[2] ?? "", /hello world/);
 		assert.match(frame[11] ?? "", /Ln 1, Col 1/);

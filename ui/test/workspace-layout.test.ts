@@ -1,14 +1,16 @@
-// T2 contract tests: pure workspace geometry (plan §7, §24A).
+// T2 contract tests: pure workspace geometry (plan §7, §24A) with the
+// far-right explorer grip and the chatSide split swap.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
 	adjustSplitRatio,
+	chatIsRight,
 	clampSplitRatio,
 	computeLayout,
 	dividerRect,
 	explorerColumnBudget,
 } from "../src/workspace/layout.ts";
-import { SPLIT_MINIMUM_COLUMNS, type LayoutInput } from "../src/workspace/state.ts";
+import { LAYOUT_BUDGETS, SPLIT_MINIMUM_COLUMNS, type LayoutInput } from "../src/workspace/state.ts";
 
 const base: LayoutInput = {
 	columns: 160,
@@ -19,13 +21,16 @@ const base: LayoutInput = {
 	preferredPane: "chat",
 };
 
-test("split at 160 columns allocates approximately 50/50 with a divider", () => {
+test("split at 160 columns allocates approximately 50/50 with a divider and grip", () => {
 	const r = computeLayout(base);
 	assert.equal(r.effectiveMode, "split");
 	assert.ok(r.chat && r.editor);
 	assert.equal(r.chat.x, 0);
 	assert.equal(r.editor.x, r.chat.columns + 1);
-	assert.equal(r.chat.columns + 1 + r.editor.columns, 160);
+	assert.ok(r.grip, "the far-right grip column is reserved");
+	assert.equal(r.grip.columns, LAYOUT_BUDGETS.gripColumns);
+	assert.equal(r.grip.x, 160 - LAYOUT_BUDGETS.gripColumns);
+	assert.equal(r.chat.columns + 1 + r.editor.columns + r.grip.columns, 160, "every column is accounted for");
 	assert.ok(Math.abs(r.chat.columns - r.editor.columns) <= 2);
 });
 
@@ -35,16 +40,27 @@ test("split is refused below the derived minimum and preserves the request", () 
 	assert.equal(narrow.reason, "narrow");
 	assert.equal(narrow.chat?.columns, SPLIT_MINIMUM_COLUMNS - 1);
 	assert.equal(narrow.editor, undefined);
+	assert.equal(narrow.grip, undefined, "the grip exists only while the editor is visible");
 	// The exact threshold column splits.
 	const exact = computeLayout({ ...base, columns: SPLIT_MINIMUM_COLUMNS });
 	assert.equal(exact.effectiveMode, "split");
+	assert.ok(exact.chat && exact.editor && exact.grip);
+	assert.ok(exact.chat.columns >= LAYOUT_BUDGETS.minChatColumns);
+	assert.ok(exact.editor.columns >= LAYOUT_BUDGETS.minEditorColumns);
+	assert.equal(exact.chat.columns + 1 + exact.editor.columns + exact.grip.columns, SPLIT_MINIMUM_COLUMNS);
 });
 
-test("narrow fallback prefers the focused pane", () => {
+test("narrow fallback prefers the focused pane and keeps the grip beside the editor", () => {
 	const r = computeLayout({ ...base, columns: 60, preferredPane: "editor" });
 	assert.equal(r.effectiveMode, "editor");
-	assert.equal(r.editor?.columns, 60);
+	assert.equal(r.editor?.columns, 60 - LAYOUT_BUDGETS.gripColumns);
 	assert.equal(r.chat, undefined);
+	assert.equal(r.grip?.x, 60 - LAYOUT_BUDGETS.gripColumns);
+	// The chat fallback has no grip (no editor column to ground).
+	const chat = computeLayout({ ...base, columns: 60, preferredPane: "chat" });
+	assert.equal(chat.effectiveMode, "chat");
+	assert.equal(chat.chat?.columns, 60);
+	assert.equal(chat.grip, undefined);
 });
 
 test("short terminals fall back to a single pane with reason short", () => {
@@ -53,13 +69,15 @@ test("short terminals fall back to a single pane with reason short", () => {
 	assert.equal(r.reason, "short");
 });
 
-test("maximized modes allocate the full width and report requested", () => {
+test("maximized modes allocate the width minus the grip and report requested", () => {
 	const chat = computeLayout({ ...base, requestedMode: "chat" });
 	assert.equal(chat.chat?.columns, 160);
 	assert.equal(chat.editor, undefined);
+	assert.equal(chat.grip, undefined);
 	const editor = computeLayout({ ...base, requestedMode: "editor" });
-	assert.equal(editor.editor?.columns, 160);
+	assert.equal(editor.editor?.columns, 160 - LAYOUT_BUDGETS.gripColumns);
 	assert.equal(editor.chat, undefined);
+	assert.equal(editor.grip?.x, 160 - LAYOUT_BUDGETS.gripColumns);
 });
 
 test("ratio clamps to 0.25–0.75 and steps are 5 points", () => {
@@ -80,14 +98,37 @@ test("pane minima hold across the ratio range", () => {
 	}
 });
 
+test("chatSide right mirrors the split and keeps both panes at their minima", () => {
+	const left = computeLayout(base);
+	const right = computeLayout({ ...base, chatSide: "right" });
+	assert.equal(right.effectiveMode, "split");
+	assert.ok(right.chat && right.editor && right.grip && left.chat && left.editor);
+	assert.equal(right.editor.x, 0, "the editor leads on a right-side chat");
+	assert.equal(right.chat.x, right.editor.columns + 1, "the divider separates editor and chat");
+	assert.equal(right.chat.x + right.chat.columns + right.grip.columns, 160);
+	assert.equal(chatIsRight(right), true);
+	assert.equal(chatIsRight(left), false);
+	assert.equal(right.chat.columns, left.chat.columns, "a side swap never changes the split halves");
+	assert.equal(right.editor.columns, left.editor.columns);
+	assert.ok(right.chat.columns >= 40 && right.editor.columns >= 48);
+});
+
+test("a right-side chat + explorer keeps the drawer at the far right, right of chat", () => {
+	const r = computeLayout({ ...base, chatSide: "right", explorerRequested: true });
+	assert.ok(r.chat && r.editor && r.explorer && r.grip);
+	assert.equal(r.explorer.x + r.explorer.columns + r.grip.columns, 160, "drawer docks at the far right edge");
+	assert.ok(r.explorer.x >= r.chat.x + r.chat.columns, "the drawer sits right of the chat column");
+	assert.ok(r.chat.columns >= 40 && r.editor.columns >= 48);
+});
+
 test("explorer docks off the editor side when the editor keeps its minimum", () => {
 	const r = computeLayout({ ...base, explorerRequested: true });
 	assert.equal(r.explorerOverlay, false);
-	assert.ok(r.explorer && r.editor);
+	assert.ok(r.explorer && r.editor && r.grip);
 	assert.equal(r.explorer.columns, 28);
 	assert.equal(r.editor.x + r.editor.columns, r.explorer.x);
 	assert.ok(r.editor.columns >= 48);
-	assert.equal(r.chat!.columns + 1 + r.editor.columns + r.explorer.columns, 160);
+	assert.equal(r.explorer.x + r.explorer.columns + r.grip.columns, 160);
 });
 
 test("explorer becomes an editor-local overlay when docking would starve the editor", () => {
@@ -104,20 +145,34 @@ test("explorer budget never goes below the editor minimum", () => {
 	assert.deepEqual(explorerColumnBudget(120, 100), { docked: true, columns: 40 });
 });
 
-test("divider hitbox matches the gap between panes", () => {
-	const r = computeLayout(base);
-	const d = dividerRect(r);
-	assert.ok(d);
-	assert.equal(d.x, r.chat!.columns);
-	assert.equal(d.columns, 1);
+test("divider hitbox matches the gap between panes on either side", () => {
+	const left = computeLayout(base);
+	assert.ok(left.chat && left.editor);
+	const leftDivider = dividerRect(left);
+	assert.ok(leftDivider);
+	assert.equal(leftDivider.x, left.chat.columns);
+	assert.equal(leftDivider.columns, 1);
+	// Mirrored split: the divider still sits between the panes.
+	const right = computeLayout({ ...base, chatSide: "right" });
+	assert.ok(right.chat && right.editor);
+	const rightDivider = dividerRect(right);
+	assert.ok(rightDivider);
+	assert.equal(rightDivider.x, right.editor.columns);
+	assert.equal(rightDivider.x + 1, right.chat.x);
 	assert.equal(dividerRect(computeLayout({ ...base, requestedMode: "chat" })), undefined);
 });
 
 test("degenerate widths never produce negative rectangles", () => {
 	for (const columns of [0, 1, 2, 20, 40, 80]) {
-		const r = computeLayout({ ...base, columns, explorerRequested: true });
-		for (const pane of [r.chat, r.editor, r.explorer]) {
-			if (pane) assert.ok(pane.columns >= 0 && pane.x >= 0);
+		for (const chatSide of ["left", "right"] as const) {
+			const r = computeLayout({ ...base, columns, explorerRequested: true, chatSide });
+			for (const pane of [r.chat, r.editor, r.explorer, r.grip]) {
+				if (pane) assert.ok(pane.columns >= 0 && pane.x >= 0);
+			}
+			if (r.chat && r.editor) {
+				assert.ok(r.chat.x + r.chat.columns <= columns);
+				assert.ok(r.editor.x + r.editor.columns <= columns);
+			}
 		}
 	}
 });

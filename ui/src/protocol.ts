@@ -17,7 +17,10 @@ export interface InitializeResult {
 	version: string;
 	model: string;
 	provider: string;
+	/** Redacted display value (basename) for the footer. */
 	cwd: string;
+	/** Absolute launch directory; only present when the caller authenticated. */
+	cwdFull?: string;
 	branch: string;
 }
 

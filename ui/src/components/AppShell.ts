@@ -3,10 +3,12 @@
 // from actual terminal dimensions at sync time; the same ScrollView instance
 // survives root rebuilds so the user's scroll anchor is never lost.
 //
-// The workspace composition (plan §7) is opt-in: once a layout state arrives,
-// the top row becomes an HStack of the chat column beside WorkspaceShell's
-// divider/editor columns. Every width comes from computeLayout(); this file
-// never re-derives a split, and retained components keep their identity.
+// The workspace composition (plan §7 + UX-5) is opt-in: once a layout state
+// arrives, the top row becomes an HStack of the panes (chat transcript on its
+// geometry side, then WorkspaceShell's divider/editor/explorer/grip columns),
+// and the composer + approval dock become FULL-WIDTH rows beneath it. Every
+// width comes from computeLayout(); this file never re-derives a split, and
+// retained components keep their identity.
 
 import { HStack, isViewportTUI, ScrollView, VStack, type Component, type TUI } from "@earendil-works/pi-tui";
 import { LIMITS } from "../design/tokens.ts";
@@ -31,6 +33,8 @@ export class AppShell {
 	 * through setWorkspaceState. Keyboard resizing will reuse the same path.
 	 */
 	onWorkspaceRatioChange?: (ratio: number) => void;
+	/** Far-right explorer grip clicked: the app flips its explorer request. */
+	onWorkspaceExplorerToggle?: () => void;
 	private currentRoot: VStack;
 	private readonly viewportRoot: Component;
 	private readonly tui: TUI;
@@ -123,6 +127,29 @@ export class AppShell {
 		this.lastRows = -1;
 	}
 
+	/**
+	 * Rows (including inter-section gaps) the workspace root reserves below the
+	 * panes row for the optional dock, the pinned composer and the footer. The
+	 * app subtracts this from the pane's allocated rows so render() height and
+	 * the live viewport stay exactly aligned.
+	 */
+	chromeRows(): number {
+		const width = this.liveColumns();
+		const gap = this.gapRows();
+		let rows = this.composer.render(width).length + this.footer.render(width).length;
+		let sections = 3; // panes row + composer + footer
+		if (this.dock) {
+			rows += this.dock.render(width).length;
+			sections += 1;
+		}
+		return rows + gap * (sections - 1);
+	}
+
+	/** Inter-section gap for the current density and dock state (single source). */
+	private gapRows(): number {
+		return this.density === "full" && (!this.dock || this.lastRows >= 24) ? 1 : 0;
+	}
+
 	private liveColumns(): number {
 		return Math.max(0, this.tui.terminal.columns);
 	}
@@ -135,6 +162,7 @@ export class AppShell {
 		this.workspace ??= new WorkspaceShell(this.tui, {
 			onRatioChange: (ratio) => this.onWorkspaceRatioChange?.(ratio),
 			onResizeDemand: () => this.rebuild(),
+			onExplorerToggle: () => this.onWorkspaceExplorerToggle?.(),
 		});
 		return this.workspace;
 	}
@@ -197,9 +225,14 @@ export class AppShell {
 				{ gap },
 			);
 		}
+		// Workspace composition (plan §7 + UX-5): the panes row grows, then the
+		// optional approval dock, the pinned composer and the footer are
+		// FULL-WIDTH rows. The chat column keeps only the transcript.
 		return new VStack(
 			[
 				{ component: topRow, grow: 1 },
+				...(this.dock ? [{ component: this.dock, shrink: 0 }] : []),
+				{ component: this.composer, shrink: 0 },
 				{ component: this.footer, shrink: 0 },
 			],
 			{ gap },
@@ -209,7 +242,9 @@ export class AppShell {
 	/**
 	 * Workspace top row for the effective mode, or undefined when the chat-only
 	 * tree is exact (no state yet, chat mode, or no editor injected). The chat
-	 * objects are retained in every branch; only composition changes.
+	 * objects are retained in every branch; only composition changes. The chat
+	 * transcript keeps its geometry column (side per `chatSide`); the explorer
+	 * drawer and the grip follow the same LayoutResult.
 	 */
 	private workspaceRow(): Component | undefined {
 		const workspace = this.workspace;
@@ -217,10 +252,12 @@ export class AppShell {
 		if (!workspace || !result || !workspace.editor) return undefined;
 		if (result.effectiveMode === "split" && result.chat && result.editor) {
 			return new HStack(
-				[
-					{ component: this.chatColumn(), basis: result.chat.columns, shrink: 0, grow: 0 },
-					...workspace.entries(result),
-				],
+				workspace.entries(result, {
+					component: this.transcriptScroll,
+					basis: result.chat.columns,
+					shrink: 0,
+					grow: 0,
+				}),
 				{ gap: 0 },
 			);
 		}
@@ -228,18 +265,6 @@ export class AppShell {
 			return new HStack(workspace.entries(result), { gap: 0 });
 		}
 		return undefined;
-	}
-
-	/** Chat side of a split row: the same transcript/dock/composer objects, gap 0. */
-	private chatColumn(): VStack {
-		return new VStack(
-			[
-				{ component: this.transcriptScroll, grow: 1 },
-				...(this.dock ? [{ component: this.dock, shrink: 0 }] : []),
-				{ component: this.composer, shrink: 0 },
-			],
-			{ gap: 0 },
-		);
 	}
 
 	private rebuild(): void {

@@ -32,6 +32,7 @@ import {
 } from "./components/IntelligencePopups.ts";
 import { AnimationCoordinator } from "./design/motion.ts";
 import { type FamilySession, type FeatureHost, formatLspStatusLine, type NoticeKind, runCommand, SLASH_COMMANDS, type WorkspaceHost } from "./features/index.ts";
+import type { WorkspaceAttachmentHost } from "./features/workspace.ts";
 import { guardSubmit } from "./commandDispatch.ts";
 import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions } from "./features/types.ts";
 import { FamilyStore, listFamilySessions } from "./family.ts";
@@ -150,6 +151,7 @@ function workspaceShellKey(input: LayoutInput, columns: number, rows: number): s
 		input.splitRatio,
 		input.explorerRequested ? 1 : 0,
 		input.preferredPane,
+		input.chatSide ?? "left",
 		columns,
 		rows,
 	].join("|");
@@ -169,6 +171,23 @@ function displayUriName(uri: string): string {
 	const path = uriDisplayPath(uri);
 	const parts = path.split("/").filter((segment) => segment.length > 0);
 	return parts[parts.length - 1] ?? path;
+}
+
+/** Inline-safe display text: one line, no backticks (header/notice surfaces). */
+function inlineSafe(text: string): string {
+	return text.replace(/[\r\n`]+/g, " ").trim();
+}
+
+/** Fence long enough that no backtick run inside the text can close it. */
+function fenceFor(text: string): string {
+	let longest = 0;
+	for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
+	return "`".repeat(Math.max(3, longest + 1));
+}
+
+/** Fence language token: identifier characters only (never markup). */
+function fenceLanguage(languageId: string): string {
+	return languageId.replace(/[^A-Za-z0-9_+.#-]/g, "");
 }
 
 /** True when an untrusted `workspace.open` payload carries a usable binding. */
@@ -434,6 +453,7 @@ export class App implements FeatureHost {
 		this.client.start();
 
 		let initializedCwd: string | undefined;
+		let initializedCwdFull: string | undefined;
 		try {
 			const init = await this.client.request<InitializeResult>(
 				"initialize",
@@ -441,6 +461,7 @@ export class App implements FeatureHost {
 				60_000,
 			);
 			initializedCwd = init.cwd;
+			initializedCwdFull = typeof init.cwdFull === "string" && init.cwdFull ? init.cwdFull : undefined;
 			this.version = init.version;
 			Object.assign(this.footer, { cwd: init.cwd, branch: init.branch, model: init.model, status: "ready" });
 			try {
@@ -497,10 +518,13 @@ export class App implements FeatureHost {
 			this.transcript.addNotice("Run `machina doctor` to check your setup. Press Ctrl+C to exit.");
 		}
 		// Integrated workspace: only after initialize + session setup, only when
-		// the flag allows it, and never blocking chat. The open runs in the
-		// background; failures notify once and leave the chat tree untouched.
-		if (initializedCwd !== undefined && this.workspaceFlagOn) {
-			this.startWorkspace(initializedCwd);
+		// the flag allows it, and never blocking chat. Prefer the absolute
+		// launch directory (authenticated handshakes). The redacted basename is
+		// a display value and must never be treated as a root: when only that
+		// is available (older backend), stay chat-only.
+		if (this.workspaceFlagOn) {
+			const root = initializedCwdFull ?? (initializedCwd !== undefined && isAbsolute(initializedCwd) ? initializedCwd : undefined);
+			if (root !== undefined) this.startWorkspace(root);
 		}
 		this.tui.requestRender();
 	}
@@ -1164,6 +1188,37 @@ export class App implements FeatureHost {
         });
     }
 
+	/**
+	 * `?` / F1 shortcut picker rows (single source). Workspace rows only make
+	 * sense while the feature is live, but they stay listed so the shortcuts
+	 * remain discoverable; unavailable ones no-op with one notice.
+	 */
+	private shortcutItems(): SelectItem[] {
+		return [
+			{ value: "send", label: "Enter — send", description: "Send a message or run a command" },
+			{ value: "newline", label: "Shift+Enter — new line" },
+			{ value: "image", label: "Drop an image / Ctrl+V — paste image", description: "PNG, JPEG, GIF or WebP · ⌘V where forwarded by your terminal" },
+			{ value: "stop", label: "Esc — stop reply", description: "Twice on empty input edits the last prompt" },
+			{ value: "cancel", label: "Ctrl+C — stop / clear / exit", description: "Stop a reply, clear a draft, or exit when empty" },
+			{ value: "exit", label: "Ctrl+D — exit", description: "When input is empty and idle" },
+			{ value: "clear", label: "Ctrl+L — clear chat", description: "When idle" },
+			{ value: "complete", label: "Tab — complete", description: "Commands and arguments" },
+			{ value: "subagents", label: "↓ — subagent menu", description: "On empty input: switch between the main session and its subagents" },
+			{ value: "tabs", label: "Ctrl+Shift+←/→ — switch agents", description: "Cycle the main session and its subagents" },
+			{ value: "quickopen", label: "Ctrl+P — quick open", description: "Fuzzy file search in the workspace" },
+			{ value: "save", label: "Ctrl+S — save file", description: "Save the active editor buffer" },
+			{ value: "closetab", label: "Ctrl+W — close tab", description: "Close the active editor tab (dirty: save/discard/cancel)" },
+			{ value: "explorer", label: "Ctrl+T — file tree", description: "Toggle the right-edge explorer; → or enter expands folders (/explorer)" },
+			{ value: "intel", label: "Ctrl+Space — completion", description: "F12 definition · Shift+F12 references · F2 rename · /problems lists diagnostics" },
+			{ value: "wsroot", label: "/workspace open <path> — open a folder", description: "Also /workspace split|chat|editor|ratio|side|status|close" },
+			{ value: "focus", label: "F6 / Shift+F6 — cycle focus", description: "Composer → editor → explorer → problems" },
+			{ value: "chatmax", label: "Ctrl+→ maximize chat · Ctrl+← back to the 50/50 split", description: "Editor word motion stays alt+arrows" },
+			{ value: "help", label: "? / F1 — shortcuts", description: "? on empty input, F1 with a draft" },
+			{ value: "commands", label: "/help — all commands", description: "/growth shows learning details" },
+			{ value: "learning", label: "□ / ▪ — activity and learning", description: "Pulses while working and briefly when learning is saved" },
+		];
+	}
+
 	private onKey(data: string): { consume: boolean } | undefined {
 		this.shell.sync();
 		this.syncWorkspaceShellIfChanged();
@@ -1218,25 +1273,7 @@ export class App implements FeatureHost {
 
 		const questionKey = matchesKey(data, Key.question) || matchesKey(data, Key.shift("?")) || matchesKey(data, Key.shift("/"));
 		if (matchesKey(data, Key.f1) || (questionKey && !this.editor.getText() && !this.editor.isShowingAutocomplete())) {
-			void this.openDialog((close) => new Picker("Keyboard shortcuts", [
-				{ value: "send", label: "Enter — send", description: "Send a message or run a command" },
-				{ value: "newline", label: "Shift+Enter — new line" },
-                { value: "image", label: "Drop an image / Ctrl+V — paste image", description: "PNG, JPEG, GIF or WebP · ⌘V where forwarded by your terminal" },
-				{ value: "stop", label: "Esc — stop reply", description: "Twice on empty input edits the last prompt" },
-				{ value: "cancel", label: "Ctrl+C — stop / clear / exit", description: "Stop a reply, clear a draft, or exit when empty" },
-				{ value: "exit", label: "Ctrl+D — exit", description: "When input is empty and idle" },
-				{ value: "clear", label: "Ctrl+L — clear chat", description: "When idle" },
-				{ value: "complete", label: "Tab — complete", description: "Commands and arguments" },
-				{ value: "subagents", label: "↓ — subagent menu", description: "On empty input: switch between the main session and its subagents" },
-				{ value: "tabs", label: "Ctrl+Shift+←/→ — switch agents", description: "Cycle the main session and its subagents" },
-				{ value: "quickopen", label: "Ctrl+P — quick open", description: "Fuzzy file search in the workspace" },
-				{ value: "save", label: "Ctrl+S — save file", description: "Save the active editor buffer" },
-				{ value: "focus", label: "F6 / Shift+F6 — cycle focus", description: "Composer → editor → explorer → problems" },
-				{ value: "chatmax", label: "Ctrl+←/→ — toggle chat maximize", description: "Editor word motion stays alt+arrows" },
-				{ value: "help", label: "? / F1 — shortcuts", description: "? on empty input, F1 with a draft" },
-				{ value: "commands", label: "/help — all commands", description: "/growth shows learning details" },
-				{ value: "learning", label: "□ / ▪ — activity and learning", description: "Pulses while working and briefly when learning is saved" },
-			], () => close(), () => close(), undefined, "↑↓ browse · enter/esc close", this.tui));
+			void this.openDialog((close) => new Picker("Keyboard shortcuts", this.shortcutItems(), () => close(), () => close(), undefined, "↑↓ browse · enter/esc close", this.tui));
 			return { consume: true };
 		}
 
@@ -1422,7 +1459,7 @@ export class App implements FeatureHost {
 			problemsModel,
 			problemsPane,
 		};
-		this.workspaceHostSurface = {
+		const workspaceHost: WorkspaceHost & WorkspaceAttachmentHost = {
 			controller,
 			controllerAvailable: () =>
 				this.workspaceFlagOn && !this.workspaceUnsupported && this.integration !== undefined,
@@ -1443,9 +1480,18 @@ export class App implements FeatureHost {
 				this.syncWorkspaceShell();
 			},
 			setExplorer: (open) => this.setExplorerRequested(open),
+			closeActiveTab: () => this.closeActiveWorkspaceTab(),
+			setChatSide: (side) => {
+				controller.setChatSide(side);
+				this.syncWorkspaceShell();
+			},
 			layoutChanged: () => this.syncWorkspaceShell(),
 			openProblems: () => this.openProblems(),
 			openQuickOpen: () => void this.openQuickOpen(),
+			openRoot: (path) => this.switchWorkspaceRoot(path),
+			// T10 explicit sharing: capture the editor selection into the
+			// composer draft (plan §20). Never called by open/view paths.
+			attachSelectionToDraft: () => this.attachSelectionToDraft(),
 			dirtyBuffers: () => {
 				const dirty = store.documents().filter((document) => document.dirty);
 				return {
@@ -1454,11 +1500,18 @@ export class App implements FeatureHost {
 				};
 			},
 		};
+		this.workspaceHostSurface = workspaceHost;
 		this.shell.setWorkspaceEditor(pane);
 		this.shell.setWorkspaceExplorer(explorerPane);
 		this.shell.onWorkspaceRatioChange = (ratio) => {
 			controller.setRatio(ratio);
 			this.syncWorkspaceShell();
+		};
+		// Far-right grip: flips the same explorer request the Ctrl+T / /explorer
+		// path uses, so the listing load and persistence stay single-sourced.
+		this.shell.onWorkspaceExplorerToggle = () => {
+			const explorer = this.integration?.controller.getLayoutInput().explorerRequested ?? false;
+			this.setExplorerRequested(!explorer);
 		};
 		this.client.onWorkspaceEvent = (event) => this.onWorkspaceEvent(event);
 		void this.openWorkspaceBackground(root);
@@ -1506,6 +1559,64 @@ export class App implements FeatureHost {
 		void integration.controller.lspStatus();
 		void this.refreshProblemsForActiveDocument();
 		this.syncWorkspaceShell();
+	}
+
+	/**
+	 * Explicit user command to reopen the workspace at another folder
+	 * (`/workspace open <path>`). Clean documents from the previous root close
+	 * because the new workspace cannot save them (their URIs fall outside its
+	 * root); dirty buffers always stay, with the count reported. The new
+	 * root's persisted layout/files restore when a stored state exists.
+	 */
+	private async switchWorkspaceRoot(path: string): Promise<{ ok: boolean; message: string }> {
+		const integration = this.integration;
+		if (!integration) return { ok: false, message: "Workspace is not available." };
+		const trimmed = path.trim();
+		if (!trimmed) return { ok: false, message: "Usage: /workspace open <path>" };
+		// Capture the stored document BEFORE open persists its intent (same
+		// one-shot snapshot rule as the boot path).
+		try {
+			this.workspacePreOpenRaw = await this.readWorkspaceStateRaw();
+		} catch {
+			this.workspacePreOpenRaw = undefined;
+		}
+		this.workspacePreOpenCaptured = false;
+		const identity = await integration.controller.openWorkspace(trimmed);
+		if (!identity || this.integration !== integration || this.exiting) {
+			return { ok: false, message: "Could not open that folder (see the notice above)." };
+		}
+		this.workspaceLayoutActive = true;
+		let closed = 0;
+		let kept = 0;
+		for (const document of integration.store.documents()) {
+			if (document.dirty) {
+				kept += 1;
+				continue;
+			}
+			const outcome = await integration.controller.closeTab(document.id);
+			if (outcome.status === "closed") closed += 1;
+			else kept += 1;
+		}
+		const restored = await integration.controller.restore(identity.resolvedRoot);
+		if (restored) integration.controller.applyRestoredLayout(restored);
+		this.syncWorkspaceShell();
+		if (restored) {
+			await integration.controller.reopenRecent(restored);
+			if (this.integration !== integration || this.exiting) return { ok: true, message: "workspace switched" };
+			this.restoreCursorState(restored);
+			const active = integration.tabs.activeDocumentId();
+			if (active) integration.view.setDocument(active);
+		}
+		await integration.explorerModel.reload("");
+		if (integration.controller.getLayoutInput().explorerRequested) void integration.explorerModel.load();
+		void integration.controller.lspStatus();
+		void this.refreshProblemsForActiveDocument();
+		this.syncWorkspaceShell();
+		const extras: string[] = [];
+		if (closed > 0) extras.push(`closed ${closed} clean tab(s)`);
+		if (kept > 0) extras.push(`kept ${kept} unsaved tab(s)`);
+		const suffix = extras.length > 0 ? ` · ${extras.join(" · ")}` : "";
+		return { ok: true, message: `workspace: ${identity.rootLabel} (${identity.resolvedRoot})${suffix}` };
 	}
 
 	/**
@@ -1578,9 +1689,9 @@ export class App implements FeatureHost {
 	/**
 	 * Push current layout intent to the shell and size the editor pane. The
 	 * split geometry itself always comes from computeLayout (single source);
-	 * only the shell's footer (+ possible density gap) is subtracted before
-	 * handing rows to the pane, so over-allocation can never clip its status
-	 * row.
+	 * only the shell's dock/composer/footer chrome (+ density gaps) is
+	 * subtracted before handing rows to the pane, so over-allocation can never
+	 * clip its status row.
 	 */
 	private syncWorkspaceShell(): void {
 		const integration = this.integration;
@@ -1592,7 +1703,10 @@ export class App implements FeatureHost {
 		this.shell.setWorkspaceState(input);
 		const layout = computeLayout({ ...input, columns, rows });
 		this.workspaceLayout = layout;
-		const chrome = this.footer.render(columns).length + (this.shell.currentDensity === "full" ? 1 : 0);
+		// Composer + optional approval dock + footer are full-width rows under
+		// the panes row; chromeRows sums their heights and gaps from the same
+		// budgets the root VStack uses.
+		const chrome = this.shell.chromeRows();
 		if (layout.editor) integration.pane.layout(Math.max(1, layout.editor.rows - chrome));
 		if (layout.explorer) {
 			// The docked tree owns its own windowing: keep the selection visible
@@ -1684,8 +1798,9 @@ export class App implements FeatureHost {
 	 * Global workspace key routing. Keys are consumed only while the workspace
 	 * is live and the feature was not disabled; editor-scoped keys additionally
 	 * require the editor region so they can never fire while the composer (or a
-	 * dialog, handled earlier) owns focus. Ctrl+W is deliberately unbound
-	 * (terminal close risk; close via the tab strip or palette).
+	 * dialog, handled earlier) owns focus. Ctrl+W closes the active tab through
+	 * the same dirty-guarded flow as the tab strip's ✕ (the terminal may
+	 * intercept Ctrl+W; `/editor close` is the fallback).
 	 */
 	private handleWorkspaceKey(data: string): { consume: boolean } | undefined {
 		const integration = this.integration;
@@ -1703,10 +1818,21 @@ export class App implements FeatureHost {
 			this.setExplorerRequested(!integration.controller.getLayoutInput().explorerRequested);
 			return { consume: true };
 		}
-		// Ctrl+Right / Ctrl+Left — chat-maximize toggle. When delivered, the
-		// global binding wins; editor word motion stays alt+arrows (help text).
-		if (matchesKey(data, Key.ctrl("right")) || matchesKey(data, Key.ctrl("left"))) {
+		// Ctrl+W — close the active editor tab (dirty → Save/Discard/Cancel).
+		if (matchesKey(data, Key.ctrl("w"))) {
+			this.closeActiveWorkspaceTab();
+			return { consume: true };
+		}
+		// Ctrl+Right — toggle chat maximize; Ctrl+Left — always return to the
+		// 50/50 split (never a second toggle: after mode hops the split must
+		// stay reachable). When delivered, the global bindings win; editor word
+		// motion stays alt+arrows (help text).
+		if (matchesKey(data, Key.ctrl("right"))) {
 			this.workspaceHostSurface?.toggleChatMaximize();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.ctrl("left"))) {
+			this.workspaceHostSurface?.restoreSplit();
 			return { consume: true };
 		}
 		// F6 / Shift+F6 — cycle focus. pi-tui 1.0.0's matchesKey cannot express
@@ -1719,6 +1845,16 @@ export class App implements FeatureHost {
 			return { consume: true };
 		}
 		if (!ready || this.activeRegion !== "editor") return undefined;
+		// Ctrl+Shift+A — attach the editor selection to the composer draft
+		// (plan §20 explicit sharing). Delivered as a distinct CSI-u sequence
+		// only under the Kitty keyboard protocol; legacy terminals send Ctrl+A,
+		// which this never consumes (the editor's select-all stays intact).
+		// /attach is the fallback everywhere.
+		if (matchesKey(data, Key.ctrlShift("a"))) {
+			const result = this.attachSelectionToDraft();
+			this.print(result.notice, result.ok ? "info" : "warning");
+			return { consume: true };
+		}
 		// Ctrl+Space — completion at the cursor (explicit-only in v1; the
 		// legacy NUL byte is accepted when the Kitty protocol is inactive).
 		if (matchesKey(data, Key.ctrl("space")) || data === "\x00") {
@@ -1760,6 +1896,71 @@ export class App implements FeatureHost {
 		if (!document) return undefined;
 		const state = integration.store.getViewState(documentId);
 		return { document, position: offsetToPosition(document.text, state?.cursorOffset ?? 0) };
+	}
+
+	/** Root-relative display path for attachment banners (never a raw URI). */
+	private workspaceRelativePath(uri: string): string {
+		const display = uriDisplayPath(uri);
+		const root = this.integration?.controller.identity?.resolvedRoot;
+		if (root) {
+			const prefix = root.endsWith("/") ? root : `${root}/`;
+			if (display === root) return inlineSafe(display);
+			if (display.startsWith(prefix)) return inlineSafe(display.slice(prefix.length));
+		}
+		const parts = display.split("/").filter((segment) => segment.length > 0);
+		return inlineSafe(parts[parts.length - 1] ?? display);
+	}
+
+	/**
+	 * T10 explicit selection attachment (plan §20): move the active editor
+	 * selection into the composer draft with a visible scope header. This is
+	 * the ONLY path that lets unsaved buffer text reach a message: the user
+	 * invokes it directly (/attach or Ctrl+Shift+A in Kitty-protocol
+	 * terminals), the notice names the file, line range, version and unsaved
+	 * flag, and nothing is submitted — the user still writes and sends the
+	 * message. Opening or viewing a file never calls this.
+	 */
+	private attachSelectionToDraft(): { ok: boolean; notice: string } {
+		const integration = this.integration;
+		if (!integration || integration.controller.phase !== "ready") {
+			return { ok: false, notice: "Open a workspace first (/workspace)." };
+		}
+		const documentId = integration.tabs.activeDocumentId();
+		const record = documentId ? integration.store.getDocument(documentId) : undefined;
+		if (!documentId || !record) {
+			return { ok: false, notice: "No file is open to attach a selection from." };
+		}
+		const state = integration.store.getViewState(documentId);
+		const cursor = state?.cursorOffset ?? 0;
+		const anchor = state?.selectionAnchorOffset;
+		const start = anchor === undefined ? cursor : Math.min(anchor, cursor);
+		const end = anchor === undefined ? cursor : Math.max(anchor, cursor);
+		if (start >= end) return { ok: false, notice: "No selection to attach" };
+		const selected = record.text.slice(start, end);
+		// 1-based line range for display; a selection ending exactly at a line
+		// start still belongs to the previous line's text in the shown span.
+		const startLine = offsetToPosition(record.text, start).line + 1;
+		const endPosition = offsetToPosition(record.text, end);
+		let endLine = endPosition.line + 1;
+		if (endPosition.character === 0 && endLine > startLine) endLine -= 1;
+		const lineLabel = startLine === endLine ? `L${startLine}` : `L${startLine}–${endLine}`;
+		const relativePath = this.workspaceRelativePath(record.uri);
+		const versionLabel = record.dirty ? `unsaved v${record.version}` : "saved";
+		const noticeLabel = record.dirty ? `unsaved, v${record.version}` : `saved, v${record.version}`;
+		const banner = `<attached: ${relativePath} ${lineLabel} (${versionLabel})>`;
+		const fence = fenceFor(selected);
+		// A fence must close on its own line: add a trailing newline only when
+		// the selection does not already end with one, so the fenced content
+		// stays exactly the selected text.
+		const body = selected.endsWith("\n") ? selected : `${selected}\n`;
+		const block = `${banner}\n${fence}${fenceLanguage(record.languageId)}\n${body}${fence}`;
+		this.editor.insertTextAtCursor(`${block}\n`);
+		this.tui.requestRender();
+		const rawUri = record.uri.length > 300 ? `${record.uri.slice(0, 299)}…` : record.uri;
+		return {
+			ok: true,
+			notice: `Attached ${relativePath} ${lineLabel} (${noticeLabel}) — ${inlineSafe(rawUri)} — review and send when ready.`,
+		};
 	}
 
 	/**
@@ -2002,6 +2203,13 @@ export class App implements FeatureHost {
 			this.refreshEditorView(conflict.documentId);
 		}
 		this.tui.requestRender();
+	}
+
+	/** Ctrl+W / `/editor close` path: close the active tab, dirty-guarded. */
+	private closeActiveWorkspaceTab(): void {
+		const documentId = this.integration?.tabs.activeDocumentId();
+		if (!documentId) return;
+		void this.closeWorkspaceTab(documentId);
 	}
 
 	/** Tab-strip close (middle-click / onCloseTab): decision dialog when dirty. */

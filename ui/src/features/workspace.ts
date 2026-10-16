@@ -11,9 +11,28 @@ import type {
 	WorkspaceController,
 	WorkspaceLspStatusSnapshot,
 } from "../workspace/controller.ts";
+import { clampSplitRatio } from "../workspace/layout.ts";
+import { LAYOUT_BUDGETS } from "../workspace/state.ts";
 import { options, type Command, type FeatureHost, type WorkspaceHost } from "./types.ts";
 
 const UNAVAILABLE = "Workspace is not available.";
+
+/**
+ * T10 explicit selection attachment (plan §20). Optional on the host so the
+ * command can degrade with one honest notice; `app.ts` implements it for the
+ * live UI. It only ever touches the composer draft — nothing is submitted.
+ */
+export interface WorkspaceAttachmentHost {
+	/** Attach the editor selection to the composer draft; nothing is sent. */
+	attachSelectionToDraft(): { ok: boolean; notice: string };
+}
+
+function attachmentSurface(surface: WorkspaceHost): WorkspaceAttachmentHost | undefined {
+	const candidate = surface as Partial<WorkspaceAttachmentHost>;
+	return typeof candidate.attachSelectionToDraft === "function"
+		? (candidate as WorkspaceAttachmentHost)
+		: undefined;
+}
 
 /** Resolve the workspace surface or report unavailability once. */
 function requireWorkspace(host: FeatureHost): WorkspaceHost | undefined {
@@ -131,18 +150,21 @@ async function closeWorkspace(host: FeatureHost, surface: WorkspaceHost): Promis
 const workspaceCommand: Command = {
 	name: "workspace",
 	description: "Show or change the integrated workspace",
-	argumentHint: "[split|chat|editor|status|close]",
+	argumentHint: "[split|chat|editor|ratio|side|open <path>|status|close]",
 	getArgumentCompletions: options([
 		["split", "Show chat and editor side by side"],
 		["chat", "Maximize the chat pane"],
 		["editor", "Maximize the editor pane"],
+		["ratio", "Set the split ratio (ratio <0.25-0.75|reset>)"],
+		["side", "Place the chat pane (side left|right)"],
+		["open", "Open the workspace at another folder (open <path>)"],
 		["status", "Print root, epoch and language servers"],
 		["close", "Close the workspace (local buffers stay)"],
 	]),
 	async run(args, host) {
 		const surface = requireWorkspace(host);
 		if (!surface) return;
-		const [sub] = splitSub(args);
+		const [sub, rest] = splitSub(args);
 		switch (sub) {
 			case "":
 			case "status":
@@ -154,11 +176,55 @@ const workspaceCommand: Command = {
 				surface.setMode(sub);
 				host.print(`workspace mode: ${sub}`, "info");
 				return;
+			case "ratio": {
+				const value = rest.trim().toLowerCase();
+				if (value === "reset") {
+					surface.controller.setRatio(LAYOUT_BUDGETS.defaultSplitRatio);
+					surface.layoutChanged();
+					host.print("workspace ratio: 0.50 (reset)", "info");
+					return;
+				}
+				const parsed = value.length > 0 ? Number(value) : Number.NaN;
+				if (!Number.isFinite(parsed)) {
+					host.print("Usage: /workspace ratio <0.25-0.75|reset>", "warning");
+					return;
+				}
+				const clamped = clampSplitRatio(parsed);
+				surface.controller.setRatio(clamped);
+				surface.layoutChanged();
+				const adjusted = clamped !== parsed ? " (clamped)" : "";
+				host.print(`workspace ratio: ${clamped.toFixed(2)}${adjusted}`, "info");
+				return;
+			}
+			case "side": {
+				const value = rest.trim().toLowerCase();
+				if (value !== "left" && value !== "right") {
+					host.print("Usage: /workspace side <left|right>", "warning");
+					return;
+				}
+				surface.setChatSide(value);
+				host.print(`chat side: ${value}`, "info");
+				return;
+			}
+			case "open": {
+				const path = rest.trim();
+				if (!path) {
+					host.print("Usage: /workspace open <path>", "warning");
+					return;
+				}
+				if (!surface.openRoot) {
+					host.print("Opening another folder is not supported by this client.", "warning");
+					return;
+				}
+				const result = await surface.openRoot(path);
+				host.print(result.message, result.ok ? "info" : "error");
+				return;
+			}
 			case "close":
 				await closeWorkspace(host, surface);
 				return;
 			default:
-				host.print("Usage: /workspace [split|chat|editor|status|close]", "warning");
+				host.print("Usage: /workspace [split|chat|editor|ratio|side|status|close]", "warning");
 		}
 	},
 };
@@ -166,10 +232,11 @@ const workspaceCommand: Command = {
 const editorCommand: Command = {
 	name: "editor",
 	description: "Maximize or restore the editor pane",
-	argumentHint: "[maximize|restore]",
+	argumentHint: "[maximize|restore|close]",
 	getArgumentCompletions: options([
 		["maximize", "Show the editor pane alone"],
 		["restore", "Return to the chat/editor split"],
+		["close", "Close the active editor tab (dirty: save/discard/cancel)"],
 	]),
 	async run(args, host) {
 		const surface = requireWorkspace(host);
@@ -185,7 +252,11 @@ const editorCommand: Command = {
 			host.print("split restored", "info");
 			return;
 		}
-		host.print("Usage: /editor [maximize|restore]", "warning");
+		if (sub === "close") {
+			surface.closeActiveTab();
+			return;
+		}
+		host.print("Usage: /editor [maximize|restore|close]", "warning");
 	},
 };
 
@@ -283,6 +354,28 @@ const quickOpenCommand: Command = {
 	},
 };
 
+/**
+ * `/attach` — the explicit, visible-scope path for sharing unsaved editor
+ * text with the model (plan §20). The app captures the selection, inserts a
+ * `<attached: …>` header plus a fenced block into the composer draft, and
+ * reports the exact scope; the user still writes and submits the message.
+ */
+const attachCommand: Command = {
+	name: "attach",
+	description: "Attach the editor selection to the next message",
+	async run(_args, host) {
+		const surface = requireWorkspace(host);
+		if (!surface) return;
+		const attachment = attachmentSurface(surface);
+		if (!attachment) {
+			host.print("Selection attachment is not available on this host.", "warning");
+			return;
+		}
+		const result = attachment.attachSelectionToDraft();
+		host.print(result.notice, result.ok ? "info" : "warning");
+	},
+};
+
 export const workspaceCommands: Command[] = [
 	workspaceCommand,
 	editorCommand,
@@ -290,4 +383,5 @@ export const workspaceCommands: Command[] = [
 	lspCommand,
 	problemsCommand,
 	quickOpenCommand,
+	attachCommand,
 ];

@@ -388,6 +388,7 @@ test("openWorkspace mints the identity, persists intent and restore round-trips"
 
 	h.controller.setMode("editor");
 	h.controller.setRatio(0.62);
+	assert.equal(h.controller.getLayoutInput().explorerRequested, true, "fresh intent opens the explorer");
 	h.controller.toggleExplorer();
 	await delay(60);
 	assert.equal(h.persistence.saves.length, 2, "meaningful changes coalesce into one debounced save");
@@ -395,14 +396,39 @@ test("openWorkspace mints the identity, persists intent and restore round-trips"
 	assert.ok(persisted);
 	assert.equal(persisted.requestedMode, "editor");
 	assert.equal(persisted.splitRatio, 0.62);
-	assert.equal(persisted.explorerRequested, true);
+	assert.equal(persisted.explorerRequested, false, "an explicit toggle off persists as false");
+	assert.equal(persisted.chatSide, "left", "the side persists with the ratio");
 	assert.deepEqual(await h.controller.restore("/ws"), persisted);
 	assert.equal(await h.controller.restore("/other"), undefined);
 	await h.controller.dispose();
 });
 
-test("openWorkspace merges layout intent without clobbering stored open files", async () => {
+test("setChatSide persists like the ratio and adopting a stored side keeps tabs", async () => {
 	const h = build();
+	await openWorkspace(h);
+	assert.equal(h.controller.getLayoutInput().chatSide, "left", "the side defaults to left");
+	assert.equal(h.controller.chatSide, "left");
+	h.controller.setChatSide("left");
+	await delay(60);
+	assert.equal(h.persistence.saves.length, 1, "a no-op side never persists");
+	h.controller.setChatSide("right");
+	await delay(60);
+	const persisted = h.persistence.saves.at(-1)?.state;
+	assert.ok(persisted);
+	assert.equal(persisted.chatSide, "right", "the side persists with the layout intent");
+	// Restore adopts the stored side and a stored document list keeps its tabs.
+	await mustOpen(h, "a.ts");
+	const tabsBefore = h.tabs.list().map((tab) => tab.documentId);
+	h.controller.applyRestoredLayout({ ...persisted });
+	assert.equal(h.controller.getLayoutInput().chatSide, "right");
+	assert.deepEqual(h.tabs.list().map((tab) => tab.documentId), tabsBefore, "restoring a side never resets tabs");
+	// A stored state without the field stays "left" (older documents).
+	h.controller.applyRestoredLayout({ ...persisted, chatSide: undefined });
+	assert.equal(h.controller.getLayoutInput().chatSide, "left", "absent side falls back to left");
+	await h.controller.dispose();
+});
+
+test("openWorkspace merges layout intent without clobbering stored open files", async () => {	const h = build();
 	const stored: WorkspacePersistedState = {
 		version: WORKSPACE_STATE_VERSION,
 		requestedMode: "editor",
@@ -1132,8 +1158,13 @@ test("mode toggles preserve the previous non-chat mode", async () => {
 	assert.equal(h.controller.getLayoutInput().splitRatio, 0.25);
 	h.controller.setRatio(0.95);
 	assert.equal(h.controller.getLayoutInput().splitRatio, 0.75);
+	assert.equal(h.controller.getLayoutInput().explorerRequested, true, "the explorer opens by default");
 	h.controller.toggleExplorer();
-	assert.equal(h.controller.getLayoutInput().explorerRequested, true);
+	assert.equal(h.controller.getLayoutInput().explorerRequested, false);
+	h.controller.setChatSide("right");
+	assert.equal(h.controller.getLayoutInput().chatSide, "right");
+	h.controller.setChatSide("bogus" as never);
+	assert.equal(h.controller.getLayoutInput().chatSide, "right", "junk sides are ignored");
 	h.controller.noteFocus("explorer");
 	assert.equal(h.controller.getLayoutInput().preferredPane, "editor");
 	h.controller.noteFocus("chat-composer");

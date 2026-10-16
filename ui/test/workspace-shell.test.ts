@@ -1,5 +1,6 @@
-// T2 shell composition tests (plan §7): the opt-in workspace split rendered on
-// a real TuiAltScreen, divider drags through synthesized SGR mouse input, and
+// T2 shell composition tests (plan §7 + UX batch): the opt-in workspace split
+// rendered on a real TuiAltScreen, divider drags through synthesized SGR mouse
+// input, the far-right explorer grip, full-width composer/dock rows, and
 // retained component identity across mode and density changes.
 
 import assert from "node:assert/strict";
@@ -19,7 +20,7 @@ import { WorkspaceShell } from "../src/components/WorkspaceShell.ts";
 import { AnimationCoordinator } from "../src/design/motion.ts";
 import { editorTheme } from "../src/theme.ts";
 import { computeLayout } from "../src/workspace/layout.ts";
-import { SPLIT_MINIMUM_COLUMNS, type LayoutInput } from "../src/workspace/state.ts";
+import { LAYOUT_BUDGETS, SPLIT_MINIMUM_COLUMNS, type LayoutInput } from "../src/workspace/state.ts";
 
 interface MockTerminal extends Terminal {
 	writes: string[];
@@ -88,6 +89,7 @@ interface Harness {
 	editor: PaneStub;
 	explorer: PaneStub;
 	state: LayoutInput;
+	explorerToggles: () => number;
 }
 
 function buildHarness(columns: number, rows: number, transcriptLines = ["chat transcript row"]): Harness {
@@ -102,6 +104,10 @@ function buildHarness(columns: number, rows: number, transcriptLines = ["chat tr
 	footer.cwd = "/repo";
 	footer.tokens = 7;
 	const shell = new AppShell(tui, transcript, composer, footer);
+	let toggles = 0;
+	shell.onWorkspaceExplorerToggle = () => {
+		toggles += 1;
+	};
 	tui.setLayoutRoot(shell.root);
 	tui.start();
 	tui.renderNow(true);
@@ -122,6 +128,7 @@ function buildHarness(columns: number, rows: number, transcriptLines = ["chat tr
 			explorerRequested: false,
 			preferredPane: "chat",
 		},
+		explorerToggles: () => toggles,
 	};
 }
 
@@ -139,6 +146,12 @@ function teardown(h: Harness): void {
 	h.tui.stop();
 }
 
+/** First screen row of the composed panes area (top row minus the chrome). */
+function paneAreaRows(h: Harness): number {
+	const geometry = computeLayout(h.state);
+	return geometry.editor?.rows ?? 0;
+}
+
 test("without workspace state the shell keeps today's chat-only tree", () => {
 	const h = buildHarness(80, 24);
 	try {
@@ -148,31 +161,36 @@ test("without workspace state the shell keeps today's chat-only tree", () => {
 		assert.equal(screen.length, 24);
 		assert.doesNotMatch(screen.join("\n"), /EDITOR/, "injected editor stays hidden until a state arrives");
 		assert.equal((screen[0] ?? "").trimEnd(), "chat transcript row", "top row is the plain transcript");
-		assert.match(screen[20] ?? "", /Ask anything/);
+		assert.equal(screen.length, 24);
+		const composerRow = screen.findIndex((line) => line.includes("Ask anything"));
+		assert.ok(composerRow > 0, "composer visible");
 		assert.match(screen[23] ?? "", /test-model/);
 	} finally {
 		teardown(h);
 	}
 });
 
-test("160x48 split composes chat | divider | editor with a full-width footer", () => {
+test("160x48 split composes chat | divider | editor | grip, docked composer full width", () => {
 	const h = buildHarness(160, 48);
 	try {
 		configure(h);
 		const geometry = computeLayout(h.state);
 		assert.equal(geometry.effectiveMode, "split");
-		assert.ok(geometry.chat && geometry.editor);
+		assert.ok(geometry.chat && geometry.editor && geometry.grip);
 		assert.equal(geometry.chat.x, 0);
 		assert.ok(geometry.chat.columns >= 78 && geometry.chat.columns <= 81, `chat ≈79, got ${geometry.chat.columns}`);
 		assert.equal(geometry.editor.x, geometry.chat.columns + 1);
 		assert.ok(Math.abs(geometry.chat.columns - geometry.editor.columns) <= 2, "an approximately even split");
+		assert.equal(geometry.grip.x, 159);
 		const dividerX = geometry.chat.columns;
+		const gripX = geometry.grip.x;
 		const screen = plain(h.tui.getScreenLines());
 		assert.equal(screen.length, 48);
-		for (const row of [0, 11, 45]) {
+		const topRow = paneAreaRows(h) - h.shell.chromeRows();
+		assert.ok(topRow > 0, "the panes area keeps rows");
+		for (const row of [0, 11, topRow - 1]) {
 			assert.equal(screen[row]!.charAt(dividerX), "│", `divider rule on row ${row}`);
 		}
-		assert.equal((screen[46] ?? "").trim(), "", "gap row separates the columns from the footer");
 		assert.ok(screen[0]!.startsWith("chat transcript row"), "chat pane starts at column 0");
 		assert.ok(screen[0]!.slice(0, dividerX).includes("chat transcript row"), "chat pane keeps its columns");
 		assert.equal(
@@ -180,6 +198,14 @@ test("160x48 split composes chat | divider | editor with a full-width footer", (
 			"EDITOR".padEnd(geometry.editor.columns, "·"),
 			"editor pane occupies exactly its geometry columns",
 		);
+		// The grip: faint top notch in the far-right column, never wider.
+		assert.equal(screen[0]!.charAt(gripX), "▐");
+		for (const line of screen) assert.ok(line.length <= 160);
+		// The composer is a FULL-WIDTH row under the panes (starts at column 0).
+		const composerRow = screen.findIndex((line) => line.includes("Ask anything"));
+		assert.ok(composerRow > topRow, "composer sits below the panes area");
+		assert.ok(screen[composerRow]!.indexOf("Ask anything") < 10, "composer prompt starts at the left edge");
+		assert.notEqual(screen[composerRow]!.charAt(dividerX), "│", "no divider crosses the composer row");
 		const footer = screen[47]!;
 		assert.equal(footer.length, 160, "footer still spans the full width");
 		assert.match(footer, /test-model/);
@@ -259,7 +285,8 @@ test("divider drag maps screen columns to clamped ratios without zero-width pane
 			h.shell.setWorkspaceState(h.state);
 		};
 		const inject = h.term.onInput!;
-		const usable = 160 - 1;
+		// The resizable span excludes the divider and the grip columns.
+		const usable = 160 - LAYOUT_BUDGETS.dividerColumns - LAYOUT_BUDGETS.gripColumns;
 		const initial = computeLayout(h.state);
 		const dividerX = initial.chat!.columns;
 		const before = plain(h.tui.getScreenLines());
@@ -302,19 +329,87 @@ test("divider drag maps screen columns to clamped ratios without zero-width pane
 	}
 });
 
-test("a docking card stays inside the chat column in split mode", () => {
+test("double-clicking the divider resets the split ratio to 0.5", () => {
+	const h = buildHarness(160, 48);
+	try {
+		configure(h);
+		const ratios: number[] = [];
+		h.shell.onWorkspaceRatioChange = (ratio) => {
+			ratios.push(ratio);
+			h.state = { ...h.state, splitRatio: ratio };
+			h.shell.setWorkspaceState(h.state);
+		};
+		// Move off-center first so the reset is observable.
+		const injected = h.term.onInput!;
+		const dividerX = computeLayout(h.state).chat!.columns;
+		injected(sgr(0, dividerX, 5));
+		injected(sgr(32, 120, 5));
+		injected(sgr(0, 120, 5, true));
+		assert.ok((ratios.at(-1) ?? 0) > 0.6, "dragged right first");
+		h.tui.renderNow(true); // the drag moved the divider: dispatch against the new frame
+		const movedDivider = computeLayout(h.state).chat!.columns;
+		// Double-click the divider: press/release + synthesized click(1), twice.
+		injected(sgr(0, movedDivider, 5));
+		injected(sgr(0, movedDivider, 5, true));
+		assert.equal(ratios.length, 1, "a single click alone never resizes");
+		injected(sgr(0, movedDivider, 5));
+		injected(sgr(0, movedDivider, 5, true));
+		assert.equal(ratios.length, 2, "the double-click resets");
+		assert.equal(ratios.at(-1), 0.5);
+		h.tui.renderNow(true);
+		assert.equal(computeLayout(h.state).chat!.columns, computeLayout({ ...h.state, splitRatio: 0.5 }).chat!.columns);
+	} finally {
+		teardown(h);
+	}
+});
+
+test("the far-right grip toggles the explorer and never widens past its column", () => {
+	const h = buildHarness(160, 48);
+	try {
+		configure(h);
+		const geometry = computeLayout(h.state);
+		const gripX = geometry.grip!.x;
+		assert.equal(geometry.grip!.columns, 1);
+		const before = h.explorerToggles();
+		const inject = h.term.onInput!;
+		inject(sgr(0, gripX, 0));
+		assert.equal(h.explorerToggles(), before, "a bare press never toggles");
+		inject(sgr(0, gripX, 0, true));
+		assert.equal(h.explorerToggles(), before + 1, "the completed click toggles exactly once");
+		// The grip is pure chrome: the panes keep their geometry columns.
+		const after = plain(h.tui.getScreenLines());
+		assert.equal(after[0]!.length, 160);
+		// It also exists in editor-maximized mode.
+		h.shell.setWorkspaceState({ ...h.state, requestedMode: "editor" });
+		h.tui.renderNow(true);
+		const editorGeometry = computeLayout({ ...h.state, requestedMode: "editor" });
+		assert.equal(editorGeometry.grip!.x, 159);
+		const screen = plain(h.tui.getScreenLines());
+		assert.equal(screen[0]!.charAt(159), "▐");
+		assert.equal(screen[0]!.length, 160, "the grip never widens the frame");
+		const togglesBefore = h.explorerToggles();
+		inject(sgr(0, 159, 0));
+		inject(sgr(0, 159, 0, true));
+		assert.equal(h.explorerToggles(), togglesBefore + 1, "the grip works in editor-maximized mode");
+	} finally {
+		teardown(h);
+	}
+});
+
+test("a docking card becomes a full-width row under the panes in split mode", () => {
 	const h = buildHarness(160, 48);
 	try {
 		configure(h);
 		h.shell.setDock(new PaneStub("DOCK-ROW"));
 		h.tui.renderNow(true);
 		const geometry = computeLayout(h.state);
-		const chatColumns = geometry.chat!.columns;
 		const screen = plain(h.tui.getScreenLines());
 		const dockRow = screen.findIndex((line) => line.includes("DOCK-ROW"));
 		assert.ok(dockRow >= 0, "dock card renders");
-		assert.ok(screen[dockRow]!.indexOf("DOCK-ROW") < chatColumns, "inside the chat column");
-		assert.equal(screen[dockRow]!.charAt(chatColumns), "│", "divider still at the geometry column");
+		assert.ok(dockRow > geometry.editor!.rows - h.shell.chromeRows() - 1, "below the panes area");
+		assert.ok(screen[dockRow]!.startsWith("DOCK-ROW"), "the dock spans from the left edge");
+		assert.ok(screen[dockRow]!.length <= 160);
+		assert.doesNotMatch(screen[dockRow]!, /│/, "the divider never crosses a dock row");
 	} finally {
 		teardown(h);
 	}
@@ -353,7 +448,7 @@ test("an injected ScrollView editor keeps its instance and anchor across recompo
 	}
 });
 
-test("editor mode gives the editor the full top row and hides the chat", () => {
+test("editor mode gives the editor the full top row and keeps the composer full width", () => {
 	const h = buildHarness(160, 48);
 	try {
 		configure(h);
@@ -361,17 +456,50 @@ test("editor mode gives the editor the full top row and hides the chat", () => {
 		h.tui.renderNow(true);
 		const geometry = computeLayout({ ...h.state, requestedMode: "editor" });
 		assert.equal(geometry.effectiveMode, "editor");
-		assert.equal(geometry.editor!.columns, 160);
+		assert.equal(geometry.editor!.columns, 160 - LAYOUT_BUDGETS.gripColumns);
 		const screen = plain(h.tui.getScreenLines());
 		assert.ok(screen[0]!.startsWith("EDITOR"), "editor pane starts at column 0");
-		assert.doesNotMatch(screen.join("\n"), /chat transcript row/, "chat hidden but retained");
-		assert.doesNotMatch(screen.join("\n"), /Ask anything/, "composer hidden with the chat column");
+		assert.equal(screen[0]!.charAt(159), "▐", "the grip closes the editor row");
+		assert.doesNotMatch(screen.join("\n"), /chat transcript row/, "chat transcript hidden but retained");
+		const composerRow = screen.findIndex((line) => line.includes("Ask anything"));
+		assert.ok(composerRow > 0, "the full-width composer stays available in editor mode");
+		assert.ok(screen[composerRow]!.indexOf("Ask anything") < 10);
 		assert.match(screen[47] ?? "", /test-model/, "footer still spans the bottom");
 		assert.equal(screen[47]!.length, 160);
 		// Back to split: the same chat objects return.
 		h.shell.setWorkspaceState(h.state);
 		h.tui.renderNow(true);
 		assert.match(plain(h.tui.getScreenLines())[0]!, /chat transcript row/);
+	} finally {
+		teardown(h);
+	}
+});
+
+test("chatSide right mirrors the pane order without recreating components", () => {
+	const rows = Array.from({ length: 80 }, (_, index) => `chat row ${index}`);
+	const h = buildHarness(160, 48, rows);
+	try {
+		configure(h);
+		const constructions = PaneStub.constructions;
+		const scrolled = h.shell.transcriptScroll;
+		scrolled.scrollTo(12);
+		h.tui.renderNow(true);
+		assert.equal(scrolled.scrollTop, 12);
+		h.shell.setWorkspaceState({ ...h.state, chatSide: "right" });
+		h.tui.renderNow(true);
+		const geometry = computeLayout({ ...h.state, chatSide: "right" });
+		assert.ok(geometry.chat && geometry.editor);
+		assert.equal(geometry.editor.x, 0, "the editor leads");
+		const screen = plain(h.tui.getScreenLines());
+		assert.ok(screen[0]!.startsWith("EDITOR"), "editor pane starts at column 0 on the right-side chat");
+		assert.equal(screen[0]!.charAt(geometry.editor.columns), "│", "divider after the editor");
+		assert.ok(
+			screen[0]!.slice(geometry.chat.x).includes("chat row 12"),
+			"chat transcript sits right of the divider at its retained scroll anchor",
+		);
+		assert.equal(PaneStub.constructions, constructions, "the side swap never recreates panes");
+		assert.equal(h.shell.transcriptScroll, scrolled, "the transcript ScrollView is retained");
+		assert.equal(scrolled.scrollTop, 12, "the side swap never resets scroll");
 	} finally {
 		teardown(h);
 	}
@@ -399,7 +527,8 @@ test("a docked explorer takes its column off the editor, not the chat", () => {
 			screen[0]!.slice(geometry.explorer!.x, geometry.explorer!.x + geometry.explorer!.columns),
 			"EXPLORER".padEnd(geometry.explorer!.columns, "·"),
 		);
-		assert.equal(geometry.explorer!.x + geometry.explorer!.columns, 160, "the drawer reaches the right edge");
+		assert.equal(screen[0]!.charAt(159), "▐", "the grip stays at the far right");
+		assert.equal(geometry.explorer!.x + geometry.explorer!.columns, 159, "the drawer reaches the grip");
 	} finally {
 		teardown(h);
 	}
@@ -412,6 +541,7 @@ test("workspace entries follow the frozen geometry and report overlay mode", () 
 	try {
 		const editor = new PaneStub("EDITOR");
 		const explorer = new PaneStub("EXPLORER");
+		const chat = new PaneStub("CHAT");
 		shell.setEditor(editor);
 		shell.setExplorer(explorer);
 		const input: LayoutInput = {
@@ -427,20 +557,35 @@ test("workspace entries follow the frozen geometry and report overlay mode", () 
 		assert.equal(layout.effectiveMode, "split");
 		assert.equal(layout.explorer, undefined);
 		assert.equal(shell.explorerOverlay, true, "overlay is reported instead of a column");
-		const narrowEntries = shell.entries(layout);
-		assert.equal(narrowEntries.length, 2, "no explorer column when the editor would starve");
-		assert.equal(narrowEntries[0]!.basis, 1);
-		assert.equal(narrowEntries[0]!.component, shell.divider);
-		assert.equal(narrowEntries[1]!.basis, layout.editor!.columns);
-		assert.equal(narrowEntries[1]!.component, editor, "the injected component is used directly");
+		// entries() composes the whole row in visual order: chat, divider,
+		// editor, (explorer), grip.
+		const narrowEntries = shell.entries(layout, { component: chat, basis: layout.chat!.columns, shrink: 0, grow: 0 });
+		assert.equal(narrowEntries.length, 4, "no explorer column when the editor would starve");
+		assert.equal(narrowEntries[0]!.component, chat);
+		assert.equal(narrowEntries[1]!.basis, 1);
+		assert.equal(narrowEntries[1]!.component, shell.divider);
+		assert.equal(narrowEntries[2]!.basis, layout.editor!.columns);
+		assert.equal(narrowEntries[2]!.component, editor, "the injected component is used directly");
+		assert.equal(narrowEntries[3]!.component, shell.grip, "the grip closes the row");
+		assert.equal(narrowEntries[3]!.basis, LAYOUT_BUDGETS.gripColumns);
 		shell.setState({ ...input, columns: 160 });
 		const wide = shell.layout!;
-		const wideEntries = shell.entries(wide);
-		assert.equal(wideEntries.length, 3, "docked explorer adds one column");
-		assert.equal(wideEntries[0]!.basis, 1);
-		assert.equal(wideEntries[1]!.basis, wide.editor!.columns);
-		assert.equal(wideEntries[2]!.basis, wide.explorer!.columns);
-		assert.equal(wideEntries[2]!.component, explorer, "injected explorer is used when present");
+		const wideEntries = shell.entries(wide, { component: chat, basis: wide.chat!.columns, shrink: 0, grow: 0 });
+		assert.equal(wideEntries.length, 5, "docked explorer adds one column");
+		assert.equal(wideEntries[0]!.component, chat);
+		assert.equal(wideEntries[1]!.basis, 1);
+		assert.equal(wideEntries[2]!.basis, wide.editor!.columns);
+		assert.equal(wideEntries[3]!.basis, wide.explorer!.columns);
+		assert.equal(wideEntries[3]!.component, explorer, "injected explorer is used when present");
+		assert.equal(wideEntries[4]!.component, shell.grip);
+		// A right-side chat swaps the two pane entries.
+		shell.setState({ ...input, columns: 160, chatSide: "right" });
+		const right = shell.layout!;
+		const rightEntries = shell.entries(right, { component: chat, basis: right.chat!.columns, shrink: 0, grow: 0 });
+		assert.equal(rightEntries[0]!.component, editor);
+		assert.equal(rightEntries[1]!.component, shell.divider);
+		assert.equal(rightEntries[2]!.component, chat);
+		assert.equal(rightEntries[4]!.component, shell.grip);
 	} finally {
 		tui.stop();
 	}
@@ -468,6 +613,8 @@ test("setState demands a rebuild only when the composed geometry changes", () =>
 		assert.equal(demands, 1, "a ratio nudge that keeps the rectangles does not rebuild");
 		shell.setState({ ...input, columns: 161 });
 		assert.equal(demands, 2, "a real geometry change rebuilds");
+		shell.setState({ ...input, chatSide: "right" });
+		assert.equal(demands, 3, "a side swap rebuilds with the mirrored rectangles");
 	} finally {
 		tui.stop();
 	}
@@ -487,5 +634,25 @@ test("degenerate terminals never throw with a workspace configured", () => {
 		} finally {
 			teardown(h);
 		}
+	}
+});
+
+test("a 40x9 editor-mode frame keeps the full-width composer and the grip", () => {
+	const h = buildHarness(40, 9);
+	try {
+		h.state = { ...h.state, requestedMode: "editor", preferredPane: "editor" };
+		configure(h);
+		h.tui.renderNow(true);
+		const screen = plain(h.tui.getScreenLines());
+		assert.equal(screen.length, 9, "the frame still fills the terminal");
+		for (const line of screen) assert.ok(line.length <= 40, `row exceeds 40: ${line}`);
+		const composerRow = screen.findIndex((line) => line.includes("Ask anything"));
+		assert.ok(composerRow > 0, "the composer survives at the reduced density");
+		const geometry = computeLayout({ ...h.state, columns: 40, rows: 9 });
+		assert.equal(geometry.editor!.columns, 39, "the grip takes exactly its column");
+		assert.equal(screen[0]!.charAt(39), "▐");
+		assert.match(screen[8] ?? "", /test-model/);
+	} finally {
+		teardown(h);
 	}
 });

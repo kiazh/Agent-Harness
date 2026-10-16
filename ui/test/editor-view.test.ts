@@ -297,6 +297,35 @@ test("clicking the gutter focuses without moving the caret", () => {
 		handled: true,
 	});
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 3);
+	// A lone click (no press delivered to the view) still claims focus.
+	assert.deepEqual(harness.view.handleMouse(mouseEvent({ type: "click", x: 0, y: 0 })), {
+		focus: true,
+		handled: true,
+	});
+	assert.equal(store.getViewState(doc.id)?.cursorOffset, 3, "gutter clicks never move the caret");
+});
+
+test("a lone viewport click positions the caret and claims focus (no press needed)", () => {
+	const { store, doc } = freshStore("hello world");
+	store.setSelection(doc.id, { cursorOffset: 0 });
+	const harness = makeView(store, doc.id);
+	harness.view.setViewportRows(5);
+	// Gesture without a preceding press: the click alone must place the caret.
+	const click = harness.view.handleMouse(mouseEvent({ type: "click", x: 2 + 7, y: 0 }));
+	assert.deepEqual(click, { handled: true, focus: true });
+	assert.equal(store.getViewState(doc.id)?.cursorOffset, 7, "the click positions the caret");
+	// A press-then-click sequence keeps the click idempotent and preserves focus.
+	const press = harness.view.handleMouse(mouseEvent({ type: "press", x: 2 + 3, y: 0 }));
+	assert.equal(press?.capture, true);
+	const again = harness.view.handleMouse(mouseEvent({ type: "click", x: 2 + 3, y: 0 }));
+	assert.deepEqual(again, { handled: true, focus: true });
+	assert.equal(store.getViewState(doc.id)?.cursorOffset, 3);
+	// Clicking a read-only document still focuses (the store refuses movement,
+	// but a click never breaks the pane's caret plumbing).
+	const sealed = freshStore("sealed", { readOnly: true });
+	const sealedHarness = makeView(sealed.store, sealed.doc.id);
+	const roClick = sealedHarness.view.handleMouse(mouseEvent({ type: "click", x: 2 + 4, y: 0 }));
+	assert.equal(roClick?.focus, true);
 });
 
 test("horizontal scrolling maps mouse columns through horizontalCellOffset", () => {

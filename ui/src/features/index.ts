@@ -56,7 +56,7 @@ const helpCommand: Command = {
 	description: "Show available commands",
 	async run(_args, host) {
 		host.print(
-			`${helpText(COMMANDS)}\n\nKeys: Enter send · Shift+Enter newline · Esc stop reply · Tab complete · ↓ on empty input picks a subagent · Ctrl+C exit · Ctrl+Shift+←/→ switch agents\nWorkspace: Ctrl+P quick open · Ctrl+S save · Ctrl+Space completion · F12 definition · Shift+F12 references · F2 rename · F6/Shift+F6 cycle focus · Ctrl+←/→ toggle chat maximize (editor word motion: alt+arrows) · Ctrl+T explorer · Ctrl+W unbound`,
+			`${helpText(COMMANDS)}\n\nKeys: Enter send · Shift+Enter newline · Esc stop reply · Tab complete · ↓ on empty input picks a subagent · Ctrl+C exit · Ctrl+Shift+←/→ switch agents\nWorkspace: Ctrl+P quick open · Ctrl+S save · Ctrl+Space completion · F12 definition · Shift+F12 references · F2 rename · F6/Shift+F6 cycle focus · Ctrl+→ maximize chat · Ctrl+← back to the 50/50 split (editor word motion: alt+arrows) · Ctrl+T explorer · Ctrl+W close tab (terminal may intercept)`,
 			"plain",
 		);
 	},

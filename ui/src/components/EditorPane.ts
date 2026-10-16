@@ -1,5 +1,8 @@
 // Editor pane chrome (plan §2 mockup, §9 tabs, §23): tab strip, breadcrumb,
-// viewport and local status row around an EditorView.
+// viewport and local status row around an EditorView. The active tab chip
+// carries a clickable `✕` cell that goes through the app's dirty-guarded close
+// flow; the tab strip and status row are grounded by a continuous surface fill
+// (text markers keep their own styling).
 //
 // Layout contract: components receive only width, never height, so the future
 // shell calls `layout(rows)` with the pane's allocated row count. The pane
@@ -30,7 +33,7 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { truncateDisplay } from "../design/text.ts";
-import { selectListTheme, theme } from "../design/theme.ts";
+import { repairFill, selectListTheme, theme } from "../design/theme.ts";
 import type { DocumentRecord } from "../editor/model.ts";
 import type { EditorStore } from "../editor/model.ts";
 import type { TabModel } from "../editor/tabs.ts";
@@ -45,6 +48,8 @@ export const EDITOR_PANE_HEADER_ROWS = 2;
 export const EDITOR_PANE_DEFAULT_ROWS = 23;
 /** Default row budget (header included) for the problems slot. */
 export const EDITOR_PANE_PROBLEMS_DEFAULT_ROWS = 6;
+/** Close affordance rendered on the active tab chip (its own click cell). */
+export const TAB_CLOSE_GLYPH = "✕";
 
 export interface EditorPaneOptions {
 	store: EditorStore;
@@ -92,6 +97,8 @@ interface TabHitArea {
 	documentId: string;
 	start: number;
 	end: number;
+	/** True for the active chip's close cell (its own click target). */
+	close?: boolean;
 }
 
 /** Scheme-stripped, percent-decoded display path for a document URI. */
@@ -145,12 +152,17 @@ export function disambiguatedTabLabels(uris: string[]): string[] {
 	return segments.map((_, index) => labelAt(index));
 }
 
-function chipText(chip: TabChip): string {
+/**
+ * One chip: `[label markers]`. The active chip renders a close cell just
+ * before the closing bracket so the affordance is part of the chip itself.
+ */
+function chipText(chip: TabChip, closable: boolean): string {
 	const markers: string[] = [];
 	if (chip.dirty) markers.push("●");
 	if (chip.conflict) markers.push("!");
 	if (chip.readOnly) markers.push("[ro]");
-	return markers.length > 0 ? `[${chip.label} ${markers.join(" ")}]` : `[${chip.label}]`;
+	const body = markers.length > 0 ? `${chip.label} ${markers.join(" ")}` : chip.label;
+	return closable ? `[${body} ${TAB_CLOSE_GLYPH}]` : `[${body}]`;
 }
 
 function clampRows(rows: number): number {
@@ -167,6 +179,15 @@ function padRow(row: string, width: number): string {
 	const visible = visibleWidth(row);
 	if (visible >= width) return row;
 	return row + " ".repeat(width - visible);
+}
+
+/**
+ * Subtle continuous surface fill for one pane chrome row: the raised tool
+ * background across the full pane width, re-asserted after nested style resets
+ * so text markers keep their own ink without leaking terminal default fills.
+ */
+function paneSurfaceRow(row: string, width: number): string {
+	return repairFill("toolBg", theme.toolBg(padRow(row, width)));
 }
 
 /**
@@ -332,6 +353,12 @@ export class EditorPane implements Component, Focusable {
 			const x = Math.floor(event.x);
 			const hit = this.tabStrip(width).hitAreas.find((area) => x >= area.start && x < area.end);
 			if (!hit) return undefined;
+			// The active chip's close cell: the same decision flow as middle-click
+			// (dirty buffers ask Save/Discard/Cancel through the controller).
+			if (hit.close && event.button !== "right") {
+				this.onCloseTabCallback?.(hit.documentId);
+				return { handled: true, focus: true };
+			}
 			if (event.button === "middle") {
 				this.onCloseTabCallback?.(hit.documentId);
 				return { handled: true, focus: true };
@@ -408,17 +435,23 @@ export class EditorPane implements Component, Focusable {
 		const viewLines = this.view.render(safeWidth);
 		while (viewLines.length < viewportRows) viewLines.push(" ".repeat(safeWidth));
 		const problemLines = problemsRows > 0 ? this.renderProblems(safeWidth, problemsRows) : [];
-		const lines = [
-			strip.text,
-			this.breadcrumb(safeWidth),
-			...viewLines.slice(0, viewportRows),
-			...popupShown,
-			this.statusRow(),
-			...problemLines,
-		];
-		return lines
-			.slice(0, this.allocatedRows)
-			.map((line) => padRow(truncateDisplay(line, safeWidth), safeWidth));
+		// Continuous surface fill grounds the pane: the tab strip and the local
+		// status row share the raised tool surface across the pane width. Text
+		// markers keep their own styling (repairFill only re-asserts the fill).
+		const surface = new Set<number>();
+		const lines: string[] = [];
+		surface.add(lines.length);
+		lines.push(strip.text);
+		lines.push(this.breadcrumb(safeWidth));
+		lines.push(...viewLines.slice(0, viewportRows));
+		lines.push(...popupShown);
+		surface.add(lines.length);
+		lines.push(this.statusRow());
+		lines.push(...problemLines);
+		return lines.slice(0, this.allocatedRows).map((line, index) => {
+			const row = padRow(truncateDisplay(line, safeWidth), safeWidth);
+			return surface.has(index) ? paneSurfaceRow(row, safeWidth) : row;
+		});
 	}
 
 	invalidate(): void {
@@ -492,14 +525,16 @@ export class EditorPane implements Component, Focusable {
 	/**
 	 * One stable strip row: active chip always shown; a deterministic
 	 * contiguous window around it grows until width is exhausted, and the
-	 * hidden remainder is reported as a trailing `+N` indicator.
+	 * hidden remainder is reported as a trailing `+N` indicator. The active
+	 * chip carries a close cell (its own hit area) just before its bracket.
 	 */
 	private tabStrip(width: number): { text: string; hitAreas: TabHitArea[] } {
 		const chips = this.tabChips();
 		if (chips.length === 0) return { text: theme.dim("No open files"), hitAreas: [] };
 		const active = this.tabModel.activeDocumentId();
-		const styles = chips.map((chip) =>
-			chip.documentId === active ? selectListTheme.selectedText(chipText(chip)) : theme.muted(chipText(chip)),
+		const closable = chips.map((chip) => chip.documentId === active);
+		const styles = chips.map((chip, index) =>
+			closable[index] ? selectListTheme.selectedText(chipText(chip, true)) : theme.muted(chipText(chip, false)),
 		);
 		const widths = styles.map((style) => visibleWidth(style));
 		const total = widths.reduce((sum, chipWidth) => sum + chipWidth, 0) + Math.max(0, chips.length - 1);
@@ -536,7 +571,13 @@ export class EditorPane implements Component, Focusable {
 			const start = visibleWidth(text);
 			const style = styles[index] ?? "";
 			text += style;
-			hitAreas.push({ documentId: chips[index]?.documentId ?? "", start, end: start + (widths[index] ?? 0) });
+			const chipWidth = widths[index] ?? 0;
+			const documentId = chips[index]?.documentId ?? "";
+			if (closable[index]) {
+				// Close cell of the active chip: the ✕ sits one column before `]`.
+				hitAreas.push({ documentId, start: start + chipWidth - 2, end: start + chipWidth - 1, close: true });
+			}
+			hitAreas.push({ documentId, start, end: start + chipWidth });
 		}
 		const hidden = chips.length - (hi - lo + 1);
 		if (hidden > 0) text += ` ${theme.dim(`+${hidden}`)}`;
