@@ -51,6 +51,11 @@ MAX_TOKENS = 32768
 # the bound keeps a runaway client from growing config.yaml without limit.
 WORKSPACE_UI_STATE_MAX_BYTES = 64 * 1024
 
+# Upper bound (UTF-8 bytes) for the global UI preferences JSON document
+# (editor prefs such as syntax highlighting / soft wrap / tab width). Small by
+# construction; the bound keeps a runaway client from growing config.yaml.
+UI_PREFERENCES_MAX_BYTES = 16 * 1024
+
 # Secrets live in the environment (.env), never in config.yaml.
 SECRET_KEYS = frozenset(
     {
@@ -107,6 +112,7 @@ __all__ = [
     "DEFAULTS",
     "MAX_TOKENS",
     "WORKSPACE_UI_STATE_MAX_BYTES",
+    "UI_PREFERENCES_MAX_BYTES",
     "REASONING_EFFORTS",
     "REASONING_CATALOG_EFFORTS",
     "REASONING_UNSET_EFFORTS",
@@ -269,6 +275,11 @@ DEFAULTS: dict[str, Any] = {
     # offsets only — never document text or secrets. Bounded to 64 KiB by
     # validate_value (WORKSPACE_UI_STATE_MAX_BYTES).
     "workspace_ui_state": "",
+    # Versioned global UI preferences (JSON string): editor prefs that are not
+    # workspace-scoped — syntax highlighting, soft wrap, tab width. Bounded to
+    # 16 KiB by validate_value (UI_PREFERENCES_MAX_BYTES); never holds source
+    # text or secrets.
+    "ui_preferences": "",
 }
 
 # Map config keys to their legacy environment variable names
@@ -354,6 +365,14 @@ def validate_value(key: str, value: Any) -> Any:
             raise ValueError(
                 f"workspace_ui_state is too long (max {WORKSPACE_UI_STATE_MAX_BYTES} bytes)"
             )
+        return value
+    if key == "ui_preferences":
+        # Versioned global UI preferences JSON: same single-refusal contract
+        # and bound as workspace_ui_state, one order of magnitude smaller.
+        if not isinstance(value, str):
+            raise ValueError("ui_preferences must be a string")
+        if len(value.encode("utf-8")) > UI_PREFERENCES_MAX_BYTES:
+            raise ValueError(f"ui_preferences is too long (max {UI_PREFERENCES_MAX_BYTES} bytes)")
         return value
     if key not in DEFAULTS:
         return value
@@ -530,6 +549,9 @@ class Config:
     # Versioned, non-sensitive workspace UI state (plan §21); see DEFAULTS for
     # the document contract and WORKSPACE_UI_STATE_MAX_BYTES for the bound.
     workspace_ui_state: str = ""
+    # Versioned global UI preferences (editor prefs); see DEFAULTS and
+    # UI_PREFERENCES_MAX_BYTES for the bound.
+    ui_preferences: str = ""
     # n4: compaction_check_enabled was dead config surface (no production
     # reader); it was removed rather than kept as a misleading toggle.
 
