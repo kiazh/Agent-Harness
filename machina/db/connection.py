@@ -70,10 +70,20 @@ CREATE TABLE IF NOT EXISTS tool_artifacts (
     content TEXT NOT NULL,
     content_bytes INT NOT NULL CHECK (content_bytes >= 0),
     token_estimate INT NOT NULL DEFAULT 0,
+    complete BOOLEAN,
+    upstream_truncated BOOLEAN,
+    stored_truncated BOOLEAN,
+    record_count INT CHECK (record_count >= 0),
+    content_revision TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at TIMESTAMPTZ,
     access_count INT NOT NULL DEFAULT 0
 );
+ALTER TABLE tool_artifacts ADD COLUMN IF NOT EXISTS complete BOOLEAN;
+ALTER TABLE tool_artifacts ADD COLUMN IF NOT EXISTS upstream_truncated BOOLEAN;
+ALTER TABLE tool_artifacts ADD COLUMN IF NOT EXISTS stored_truncated BOOLEAN;
+ALTER TABLE tool_artifacts ADD COLUMN IF NOT EXISTS record_count INT CHECK (record_count >= 0);
+ALTER TABLE tool_artifacts ADD COLUMN IF NOT EXISTS content_revision TEXT;
 CREATE INDEX IF NOT EXISTS idx_tool_artifacts_session
     ON tool_artifacts(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_artifacts_expiry

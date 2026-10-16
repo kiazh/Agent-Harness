@@ -53,7 +53,7 @@ from machina.core.prompt import (
 from machina.core.provider import LLMProvider, audit_log, get_provider
 from machina.core.session import Session, session_manager
 from machina.core.session_mode import turn_scope
-from machina.core.tool_views import bounded_tool_view, mark_turn_accepted
+from machina.core.tool_views import artifact_source_version, bounded_tool_view, mark_turn_accepted
 from machina.core.turn_flow import collect_pauses, stagnation_step, stopped_response
 from machina.core.usage import provider_identity, usage_store
 from machina.memory.consolidator import MemoryConsolidator
@@ -1306,12 +1306,12 @@ class BaseReActAgent:
                     session_id=session_id,
                     agent_id=self.agent_id,
                     status=_tool_outcome(item),
+                    source_version=artifact_source_version(),
                 )
                 if artifact_id:
                     item["_artifact_handle"] = artifact_id
-                # Durably record the action exactly once (context chunk +
-                # approval retirement + tool_calls_made entry). Shared with the
-                # cancellation finalizer so the normal path stays unchanged.
+                # Durably record the action exactly once (chunk + approval
+                # retirement + tool_calls_made entry; shared with cancellation).
                 await self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
                 self._append_tool_messages(messages, response, tc, view)
         finally:

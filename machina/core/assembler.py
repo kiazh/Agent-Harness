@@ -272,8 +272,12 @@ class PromptAssembler:
             args = payload.get("args", {})
             if args:
                 args_str = ", ".join(f"{k}={v}" for k, v in args.items())
-                return f"[{chunk_type}] {tool}({args_str})"
-            return f"[{chunk_type}] {tool}"
+                base = f"[{chunk_type}] {tool}({args_str})"
+            else:
+                base = f"[{chunk_type}] {tool}"
+            if chunk_type != "tool_call":
+                return base
+            return base + self._artifact_pointer(payload)
         elif chunk_type in ("result", "assistant_message"):
             status = payload.get("status", "ok")
             result = payload.get("result", payload.get("content", ""))
@@ -298,6 +302,44 @@ class PromptAssembler:
             return f"[assistant] {payload.get('content', '')}"
         else:
             return f"[{chunk_type}] {str(payload)[:100]}"
+
+    # Bound on the rendered preview of a prior-turn tool_call's stored result
+    # (B0/G4): the chunk's `result` may be up to 65k chars; a stored handle
+    # must never pull that into the rebuilt context.
+    _ARTIFACT_PREVIEW_CHARS = 400
+
+    @staticmethod
+    def _artifact_pointer(payload: dict[str, Any]) -> str:
+        """Render a tool_call's stored result + retained-artifact pointer (B0/G4).
+
+        Prior turns kept the call shape only, so a persisted
+        ``artifact_handle`` was never surfaced back into rebuilt context and
+        recovery beyond the assembled window was unreachable. This renders a
+        bounded preview of the stored result plus the handle. It claims only
+        what the record holds: a capped stored copy is disclosed, and
+        availability is resolved by ``artifact_read`` under the caller's ACL —
+        nothing here fabricates content for a revoked or expired handle
+        (§14.6). Chunks without a handle render exactly as before.
+        """
+        handle = payload.get("artifact_handle")
+        if not isinstance(handle, str) or not handle:
+            return ""
+        preview = payload.get("result_preview")
+        if not isinstance(preview, str) or not preview:
+            result = payload.get("result")
+            preview = result if isinstance(result, str) else ""
+        lines: list[str] = []
+        capped = preview[: PromptAssembler._ARTIFACT_PREVIEW_CHARS]
+        if capped:
+            if len(preview) > len(capped):
+                capped += "…"
+            lines.append(f"  -> {capped}")
+        note = f"  [artifact {handle}: retained result; artifact_read pages it if still available"
+        if payload.get("result_truncated"):
+            note += "; the stored copy above is truncated below the retained result"
+        note += "]"
+        lines.append(note)
+        return "\n" + "\n".join(lines)
 
     def _render_compaction_summary(self, payload: dict[str, Any]) -> str:
         """Render a compaction summary explicitly (H04).
