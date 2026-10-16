@@ -171,6 +171,11 @@ DEFAULTS: dict[str, Any] = {
     # Rolling 24h auto-apply cap per agent; counts only auto-applied reviews.
     # 0 disables auto-apply (proposals are only staged for manual approval).
     "learning_review_auto_apply_per_day": 5,
+    # Stage-aware instruction disclosure planner (spec §10/A3/A4). ON: the
+    # disclosure path serves current-stage sections + prerequisites, keyed by
+    # the §11 revision identities; OFF restores the pre-A3 whole-body excerpt
+    # path (one-key rollback; read lazily by runtime._disclosure_planner_enabled).
+    "skills_disclosure_planner": True,
     "rag_enabled": True,
     "streaming": True,
     # Embedding backend for dense retrieval (RAG documents + memory).
@@ -550,6 +555,9 @@ class Config:
     learning_review_auto_apply: bool = True
     # Rolling 24h auto-apply cap per agent; counts only auto-applied reviews.
     learning_review_auto_apply_per_day: int = 5
+    # Stage-aware instruction disclosure planner (spec §10; default ON,
+    # one-key rollback); contract documented in DEFAULTS.
+    skills_disclosure_planner: bool = True
     rag_enabled: bool = True
     streaming: bool = True
     # Embedding backend selection for dense retrieval (RAG + memory).

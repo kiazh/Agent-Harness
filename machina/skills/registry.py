@@ -34,6 +34,7 @@ from machina.skills.ports import SkillSource
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; runtime import stays deferred
     from machina.skills.metadata import MetadataDiagnostic, SkillMetadata
+    from machina.skills.revisions import RevisionRegistry
 
 try:  # POSIX advisory locks for cross-process telemetry merges.
     import fcntl
@@ -594,7 +595,10 @@ class SkillRegistry(SkillSource):
         Stats only — no file contents are read. A changed mtime or size on any
         SKILL.md, telemetry.json, or enrichment sidecar invalidates the cached
         parse. Sidecar stats live in this same signature: there is deliberately
-        no second, competing cache.
+        no second, competing cache. Per the §11 fingerprint policy
+        (``machina.skills.revisions``): these stats are a fast PRE-FILTER for
+        reload decisions only — cache hits that must not serve edited bytes
+        are bound to the content fingerprint instead.
         """
         entries: list[tuple[str, int, int]] = []
         for directory in self._skill_dirs():
@@ -869,6 +873,27 @@ class SkillRegistry(SkillSource):
         sidecars. Empty before the first load and when nothing was reported.
         """
         return list(self._metadata_diags)
+
+    # ─── Revision identities (spec §11) ────────────────────────────────────
+
+    def revisions(self) -> RevisionRegistry:
+        """§11 revision identities for the currently loaded catalog.
+
+        Returns content / catalog / telemetry / ranking-policy / task-state
+        identities so caches can be keyed through
+        :meth:`RevisionRegistry.identity_for` by exactly the identities that
+        affect them. Reflects the loaded objects — call :meth:`load_all` first
+        when the on-disk tree may have changed. Recording uses/views moves
+        only the telemetry identity; it never invalidates content-derived
+        caches.
+
+        Deferred import: the registry's module-level machina edges stay pinned
+        to the ports+observability seam (``tests/test_architecture_pairs.py``);
+        the identity computation lives in ``machina.skills.revisions``.
+        """
+        from machina.skills.revisions import RevisionRegistry
+
+        return RevisionRegistry.for_skills(self.list_skills())
 
     def get(self, name: str) -> Skill | None:
         return self._skills.get(_skill_key(name))

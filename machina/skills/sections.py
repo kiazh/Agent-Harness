@@ -23,9 +23,13 @@ This module owns the *read* side of staged skill disclosure:
 Required-section edges form a bounded acyclic graph
 (:func:`build_section_graph`); cycles are rejected with
 :class:`SectionCycleError` and unknown targets are dropped with A1's
-``dependency-unknown`` diagnostic. The module is a stdlib-only leaf: it
-imports ``machina.skills.metadata`` and ``machina.skills.search`` (both
-machina-free) and never a provider, embedding, or network path.
+``dependency-unknown`` diagnostic. Both caches publish through
+:func:`machina.skills.revisions.guarded_publish`: an invalidation that lands
+mid-parse (``clear_section_cache``) prevents the stale index/binding from
+being cached, and the next compute republishes (spec §11). The module is a
+stdlib-only leaf: it imports ``machina.skills.metadata``,
+``machina.skills.search``, and ``machina.skills.revisions`` (all machina-free)
+and never a provider, embedding, or network path.
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ from machina.skills.metadata import (
     SkillMetadata,
     bind_section_anchors,
 )
+from machina.skills.revisions import GenerationCounter, guarded_publish
 from machina.skills.search import content_revision as skill_content_revision
 
 __all__ = [
@@ -64,6 +69,7 @@ __all__ = [
     "index_sections",
     "read_section",
     "read_skill_section",
+    "section_cache_generation",
     "skill_content_revision",
     "slugify_heading",
 ]
@@ -86,6 +92,9 @@ _INDEX_CACHE: OrderedDict[str, SectionIndex] = OrderedDict()
 _BINDINGS: OrderedDict[
     tuple[str, int], tuple[object, SkillMetadata, tuple[MetadataDiagnostic, ...]]
 ] = OrderedDict()
+#: Generation bumped by every explicit invalidation (spec §11): a parse that
+#: started before the bump must not publish its now-stale result into a cache.
+_CACHE_GENERATION = GenerationCounter()
 
 
 def content_fingerprint(content: str) -> str:
@@ -215,22 +224,39 @@ def _parse_index(content: str, revision: str) -> SectionIndex:
 
 
 def index_sections(content: str, *, refresh: bool = False) -> SectionIndex:
-    """Parse headings once per content revision; same bytes -> same index."""
+    """Parse headings once per content revision; same bytes -> same index.
+
+    Publication is generation-guarded: if ``clear_section_cache`` runs while a
+    parse is in flight, the stale index is returned to this caller but not
+    cached, and the next call parses and publishes it again.
+    """
     text = content or ""
     key = content_fingerprint(text)
     cached = None if refresh else _INDEX_CACHE.get(key)
     if cached is not None:
         _INDEX_CACHE.move_to_end(key)
         return cached
-    index = _parse_index(text, key)
-    _INDEX_CACHE[key] = index
-    while len(_INDEX_CACHE) > MAX_CACHED_REVISIONS:
-        _INDEX_CACHE.popitem(last=False)
-    return index
+
+    def store(index: SectionIndex) -> None:
+        _INDEX_CACHE[key] = index
+        while len(_INDEX_CACHE) > MAX_CACHED_REVISIONS:
+            _INDEX_CACHE.popitem(last=False)
+
+    return guarded_publish(_CACHE_GENERATION, lambda: _parse_index(text, key), store)
+
+
+def section_cache_generation() -> int:
+    """Current section-cache generation (bumped by ``clear_section_cache``)."""
+    return _CACHE_GENERATION.current()
 
 
 def clear_section_cache() -> None:
-    """Drop the per-revision parse and binding caches (explicit reload / tests)."""
+    """Drop the per-revision parse and binding caches (explicit reload / tests).
+
+    Bumps the generation first, so a compute that is already in flight can no
+    longer publish its pre-invalidation result into the emptied caches.
+    """
+    _CACHE_GENERATION.bump()
     _INDEX_CACHE.clear()
     _BINDINGS.clear()
 
@@ -242,17 +268,24 @@ def bound_sections(
 
     The cached value holds the metadata object itself, so an id can never be
     reused for different metadata, and both the index and the declared
-    headings are parsed once per content revision.
+    headings are parsed once per content revision. Publication is
+    generation-guarded like :func:`index_sections`.
     """
     key = (content_fingerprint(content), id(metadata))
     cached = _BINDINGS.get(key)
     if cached is not None and cached[0] is metadata:
         _BINDINGS.move_to_end(key)
         return cached[1], cached[2]
-    bound, diagnostics = bind_section_anchors(metadata, content)
-    _BINDINGS[key] = (metadata, bound, tuple(diagnostics))
-    while len(_BINDINGS) > MAX_CACHED_BINDINGS:
-        _BINDINGS.popitem(last=False)
+
+    def store(result: tuple[SkillMetadata, tuple[MetadataDiagnostic, ...]]) -> None:
+        bound, diagnostics = result
+        _BINDINGS[key] = (metadata, bound, tuple(diagnostics))
+        while len(_BINDINGS) > MAX_CACHED_BINDINGS:
+            _BINDINGS.popitem(last=False)
+
+    bound, diagnostics = guarded_publish(
+        _CACHE_GENERATION, lambda: bind_section_anchors(metadata, content), store
+    )
     return bound, tuple(diagnostics)
 
 

@@ -6,10 +6,12 @@ import math
 import re
 import weakref
 from collections import Counter
+from dataclasses import replace
 
 import machina.skills.registry as skills_module
 import machina.skills.search as search_module
 from machina.core.assembler import get_token_count, truncate_to_tokens
+from machina.skills import events as events_module
 from machina.skills.planned_steps import (
     DisclosurePlan,
     StageState,
@@ -19,6 +21,7 @@ from machina.skills.planned_steps import (
     task_revision_from,
 )
 from machina.skills.registry import Skill, SkillRegistry
+from machina.skills.revisions import RevisionRegistry, task_state_revision
 
 _INDEXES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 # Alias normalization (stopwords, synonyms, C++/C#/.NET folding) now lives in
@@ -133,6 +136,9 @@ def search_skills(
     (``include_excluded=True``, used by catalog UIs) keeps them in the data
     flagged ``excluded``. Scores are ranking signals with named components —
     never calibrated probabilities. ``typo_tolerance`` is OFF by default.
+    Results carry ``catalog_revision`` / ``policy_revision`` /
+    ``content_revision``; :func:`revisions_for` exposes the same identities for
+    caller-side caches (see :meth:`RevisionRegistry.identity_for`).
     """
     skills.load_all()
     all_skills = skills.list_skills()
@@ -156,6 +162,27 @@ def search_skills(
         available_tools=available_tools,
         typo_tolerance=typo_tolerance,
     )
+
+
+def revisions_for(
+    skills: SkillRegistry | None = None, *, task_state: dict | None = None
+) -> RevisionRegistry:
+    """§11 revision identities for the registry's currently loaded catalog.
+
+    Extends :meth:`SkillRegistry.revisions` with an explicit task-state
+    revision so search/disclosure caches can be keyed by exactly the
+    identities that affect them: ``identity_for("search_results")`` =
+    (catalog, ranking policy), ``identity_for("disclosure_plan")`` =
+    (catalog, ranking policy, task state). Telemetry identity is reported but
+    is deliberately absent from both — recording activity never invalidates
+    content-derived caches.
+    """
+    registry = skills or skills_module.skill_registry
+    snapshot = registry.revisions()
+    revision = task_state_revision(task_state) if task_state is not None else 0
+    if revision == 0:
+        return snapshot
+    return replace(snapshot, task_state=str(revision))
 
 
 def automatic_skill_context(
@@ -200,6 +227,15 @@ def automatic_skill_context(
         skill_weights=skill_weights,
         task_state=task_state,
     )
+    # Selection is an observed event (spec §13): bounded, structured reasons
+    # derived from the same planned steps the disclosure uses.
+    for step in workflow.steps:
+        events_module.record_selected_for_plan(
+            skill_id=step.skill_id,
+            step_id=step.step_id,
+            stage=step.stage,
+            reasons=(f"label={step.label}", f"provenance={step.provenance}"),
+        )
     header = (
         "\n\n## Automatic skills\n"
         "Relevant references for this task — consult a workflow only if the task calls "
@@ -241,6 +277,8 @@ def automatic_skill_context(
         return ""
     raw_state = stage_state if stage_state is not None else task_state
     state = normalize_stage_state(raw_state)
+    if state is not None:
+        events_module.record_stage_requested_or_entered(state.stage, source=state.source)
     constraints = (
         normalize_constraints(task_state.get("constraints")) if isinstance(task_state, dict) else ()
     )
@@ -259,15 +297,16 @@ def automatic_skill_context(
     )
 
 
-#: Rollback switch for stage-aware disclosure. Read via ``config.get`` so no
-#: ``machina/core/config.py`` edit is needed; an unregistered/missing key means
-#: the planner is ON. TODO(A4/A6): register ``skills_disclosure_planner: bool =
-#: True`` in config DEFAULTS for schema visibility.
+#: Rollback switch for stage-aware disclosure, registered in
+#: ``machina.core.config.DEFAULTS`` (``skills_disclosure_planner: bool =
+#: True``) so both ``config.set`` and ``MACHINA_SKILLS_DISCLOSURE_PLANNER``
+#: env overrides resolve as booleans. A missing/unregistered key still means
+#: the planner is ON.
 _DISCLOSURE_PLANNER_KEY = "skills_disclosure_planner"
 
 
 def _config_flag(raw: object) -> bool:
-    """Boolean-ish reader for an unregistered config key (safe default ON)."""
+    """Boolean-ish reader for the rollback key (safe default ON)."""
     if raw is None:
         return True
     if isinstance(raw, bool):
@@ -324,6 +363,11 @@ def _legacy_disclosure(
             break
         result += block
         skills.record_use(skill.name)
+        events_module.record_instruction_section_disclosed(
+            skill_id=skill.name,
+            section_id="body",
+            content_revision=search_module.content_revision(skill),
+        )
         if activated is not None:
             activated.append(skill.name)
     return result
@@ -392,6 +436,13 @@ def _planned_disclosure(
             break
         result += block
         revealed.setdefault(entry.skill_id, None)
+        events_module.record_instruction_section_disclosed(
+            skill_id=entry.skill_id,
+            section_id=entry.section_id,
+            step_id=entry.step_id,
+            stage=entry.stage,
+            content_revision=entry.content_revision,
+        )
     if plan.whole_body:
         per_unit = max(0, (budget - get_token_count(result) - 120) // len(plan.whole_body))
         for unit in plan.whole_body:
@@ -420,6 +471,12 @@ def _planned_disclosure(
                 break
             result += block
             revealed.setdefault(unit.skill_id, None)
+            events_module.record_instruction_section_disclosed(
+                skill_id=unit.skill_id,
+                section_id="body",
+                step_id=unit.step_id,
+                content_revision=unit.content_revision,
+            )
     for line in _not_loaded_reminder(plan, can_read):
         if get_token_count(result + "\n" + line) > budget:
             break
