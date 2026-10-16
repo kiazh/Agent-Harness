@@ -223,6 +223,18 @@ This document keeps current evidence separate from historical baseline logs. Nev
 - Evidence: full gate 892 tests / 886 pass / 6 skip / 0 fail (orchestrator re-run); live PTY final captures recorded in WORKSPACE_UX_POLISH.md (truecolor syntax, settings menu rows, polish surfaces, completion popup, tab close, side swap).
 - CodeRabbit pass 2 launched on the final committed range; findings to be triaged into the record.
 
+### CodeRabbit pass 2 (main, full final range) + pass 3 (DevTools)
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| Syntax cache off-by-one: `>`-only rewind kept stale spans when the edited line equals the highest scanned line | minor | **FIXED** (>= rewind + spans>=line delete; RED-proven: reverting fails the new through==line test) |
+| Ctrl+W fired in the chat composer, stealing delete-word-backward | major | **FIXED** (composer-gated; Ctrl+T verified toolkit-free and stays global) |
+| Previous manager `stop_all()` could block a reopen indefinitely | minor | **FIXED** (bounded with asyncio.wait_for(MANAGER_STOP_TIMEOUT); old shutdown continues independently) |
+| Redaction tests missing an explicit `db` marker | minor | **FIXED** (pytestmark list; correct `-m db` selection) |
+| Integration test asserted on a pre-retry record log | minor | **FIXED** (records re-read after the retried document_open) |
+
+- Evidence after fixes: full UI gate 893 tests / 887 pass / 6 skip / 0 fail; DevTools 56 passed across the four affected suites; ruff clean. Commits: main `2c4fb73`; DevTools `a8b4542`.
+
 ## Task record template (from plan §26)
 
 ```text
