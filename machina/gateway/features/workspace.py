@@ -20,11 +20,13 @@ Validation rules:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
 from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError
 from machina.gateway.features._common import _bool, _int
+from machina.workspace.lsp import LspManager
 from machina.workspace.models import (
     DEFAULT_LIST_LIMIT,
     DEFAULT_QUICK_OPEN_LIMIT,
@@ -61,6 +63,29 @@ def _service(gw: Gateway) -> WorkspaceService:
         service = WorkspaceService(send_event=lambda event: _write_event(gw, event))
         gw.workspace_service = service
     return service
+
+
+async def _attach_lsp_manager(gw: Gateway, service: WorkspaceService, identity: Any) -> None:
+    """Composition seam for the real LspManager (T7 integration point).
+
+    Without this, the service has no manager in production and reports
+    "no language servers" forever even when profiles resolve. Creating the
+    manager is cheap; servers still start lazily on the first ``documentOpen``
+    for a language. Trust governs language servers (plan §14): an untrusted
+    open detaches any manager. A previous manager for the same gateway is
+    retired bounded before a new root rebinds it.
+    """
+    previous = getattr(gw, "_workspace_lsp_manager", None)
+    if previous is not None:
+        with contextlib.suppress(Exception):
+            await previous.stop_all()
+        gw._workspace_lsp_manager = None
+    if not identity.trusted:
+        service.set_lsp_manager(None)
+        return
+    manager = LspManager(identity.resolved_root)
+    gw._workspace_lsp_manager = manager
+    service.set_lsp_manager(manager)
 
 
 def _write_event(gw: Gateway, event: dict[str, Any]) -> None:
@@ -194,6 +219,7 @@ async def workspace_open(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         identity = service.open(root, trust)
     except WorkspaceError as exc:
         raise RpcError(INVALID_PARAMS, exc.message) from exc
+    await _attach_lsp_manager(gw, service, identity)
     return identity.as_dict()
 
 

@@ -529,7 +529,7 @@ class Gateway:
 
             audit_persistence.start()
             self._start_job_runner()
-        return {
+        payload = {
             "version": __version__,
             "protocolVersion": self.protocol_version,
             "model": self.model,
@@ -539,6 +539,13 @@ class Gateway:
             "cwd": os.path.basename(os.getcwd()),
             "branch": _git_branch(),
         }
+        # The absolute launch directory is only disclosed to a caller that
+        # presented the valid auth token (the local UI always does). The
+        # workspace feature needs a real absolute root; unauthenticated or
+        # token-less handshakes keep the redacted basename only.
+        if self._auth_token is not None and self._token_ok(params.get("token")):
+            payload["cwdFull"] = os.getcwd()
+        return payload
 
     async def _session_create(self, params: dict[str, Any]) -> dict[str, Any]:
         self.require_db()

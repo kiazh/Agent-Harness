@@ -15,6 +15,10 @@ from machina.memory.redaction import redact_value
 from machina.observability.diagnostics import record_failure
 from machina.tools.agents import active_agent_scope
 from machina.tools.base import registry
+from machina.workspace.service import (
+    CODE_INTELLIGENCE_OPERATIONS,
+    active_workspace_service,
+)
 
 _MAX_STATUS_BYTES = 8500
 
@@ -69,6 +73,7 @@ async def harness_status() -> str:
             # Spawn-free (state file + PATH lookup only): lets the agent answer
             # "are you connected to opencode?" truthfully without a live probe.
             "harnesses": interop_mod.state_summary(),
+            "workspace": _workspace_section(),
         }
 
     try:
@@ -107,6 +112,19 @@ async def harness_status() -> str:
             if isinstance(entry, dict) and entry.pop("names", None) is not None:
                 installed.setdefault("installed_omitted", []).append(source)
         serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES and safe.get("features"):
+        # The always-on capability brief already carries FEATURES in the
+        # system prompt; live workspace/transport state cannot be recovered
+        # from it, so the duplicate feature map is dropped before the
+        # workspace profiles (never silently: absence is disclosed).
+        safe["features"] = {}
+        safe["features_omitted"] = "See the harness capabilities section of the system prompt"
+        serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES:
+        workspace = safe.get("workspace")
+        if isinstance(workspace, dict) and workspace.pop("profiles", None):
+            workspace["profiles_omitted"] = "Inspect /lsp status"
+            serialized = _shrink()
     if len(serialized) > _MAX_STATUS_BYTES:
         # Corrupt/legacy state must not defeat the tool-message bound and yield
         # truncated JSON. Refuse safely instead of implying omitted data is empty.
@@ -165,6 +183,35 @@ def _provenance_of(registry, skill) -> str:
         if isinstance(source, str) and source.startswith("https://github.com/"):
             return f"url:{source}"
     return "local"
+
+
+def _workspace_section() -> dict:
+    """Live workspace facts for the T10 status surface (plan §20).
+
+    Reads the process's active :class:`WorkspaceService` — the same instance
+    the gateway opened — and reports labels/states/counts only: the root
+    *label* (never the full private path), trust/epoch, per-language server
+    states with generations, the open-mirror count and the operations the
+    read-only ``code_intelligence`` tool exposes. File contents, diagnostics
+    text and unsaved buffer text never appear here.
+    """
+    try:
+        service = active_workspace_service()
+        facts = service.status_facts() if service is not None else None
+    except Exception as error:
+        record_failure("tools.harness.workspace", error)
+        return {"available": False, "state_unavailable": True}
+    if facts is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "root_label": facts["root_label"],
+        "trusted": facts["trusted"],
+        "epoch": facts["epoch"],
+        "mirrors": facts["mirrors"],
+        "profiles": facts["profiles"],
+        "operations": list(CODE_INTELLIGENCE_OPERATIONS),
+    }
 
 
 async def _persona_summary(agent_id: str, notes: dict) -> dict:

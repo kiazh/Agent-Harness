@@ -34,6 +34,18 @@ def action_for_tool(name: str, args: dict) -> dict:
         return disconnect_spec(args)
     if name in ("read_file",):
         return {"operation": "file.read", "targets": [str(args.get("path", ""))]}
+    if name == "code_intelligence":
+        # T10 least-risk mapping: a read-only query of the workspace's own
+        # code intelligence is the same *kind* of action as read_file — a
+        # named file inside the request-bound workspace root — so it maps to
+        # file.read and inherits the existing "trusted project read" /
+        # "routine project file operation" decisions (allowed inside the
+        # root; anything outside falls into the sensitive approval path).
+        # It declares no mutating effect, and the workspace service
+        # independently re-enforces its own authorized root plus the editor
+        # buffer/disk distinction, so this mapping widens no authority and
+        # needs no new operation or policy change.
+        return {"operation": "file.read", "targets": [str(args.get("path", ""))]}
     if name in ("write_file",):
         content = args.get("content", "")
         return {
