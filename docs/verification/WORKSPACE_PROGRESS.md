@@ -202,6 +202,21 @@ This document keeps current evidence separate from historical baseline logs. Nev
 - **Bug found by this evidence (fixed)**: the app fed `initialize.cwd` (a redacted basename) into `workspace.open`, and the backend resolved it relative to its own cwd (`.../ws-fixture/ws-fixture` → refused). Fix: `initialize` now discloses `cwdFull` (absolute) only to token-authenticated handshakes; the UI prefers it, falls back to `init.cwd` only when absolute, and otherwise stays chat-only (older backends). Tests: DevTools `test_initialize_cwd_redaction.py` 4/4 (with live DB); UI integration tests for preference + basename-only fallback (20/20 suite).
 - Also verified live in the same run: quick open ranking/disclosure, editor open + status, chat maximize/restore with retained tab, explorer docking with exclusion disclosure.
 
+### Addendum — post-integration batch (commits a672776..9aec38d + DevTools)
+
+- `a672776` T7 fix: tsls `publishDiagnostics` capability + bounded group-reap grace (5 regression tests; real-server suite 8/8 proven after).
+- `6764c71` + DevTools `f2e568b` T8 backend integration (30 tests; combined 160 across 9 suites).
+- `b2bbfe7` T4b editor view/pane; `1147844` T9 edit staging; `2d28a4d` T9 intelligence UI; `c2395cb`/`8a0b57a` Quick Open; `cf31830` controller; `4242571` app integration + dirty-exit review; `3d4d3a7`/`2ff0f9e` evidence records.
+- `c303ef4` user guide (T12 partial).
+- Live PTY evidence: split boot, quick open, file open, edit+save to disk, explorer, chat-maximize/restore, dirty-exit review; **found the workspace-root bug** (initialize basename → backend cwd join).
+- Root fix: `initialize.cwdFull` disclosed only to token-authenticated handshakes; UI prefers it, basename-only stays chat-only. Tests: DevTools `test_initialize_cwd_redaction.py` (4, live DB); UI preference/fallback tests.
+- **LSP composition gap found by PTY completion verification**: production never attached an `LspManager`; `workspace.open` now attaches one (untrusted detaches; reopen replaces bounded). Tests: `test_workspace_lsp_composition.py` (5); architecture ratchet kept at 721 by hoisting the import.
+- `820f943` syntax tokenizer (30 tests); `9aec38d` syntax theme seam (5 tests, width-preserving).
+- `2241c60` + DevTools `42d036e` `ui_preferences` config key (16 KiB bound) + stale METHODS pin refresh (quickOpen pair).
+- `cdb1475` footer workspace-hints slot (4 tests) + ADR §4 full shortcut conflict matrix (composer ctrl+w/ctrl+arrows, macOS Mission Control/input-source, terminal risks with command fallbacks).
+- `f050bef` UX polish spec from real-frame audit, incl. the duplicate-Problems render bug (backend returns 1 diagnostic, UI rendered 2).
+- CodeRabbit pass 1 launched on the committed range `b0db077..HEAD` (background; findings fold into the closing pass; a second pass covers T10 + fixes + UX batch).
+
 ## Task record template (from plan §26)
 
 ```text
