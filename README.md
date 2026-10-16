@@ -2,7 +2,7 @@
 
 A self-hosted AI agent with a terminal UI, PostgreSQL-backed conversations and memory, tools, delegation, and runtime learning.
 
-![Machina terminal UI](docs/screenshot.png)
+![Machina terminal UI](docs/ImagePub.png)
 
 **Version 0.2.0.** This is a development release candidate. Local verification is recorded in [release readiness](docs/verification/RELEASE_READINESS.md); production deployment gates remain open. No live-provider quality or performance improvement is claimed from fixture tests.
 
