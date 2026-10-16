@@ -49,6 +49,34 @@ export interface ResponseMeasure {
 	prefersWide?: () => boolean;
 }
 
+/** A GFM table delimiter row: dashes with optional colons, pipes and spaces. */
+function isTableDelimiter(line: string): boolean {
+	const trimmed = line.trim();
+	return /^[|\s:-]+$/.test(trimmed) && trimmed.includes("-");
+}
+
+/**
+ * Structural preference for a broader frame: a triple-backtick fence with at
+ * least two body lines (closed, or still open while streaming) or a Markdown
+ * table (a pipe row directly above a delimiter row). Pure shape heuristic:
+ * a false positive only widens the box, never truncates text.
+ */
+export function contentPrefersWide(source: string): boolean {
+	const lines = source.split("\n");
+	for (let i = 0; i < lines.length; i++) {
+		if (!/^\s*```/.test(lines[i] ?? "")) continue;
+		let body = 0;
+		while (i + 1 + body < lines.length && !/^\s*```\s*$/.test(lines[i + 1 + body] ?? "")) body++;
+		if (body >= 2) return true;
+		// Skip any closing fence so it is never re-read as a new opener.
+		i += body + 1;
+	}
+	for (let i = 1; i < lines.length; i++) {
+		if ((lines[i - 1] ?? "").includes("|") && isTableDelimiter(lines[i] ?? "")) return true;
+	}
+	return false;
+}
+
 export interface ResponseGeometry {
 	/** Allocated chat-pane columns this decision was computed against. */
 	paneWidth: number;
@@ -147,14 +175,22 @@ export function chooseResponseGeometry(
 
 	const prefersWide = measure.prefersWide?.() ?? false;
 
-	// Step 2-4: compact trial (skipped when content prefers a broader frame).
+	// Monotonic growth outranks content-fit: a larger previous class in the
+	// same allocation is kept, so the compact trial is skipped entirely.
+	const pinned =
+		previous !== undefined && previous.paneWidth === width && classRank(previous.widthClass) > 0;
+
+	// Step 2-4: compact trial (skipped for wide-preferring content or a pinned
+	// larger class).
 	let computed: ResponseWidthClass = "full";
-	if (!prefersWide) {
+	if (!prefersWide && !pinned) {
 		const c = widthForClass("compact", available, policy);
 		const rowsAtC = measure.renderRows(c);
 		if (rowsAtC.length <= policy.compactMaxRows) {
 			// Content-fit: grow only to the widest rendered row, bounded by C.
-			const widest = rowsAtC.reduce((max, row) => Math.max(max, visibleWidth(row)), 0);
+			// The toolkit Markdown pads rows to the trial width, so measure the
+			// visible ink (trailing padding excluded), not the padded cells.
+			const widest = rowsAtC.reduce((max, row) => Math.max(max, visibleWidth(row.trimEnd())), 0);
 			const contentWidth = Math.min(
 				c,
 				Math.max(policy.minCompactContent, widest),
