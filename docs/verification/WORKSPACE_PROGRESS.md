@@ -105,6 +105,14 @@ This document keeps current evidence separate from historical baseline logs. Nev
 - CI-gate observation (pre-existing, NOT ours): `ruff format --check machina/ tools/` reports 13 unformatted files at baseline (`api/routes/streaming.py`, `core/provider/ollama.py`, `core/turn_engine.py`, `gateway/__main__.py`, `gateway/features/secrets.py`, `memory/store.py`, `permissions/{broker,policy,store}.py`, `rag/pipeline.py`, `security/{env_file,providers}.py`, `tools/file.py`). None are touched by this feature; all files we added/modified are format-clean. Left untouched deliberately (no unrelated audit backlog smuggling); flagged for the maintainers.
 - Bandit sweep on new modules: 0 medium/high issues (CI uses `-ll`).
 
+### T6a — Lazy explorer + persistence (status: complete, commit 5c97c9e; DevTools ee7ac3a)
+
+- Files: `ui/src/editor/explorer.ts` (ExplorerModel + ExplorerPane), `ui/src/workspace/persistence.ts`, `machina/core/config.py` (additive `workspace_ui_state` default, 64 KiB bound in `validate_value` — single refusal shared by all coercion paths per AH-AUDIT-042), tests: 28 UI + 7 DevTools.
+- Evidence (orchestrator re-run): explorer+persistence 28/28; backend 7/7; agent's isolated worktree full gate 630 tests / 624 pass / 6 skip / 0 fail.
+- Red evidence (agent): 3 explorer failures fixed (collapse-vs-parent, selection reconcile during reload, test regex); backend red run against baseline config (6 failed) → green with the change.
+- Honest states: `…`/`(empty)`/`(excluded)`/`(denied)`/`(error)` distinct; `+N more` (exact loaded-row budget) vs backend `load more` never confuse an invented count.
+- Deferred: Quick Open recursive backend service; tab auto-restore; controller wiring (all tracked for W3).
+
 ## Task record template (from plan §26)
 
 ```text
