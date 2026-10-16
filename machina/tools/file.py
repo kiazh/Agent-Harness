@@ -188,7 +188,7 @@ def resolve_path(path: str, *, allow_outside: bool = False) -> Path:
 
 
 def _open_secure_read(candidate: Path, *, check_base: bool = True):
-    """Open *candidate* for reading, returning (fd, real_verified_path).
+    """Open *candidate* for reading, returning an owned descriptor.
 
     Uses O_NOFOLLOW where available and verifies the descriptor matches the
     path to close the check-then-open race (AH-003). Callers must os.close
@@ -197,16 +197,22 @@ def _open_secure_read(candidate: Path, *, check_base: bool = True):
     F13: the descriptor is opened nonblocking and must be a regular file, so
     a FIFO/device swapped in after path validation cannot block the caller
     (a writer-less FIFO's blocking O_RDONLY open would freeze the loop).
+
+    Inside-base paths are opened by :func:`_open_read_fd_anchored` — the
+    read-path counterpart of the F01 write walk: every component is pinned
+    to the previous descriptor, so a concurrently swapped ancestor cannot
+    redirect the read outside the base even when the post-open realpath
+    re-check races. Paths outside the base (full-mode broker grants) keep
+    the documented weaker pathname open.
     """
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    nonblock = getattr(os, "O_NONBLOCK", 0)
-    flags = os.O_RDONLY | nonblock
-    if nofollow:
-        flags |= nofollow
-    try:
-        fd = _os_open(candidate, flags)
-    except OSError as e:
-        raise ValueError(f"Path '{candidate}' is not accessible (symlink?)") from e
+    if check_base and _dir_fd_supported() and candidate.is_relative_to(_base_dir()):
+        fd = _open_read_fd_anchored(candidate, display=str(candidate))
+    else:
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = _os_open(candidate, flags)
+        except OSError as e:
+            raise ValueError(f"Path '{candidate}' is not accessible (symlink?)") from e
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError(f"Path '{candidate}' is not a regular file")
@@ -358,6 +364,64 @@ def _open_parent_dir_fd(parent: Path, *, display: str) -> int:
             pass
         raise
     return cur_fd
+
+
+def _open_read_fd_anchored(candidate: Path, *, display: str) -> int:
+    """Open *candidate* for reading by walking from the trusted base root.
+
+    Read-path counterpart of :func:`_open_parent_dir_fd` (F01): every
+    directory component is opened with ``openat`` + ``O_NOFOLLOW|O_DIRECTORY``
+    relative to the previous descriptor and the leaf is opened with
+    ``O_NOFOLLOW`` from its parent descriptor, so an ancestor concurrently
+    swapped for a symlink fails closed with ELOOP/ENOTDIR instead of
+    redirecting the read outside the base.
+
+    *candidate* must already be resolved (``resolve_path`` output): symlinks
+    that stayed inside the base were canonicalized to their targets, so this
+    walk preserves the previous follow-inside-links behavior while removing
+    the check-then-open race. The returned descriptor is owned by the caller.
+    """
+    base = _base_dir()
+    try:
+        rel = candidate.relative_to(base)
+    except ValueError:
+        raise ValueError(f"Path '{display}' escapes the allowed base directory") from None
+    dflags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parts = [part for part in rel.parts if part not in ("", ".")]
+    try:
+        dir_fd = _os_open(base, dflags)
+    except OSError as e:
+        raise ValueError(f"Path '{display}' is not accessible: {e}") from e
+    try:
+        for part in parts[:-1]:
+            try:
+                next_fd = _os_open(part, dflags, dir_fd=dir_fd)
+            except FileNotFoundError as e:
+                raise ValueError(f"Path '{display}' is not accessible: {e}") from e
+            except OSError:
+                raise _traversal_error(display, part, dir_fd) from None
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
+            dir_fd = next_fd
+        if not parts:
+            # The base root itself: never a regular file. Hand the directory
+            # descriptor over so the caller's regular-file check refuses it.
+            fd = dir_fd
+            dir_fd = -1
+            return fd
+        try:
+            return _os_open(parts[-1], flags, dir_fd=dir_fd)
+        except OSError as e:
+            raise ValueError(f"Path '{display}' is not accessible (symlink?)") from e
+    finally:
+        if dir_fd >= 0:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
 
 
 def _verify_fd_at(fd: int, dir_fd: int, name: str, *, display: str) -> None:

@@ -2,14 +2,24 @@
 
 Security model (senior-security; plan §11/§24F):
 
-* Authorization is **never** a textual path prefix. The root is resolved once
-  with ``os.path.realpath``; every entry point re-resolves the candidate and
-  requires the result to stay inside that root (this catches ``..``, absolute
-  paths, symlinked files and symlinked ancestor directories that point
-  outside). Symlinks that stay inside the root may be followed for reads.
+* Authorization is **never** a textual path prefix, and containment is never
+  a string check. The root is resolved once with ``os.path.realpath``; every
+  entry point refuses ``..``/absolute/backslash forms and re-resolves the
+  candidate as a cheap pre-filter (``resolve``), but the security control is
+  descriptor-anchored: reads and revision probes open the root once and walk
+  every directory component with ``openat``-equivalent
+  ``os.open(..., dir_fd=...)`` + ``O_NOFOLLOW|O_DIRECTORY``, then open the
+  final component ``O_NOFOLLOW`` from its parent descriptor. A component
+  concurrently swapped for a symlink fails with ELOOP/ENOTDIR and is refused,
+  so the descriptor actually read can never name outside-root content. A
+  final-component symlink is followed only when its target lexically stays
+  inside the root, by re-walking that target through the same resolver
+  (bounded hops); symlinked directories are refused.
 * Reads are fd-verified: the descriptor's ``(dev, ino)`` must match the
   lstat of the resolved path, and the descriptor must be a regular file.
-  Non-blocking opens prevent FIFO/device swaps from freezing the loop.
+  That dev/ino + realpath check is defense-in-depth only; the descriptor
+  walk above is the containment control. Non-blocking opens prevent
+  FIFO/device swaps from freezing the loop.
 * Writes walk the parent directory from the trusted root with
   ``openat`` + ``O_NOFOLLOW|O_DIRECTORY`` (mirroring ``machina/tools/file.py``)
   so a concurrently swapped ancestor cannot redirect the write; the probe,
@@ -28,6 +38,7 @@ UTF-8 are refused as ``binary``, UTF-16/32 BOMs as ``unsupported-encoding``.
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import os
 import secrets
@@ -66,6 +77,10 @@ _os_open = os.open
 
 _UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
 _UTF32_BOMS = (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")
+
+#: Bound on final-component symlink hops followed by the descriptor walker;
+#: longer chains (and loops) are refused as a denial instead of resolved.
+_MAX_SYMLINK_HOPS = 16
 
 
 class RevisionRegistry:
@@ -173,6 +188,58 @@ def _fsync_dir_best_effort(directory: Path) -> None:
             pass
 
 
+def _close_quietly(fd: int) -> None:
+    """Close *fd*, ignoring an already-closed/invalid descriptor."""
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _components(rel: str) -> list[str]:
+    """Non-empty, non-``.`` components of a root-relative POSIX path."""
+    return [part for part in rel.split("/") if part not in ("", ".")]
+
+
+def _symlink_target_rel(root: Path, parent_rel: str, target: str) -> str | None:
+    """Root-relative rewrite of a final-component symlink *target*.
+
+    Purely lexical (no filesystem access): an absolute target is rewritten
+    relative to *root*, a relative target relative to the link's parent
+    directory. Returns ``None`` when the target escapes the root lexically
+    (the caller refuses). The returned path is re-walked descriptor-anchored,
+    so this rewrite is never the containment control itself.
+    """
+    if os.path.isabs(target):
+        combined = os.path.relpath(target, root)
+    else:
+        combined = os.path.join(parent_rel or ".", target)
+    normalized = os.path.normpath(combined)
+    if normalized in ("", "."):
+        return ""
+    if normalized == ".." or normalized.startswith(f"..{os.sep}"):
+        return None
+    return normalized.replace(os.sep, "/")
+
+
+def _open_pathname(resolved: Path, *, display: str) -> int:
+    """Documented weaker fallback for platforms without ``dir_fd`` (Windows).
+
+    Opens the already-resolved pathname with ``O_NOFOLLOW`` (where available);
+    the caller's descriptor checks stay in force, but the open->verify
+    sequence is not descriptor-anchored on such platforms.
+    """
+    flags = os.O_RDONLY | _nofollow() | _nonblock()
+    try:
+        return _os_open(resolved, flags)
+    except FileNotFoundError as error:
+        raise WorkspaceError("missing", f"file not found: {display}") from error
+    except PermissionError as error:
+        raise WorkspaceError("denied", f"read permission denied: {display}") from error
+    except OSError as error:
+        raise WorkspaceError("denied", f"path is not accessible (symlink?): {display}") from error
+
+
 class WorkspaceFiles:
     """Bounded, containment-checked I/O for one authorized workspace root."""
 
@@ -239,8 +306,14 @@ class WorkspaceFiles:
 
     # ─── reads ──────────────────────────────────────────────────────────────
     def read_text(self, rel: str, *, max_bytes: int = MAX_READ_BYTES) -> ReadResult:
-        """Bounded UTF-8 read with fd verification and structured refusals."""
-        resolved = self.resolve(rel)
+        """Bounded UTF-8 read with descriptor-anchored containment.
+
+        ``resolve`` stays as a cheap pre-filter and the post-open dev/ino +
+        realpath checks stay as defense-in-depth; the security control is
+        :meth:`_open_contained`, which never re-resolves the path by name.
+        """
+        normalized = self.normalized_rel(rel)
+        resolved = self.resolve(normalized)
         try:
             st_path = os.lstat(resolved)
         except FileNotFoundError as error:
@@ -250,15 +323,7 @@ class WorkspaceFiles:
         if stat.S_ISDIR(st_path.st_mode):
             raise WorkspaceError("not-regular", "path is a directory, not a file")
 
-        flags = os.O_RDONLY | _nofollow() | _nonblock()
-        try:
-            fd = _os_open(resolved, flags)
-        except FileNotFoundError as error:
-            raise WorkspaceError("missing", f"file not found: {rel}") from error
-        except PermissionError as error:
-            raise WorkspaceError("denied", f"read permission denied: {rel}") from error
-        except OSError as error:
-            raise WorkspaceError("denied", f"path is not accessible (symlink?): {rel}") from error
+        fd = self._open_contained(normalized, resolved, display=rel)
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
@@ -318,8 +383,113 @@ class WorkspaceFiles:
             size_bytes=len(data),
         )
 
+    # ─── descriptor-anchored containment (primary control) ──────────────────
+    def _open_contained(self, normalized: str, resolved: Path, *, display: str) -> int:
+        """Open the final path component with descriptor-anchored containment.
+
+        Primary security control for reads and revision probes. On platforms
+        with ``dir_fd`` support (macOS/Linux) the workspace root is opened
+        once and every directory component is opened with
+        ``O_NOFOLLOW|O_DIRECTORY`` relative to its already-open parent, then
+        the final component is opened with ``O_NOFOLLOW`` from the parent
+        descriptor. A component that is (or is concurrently swapped for) a
+        symlink fails with ELOOP/ENOTDIR and is refused, so the returned
+        descriptor can never name outside-root content.
+
+        A final-component symlink is followed only when its target lexically
+        stays inside the root, by re-walking that target through the same
+        resolver (bounded by :data:`_MAX_SYMLINK_HOPS`) — the documented
+        inside-root symlink read rule, now race-free. ``resolved`` is used
+        only by the documented weaker pathname fallback for platforms
+        without ``dir_fd`` (e.g. Windows). The caller owns the returned
+        descriptor.
+        """
+        if _dir_fd_supported():
+            return self._walk_open(normalized, display=display, hops=_MAX_SYMLINK_HOPS)
+        return _open_pathname(resolved, display=display)
+
+    def _walk_open(self, normalized: str, *, display: str, hops: int) -> int:
+        """One descriptor-anchored walk; see :meth:`_open_contained`.
+
+        Every intermediate descriptor is closed before the next component is
+        opened and on every exit path; the returned descriptor is the only
+        one the caller owns.
+        """
+        parts = _components(normalized)
+        try:
+            dir_fd = _os_open(self.root, _dir_flags())
+        except OSError as error:
+            raise WorkspaceError(
+                "denied", f"workspace root is not accessible: {display}"
+            ) from error
+        try:
+            for part in parts[:-1]:
+                try:
+                    next_fd = _os_open(part, _dir_flags(), dir_fd=dir_fd)
+                except FileNotFoundError as error:
+                    raise WorkspaceError("missing", f"file not found: {display}") from error
+                except PermissionError as error:
+                    raise WorkspaceError("denied", f"path is not accessible: {display}") from error
+                except OSError as error:
+                    raise WorkspaceError(
+                        "denied", f"path traverses a symlink or non-directory: {display}"
+                    ) from error
+                _close_quietly(dir_fd)
+                dir_fd = next_fd
+            if not parts:
+                # The workspace root itself: a directory, never a readable
+                # file. Hand the descriptor over so the caller's regular-file
+                # check refuses it (not-regular).
+                fd = dir_fd
+                dir_fd = -1
+                return fd
+            try:
+                return _os_open(parts[-1], os.O_RDONLY | _nofollow() | _nonblock(), dir_fd=dir_fd)
+            except FileNotFoundError as error:
+                raise WorkspaceError("missing", f"file not found: {display}") from error
+            except PermissionError as error:
+                raise WorkspaceError("denied", f"read permission denied: {display}") from error
+            except OSError as error:
+                if error.errno == errno.ELOOP:
+                    return self._follow_final_symlink(parts, dir_fd, display=display, hops=hops)
+                raise WorkspaceError(
+                    "denied", f"path is not accessible (symlink?): {display}"
+                ) from error
+        finally:
+            if dir_fd >= 0:
+                _close_quietly(dir_fd)
+
+    def _follow_final_symlink(
+        self, parts: list[str], parent_fd: int, *, display: str, hops: int
+    ) -> int:
+        """Follow one final-component symlink that stays inside the root.
+
+        The link target is read relative to the already-validated parent
+        descriptor and rewritten to a root-relative path lexically; a target
+        that escapes the root is refused, and an inside target is re-walked
+        through :meth:`_walk_open` (bounded hops), so every hop is
+        re-verified by descriptor and a concurrent swap cannot redirect the
+        read outside.
+        """
+        if hops <= 0:
+            raise WorkspaceError("denied", f"too many levels of symbolic links: {display}")
+        try:
+            target = os.readlink(parts[-1], dir_fd=parent_fd)
+        except OSError as error:
+            raise WorkspaceError(
+                "denied", f"path is not accessible (symlink?): {display}"
+            ) from error
+        relative = _symlink_target_rel(self.root, "/".join(parts[:-1]), target)
+        if relative is None:
+            raise WorkspaceError("denied", f"path escapes the authorized workspace root: {display}")
+        return self._walk_open(relative, display=display, hops=hops - 1)
+
     def _verify_fd(self, fd: int, candidate: Path, *, display: str) -> None:
-        """fstat/lstat dev+ino equality plus post-open containment (TOCTOU guard)."""
+        """Defense-in-depth: fstat/lstat dev+ino equality + realpath containment.
+
+        The descriptor walk in :meth:`_open_contained` is the primary control;
+        this check fails closed on any drift it can observe.
+        """
         try:
             st_fd = os.fstat(fd)
             st_path = os.lstat(candidate)
@@ -334,15 +504,12 @@ class WorkspaceFiles:
         self._verify_containment(candidate, display=display)
 
     def _verify_containment(self, candidate: Path, *, display: str) -> None:
-        """Re-resolve *candidate* after the open and require it to stay inside.
+        """Defense-in-depth: re-resolve *candidate* and require it inside.
 
-        The dev+ino comparison alone is blind to an ancestor directory that is
-        swapped for a symlink pointing outside the root between ``resolve()``
-        and ``open()``: the descriptor and the lstat path then both refer to
-        the same outside file. Re-walking the realpath after the open (the
-        same post-open check ``machina/tools/file.py`` performs) closes that
-        window; anything that no longer re-resolves inside the root is refused
-        as a TOCTOU denial.
+        ``os.path.realpath`` is non-strict and its walk can race an in-root
+        symlink toggle, so this is a cheap additional refusal (fail-closed:
+        it can only deny an access, never authorize one) and **not** the
+        containment control — :meth:`_open_contained` is.
         """
         try:
             real = Path(os.path.realpath(candidate))
@@ -544,15 +711,24 @@ class WorkspaceFiles:
             return SaveResult(ok=True, revision=revision, saved_ui_version=ui_version)
 
     def _disk_revision(self, resolved: Path, *, display: str) -> str | None:
-        """Current on-disk revision, or ``None`` when the file is missing."""
+        """Current on-disk revision, or ``None`` when the file is missing.
+
+        The file is opened through the same descriptor-anchored resolver as
+        ``read_text`` (:meth:`_open_contained`, walking *resolved* relative
+        to the root), so a concurrently swapped ancestor cannot make the
+        revision probe hash outside-root content. ``resolved`` is the
+        pre-resolved target path — the walk re-verifies every component.
+        """
         try:
-            fd = _os_open(resolved, os.O_RDONLY | _nofollow() | _nonblock())
-        except FileNotFoundError:
-            return None
-        except PermissionError as error:
-            raise WorkspaceError("denied", f"permission denied: {display}") from error
-        except OSError as error:
-            raise WorkspaceError("denied", f"path is not accessible: {display}") from error
+            rel = resolved.relative_to(self.root)
+        except ValueError as error:
+            raise WorkspaceError("denied", "path escapes the authorized workspace root") from error
+        try:
+            fd = self._open_contained(rel.as_posix(), resolved, display=display)
+        except WorkspaceError as error:
+            if error.reason == "missing":
+                return None
+            raise
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
@@ -568,10 +744,7 @@ class WorkspaceFiles:
                 size += len(chunk)
             return f"{digest.hexdigest()[:32]}:{size}"
         finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            _close_quietly(fd)
 
     def _write_target(self, resolved: Path, data: bytes, *, display: str) -> None:
         if _dir_fd_supported():
