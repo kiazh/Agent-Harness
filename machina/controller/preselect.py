@@ -1,10 +1,10 @@
-"""Turn-scoped cache over the shared BM25 skill ranking.
+"""Turn-scoped cache over the shared canonical skill ranking.
 
 Routes ranking through the :mod:`machina.skills.ports` seam
-(``SkillSource`` + ``rank_skills``) — never past it into
-``skills.registry``/``skills.runtime`` directly. Ranking itself still lives
-in ``skills.runtime``; the cache only avoids re-ranking identical normalized
-queries within a turn.
+(``SkillSource`` + ``automatic_skills``) — never past it into
+``skills.registry``/``skills.runtime`` directly. Ranking itself lives in
+``skills.runtime`` (``search_skills``); the cache only avoids re-ranking
+identical normalized queries within a turn.
 
 Progressive-disclosure contract (per the skills-system skill): this layer
 caches metadata ranking only. Skill bodies still load on demand through
@@ -14,7 +14,7 @@ caches metadata ranking only. Skill bodies still load on demand through
 import hashlib
 import re
 
-from machina.skills.ports import SkillSource, rank_skills
+from machina.skills.ports import SkillSource, automatic_skills
 
 _WS_RUN = re.compile(r"\s+")
 
@@ -41,7 +41,7 @@ class SkillPreselectCache:
         """Ranked skills for *query*; identical queries rank exactly once."""
         key = self._key(query, weights)
         if key not in self._cache:
-            self._cache[key] = rank_skills(self._skills, query, weights=weights)
+            self._cache[key] = automatic_skills(self._skills, query, weights=weights)
             self.rank_calls += 1
         return self._cache[key]
 

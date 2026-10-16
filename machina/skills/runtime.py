@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import re
 import weakref
 from collections import Counter
 from dataclasses import replace
@@ -26,7 +25,9 @@ from machina.skills.revisions import RevisionRegistry, task_state_revision
 _INDEXES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 # Alias normalization (stopwords, synonyms, C++/C#/.NET folding) now lives in
 # ``machina.skills.search`` so the ranking and the explanations it builds use
-# one home; these names stay re-exported because workflow.py imports them.
+# one home. ``_TECHNOLOGIES`` is re-exported for workflow/task_descriptor;
+# ``_SPECIALTIES`` stays a plain alias because the search module's
+# legacy-parity note references it by name.
 _TECHNOLOGIES = search_module.TECHNOLOGY_MARKERS
 _SPECIALTIES = search_module.SPECIALTY_MARKERS
 
@@ -57,65 +58,6 @@ class SkillIndex:
         }
         self.average = sum(sum(d.values()) for d in self.docs) / max(1, len(self.docs))
 
-    def rank(self, query: str, *, weights: dict[str, float] | None = None) -> list[Skill]:
-        words = set(_words(query))
-        ranked = []
-        for skill, terms, name in zip(self.skills, self.docs, self.names, strict=True):
-            triggered = skill.name.casefold() in query.casefold() or any(
-                re.search(r"(?<![A-Za-z0-9_])" + re.escape(t) + r"(?![A-Za-z0-9_])", query, re.I)
-                for t in skill.triggers
-            )
-            raw_name = set(re.findall(r"[a-z0-9]+", skill.name.replace("golang", "go")))
-            technologies = raw_name & _TECHNOLOGIES
-            if not triggered and technologies and not technologies <= words:
-                continue
-            if skill.name == "ecc-x-api" and not re.search(r"\b(x|twitter|tweets?)\b", query, re.I):
-                continue
-            if not triggered and name & _SPECIALTIES and not (name & _SPECIALTIES) <= words:
-                continue
-            overlap = words & terms.keys()
-            if not overlap:
-                continue
-            # Require a distinguishing topic, rather than generic "help me" matches.
-            if not triggered and not any(self.idf[w] >= 1.6 for w in overlap):
-                continue
-            length = sum(terms.values())
-            score = sum(
-                self.idf[w]
-                * terms[w]
-                * 2.2
-                / (terms[w] + 1.2 * (0.25 + 0.75 * length / self.average))
-                for w in overlap
-            )
-            score += sum(self.idf.get(w, 0) for w in words & name) * 0.8
-            # Exact requested skill names and local whole-word triggers take priority.
-            if "testing" in name and "testing" not in words:
-                score *= 0.35
-            if triggered:
-                score += 25
-            score *= max(0.8, min(1.2, (weights or {}).get(skill.name, 1)))
-            explicit = skill.name.casefold() in query.casefold()
-            ranked.append((explicit, score, skill.name, skill))
-        return [
-            skill
-            for _, _, _, skill in sorted(ranked, key=lambda item: (-item[0], -item[1], item[2]))
-        ]
-
-
-def rank_skills(
-    skills: SkillRegistry, query: str, *, weights: dict[str, float] | None = None
-) -> list[Skill]:
-    skills.load_all()
-    # Registry replaces its objects on reload; telemetry changes retain them.
-    signature = tuple(
-        (s.name, s.description, tuple(s.triggers), s.enabled) for s in skills.list_skills()
-    )
-    cached = _INDEXES.get(skills)
-    if cached is None or cached[0] != signature:
-        cached = (signature, SkillIndex(skills.list_skills()))
-        _INDEXES[skills] = cached
-    return cached[1].rank(query, weights=weights)
-
 
 def search_skills(
     skills: SkillRegistry,
@@ -130,9 +72,10 @@ def search_skills(
 ) -> search_module.SearchResult:
     """Typed, deterministic skill search (spec §9) over this registry.
 
-    Reuses the cached lexical index as the fast baseline path (``rank_skills``
-    and this function share ``_INDEXES``; behavior of ``rank_skills`` is
-    unchanged). Auto mode excludes disabled skills entirely; the browsing path
+    The one ranking implementation: the cached lexical index feeds
+    ``search.execute_search`` and every consumer (automatic selection, the
+    human browse path, the ``skills.ports`` dispatch) reads its result. Auto
+    mode excludes disabled skills entirely; the browsing path
     (``include_excluded=True``, used by catalog UIs) keeps them in the data
     flagged ``excluded``. Scores are ranking signals with named components —
     never calibrated probabilities. ``typo_tolerance`` is OFF by default.
@@ -162,6 +105,80 @@ def search_skills(
         available_tools=available_tools,
         typo_tolerance=typo_tolerance,
     )
+
+
+def automatic_skills(
+    skills: SkillRegistry,
+    query: str,
+    *,
+    weights: dict[str, float] | None = None,
+    available_tools: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+) -> list[Skill]:
+    """Canonical automatic-selection order: enabled, non-excluded skills.
+
+    The single automatic consumer of :func:`search_skills` (used by
+    ``plan_workflow`` and the ``skills.ports`` dispatch). Disabled and
+    hard-excluded candidates never appear — the automatic scope. Exact-ID/name
+    matches, boundary-aware triggers and deterministic ties come from
+    ``search_skills`` unchanged. No second scoring implementation exists: the
+    legacy ``SkillIndex.rank`` selector was removed when this helper replaced
+    its only product callers.
+
+    Ordering is by canonical relevance score (a stable sort over the canonical
+    list, so applicability-bucket order breaks score ties exactly as
+    ``search_skills`` does). Planning has no tool-availability or stack fact to
+    resolve conditional candidates, and the corpus routing gates are defined on
+    relevance; the applicability decision is therefore used as the automatic
+    *scope* (exclude disabled / hard-excluded / known-missing-tool), while the
+    ranked order stays the relevance order planning has always used.
+
+    One ported legacy preference survives here (it is a scope decision, not a
+    second matcher): a skill whose name advertises ``testing`` is only a
+    specialist when the task itself names testing, so it does not displace an
+    equally relevant non-testing skill on a build query (spec §9.2 — a
+    technical skill must not crowd out a generic relevant one).
+    """
+
+    result = search_skills(
+        skills,
+        query,
+        weights=weights,
+        available_tools=available_tools,
+        limit=max(1, len(skills.list_skills())),
+    )
+    words = set(_words(query))
+    eligible: list[tuple[search_module.SearchCandidate, Skill]] = []
+    for candidate in result.candidates:
+        if candidate.applicability == search_module.EXCLUDED:
+            continue
+        skill = skills.get(candidate.skill_id)
+        if skill is not None and skill.enabled:
+            eligible.append((candidate, skill))
+    # Stable: equal relevance keeps the canonical tie-break (source trust then
+    # case-insensitive name) already applied in ``result.candidates``.
+    eligible.sort(key=lambda pair: -pair[0].score)
+    return _apply_testing_preference([skill for _, skill in eligible], words)
+
+
+def _apply_testing_preference(matches: list[Skill], query_words: set[str]) -> list[Skill]:
+    """Move name-announced ``testing`` specialists behind generic matches.
+
+    Ported from the retired legacy selector (``SkillIndex.rank``) as a stable
+    reorder within the canonical order, so deterministic ties and canonical
+    precedence are preserved for every other skill. A task that names testing
+    (``test``/``tests``/``testing`` all normalize to ``testing``) is unaffected.
+    """
+
+    if "testing" in query_words:
+        return matches
+    generic: list[Skill] = []
+    testing: list[Skill] = []
+    for skill in matches:
+        if "testing" in set(_words(skill.name.removeprefix("ecc-"))):
+            testing.append(skill)
+        else:
+            generic.append(skill)
+    return generic + testing
 
 
 def revisions_for(

@@ -37,30 +37,32 @@ def skill_list(query: str = "", offset: int = 0) -> str:
     skills.load_all()
     if offset < 0:
         return "Error: offset must be non-negative"
-    from machina.skills.runtime import rank_skills
-
-    needle = query.casefold()
-    matches = [
-        skill
-        for skill in skills.list_skills()
-        if skill.enabled
-        and (
-            not needle
-            or needle in skill.name.casefold()
-            or needle in skill.description.casefold()
-            or any(needle in trigger.casefold() for trigger in skill.triggers)
-        )
-    ]
+    needle = query.strip()
     if needle:
-        matches = rank_skills(skills, query)
-    visible = matches[offset : offset + 4]
+        # One ranking implementation for humans and automation: the canonical
+        # typed search owns retrieval, applicability and ordering, so this
+        # browse cannot drift from automatic selection. Disabled skills are
+        # excluded automatically; the page shows applicable candidates first.
+        from machina.skills.runtime import search_skills
+
+        result = search_skills(skills, query, limit=offset + 4)
+        page = [
+            skills.get(candidate.skill_id) for candidate in result.candidates[offset : offset + 4]
+        ]
+        visible = [skill for skill in page if skill is not None]
+        has_more = result.next_cursor is not None
+    else:
+        # Empty query browses the enabled catalog in stable registry order.
+        matches = [skill for skill in skills.list_skills() if skill.enabled]
+        visible = matches[offset : offset + 4]
+        has_more = offset + len(visible) < len(matches)
     if not visible:
         return "No matching skills on this page. Try an empty query or a smaller offset."
     lines = [
         f"{skill.name}: {skill.description.replace(chr(10), ' ').replace(chr(13), ' ')[:120]}"
         for skill in visible
     ]
-    if offset + len(visible) < len(matches):
+    if has_more:
         lines.append(f"Next offset: {offset + len(visible)}")
     return "\n".join(lines)
 

@@ -98,7 +98,7 @@ def plan_workflow(
     task_state: dict[str, Any] | None = None,
     task_revision: int = 0,
 ) -> SkillWorkflow:
-    from machina.skills.runtime import _TECHNOLOGIES, _words, rank_skills
+    from machina.skills.runtime import _TECHNOLOGIES, _words, automatic_skills
 
     skills.load_all()
     words = set(_words(query))
@@ -134,7 +134,11 @@ def plan_workflow(
         )
         if words & FOLLOW_UP_STACK_WORDS:
             routing_query += " " + " ".join(sorted(inherited))
-    matches = rank_skills(skills, routing_query, weights=skill_weights)
+    # Canonical automatic ranking (spec §9): one ranking implementation shared
+    # with the human browse path. ``automatic_skills`` applies the automatic
+    # *scope* (disabled and hard-excluded skills are gone) and returns the
+    # non-excluded candidates in canonical relevance order.
+    matches = automatic_skills(skills, routing_query, weights=skill_weights)
     # Weak single-word overlap never activates a specialist: without clear
     # evidence the agent stays a generalist (see _strong_match). An explicit
     # coding/research task still gets the generic pipeline below.

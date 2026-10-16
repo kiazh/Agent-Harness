@@ -19,9 +19,10 @@ Pure-Python triage helpers. Nothing here is wired into the agent loop yet.
   (`SCORE_DIRECT_MAX`, `SCORE_SUBAGENTS_MIN`, weights, caps) live in
   `complexity.py` — the single tuning point.
 - `machina.controller.preselect.SkillPreselectCache(skills)` — per-turn
-  cache over the shared BM25 `rank_skills`; identical normalized queries
-  rank once, `invalidate()` clears. Metadata ranking only — skill bodies
-  still load on demand, preserving progressive disclosure.
+  cache over the shared canonical selector (`skills.ports.automatic_skills`,
+  i.e. `search_skills` minus disabled/hard-excluded); identical normalized
+  queries rank once, `invalidate()` clears. Metadata ranking only — skill
+  bodies still load on demand, preserving progressive disclosure.
 
 ## Deferred wiring point (follow-up, not this stream)
 

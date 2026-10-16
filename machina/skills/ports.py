@@ -19,7 +19,8 @@ Cycle discipline: this module imports NOTHING from ``machina`` at runtime —
 not even for typing (``Skill`` is referenced as ``Any``). That keeps the
 ``registry -> ports`` conformance edge and the ``controller -> ports`` consumer
 edge cycle-free by construction; see ``tests/test_architecture_pairs.py``.
-The BM25 rank dispatch below imports ``skills.runtime`` lazily, at call time.
+The canonical-search dispatch below imports ``skills.runtime`` lazily, at call
+time.
 """
 
 from __future__ import annotations
@@ -57,17 +58,17 @@ class SkillSource(Protocol):
         ...
 
 
-def rank_skills(
+def automatic_skills(
     skills: SkillSource, query: str, *, weights: dict[str, float] | None = None
 ) -> list[Any]:
-    """BM25 trigger-rank query over a ``SkillSource``.
+    """Canonical automatic ranking over a ``SkillSource``.
 
-    Same signature as ``machina.skills.runtime.rank_skills``; the ranking
-    implementation is never reimplemented here — this seam only reroutes the
-    call so ``controller`` depends on ``skills.ports`` instead of reaching
-    past it into ``skills.runtime``. Lazy import keeps this module free of
-    module-level ``machina`` edges.
+    Reroutes to :func:`machina.skills.runtime.automatic_skills` — the one
+    ranking implementation (``search_skills`` minus disabled/hard-excluded
+    candidates). The legacy ``rank_skills`` selector was deleted; this seam no
+    longer reroutes to a second scoring path. Lazy import keeps this module
+    free of module-level ``machina`` edges.
     """
-    from machina.skills.runtime import rank_skills as _rank
+    from machina.skills.runtime import automatic_skills as _automatic
 
-    return _rank(skills, query, weights=weights)
+    return _automatic(skills, query, weights=weights)
