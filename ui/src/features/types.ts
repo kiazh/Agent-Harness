@@ -123,6 +123,18 @@ export interface FeatureHost {
 	 * report one honest notice instead of failing.
 	 */
 	music?(): MusicHost | undefined;
+	/**
+	 * Interactive skills directory surface (A5, spec §12.3): the App owns the
+	 * search overlay, its focus and its gateway providers. Optional: hosts
+	 * without it keep the legacy printed `/skills` table.
+	 */
+	skillsDirectory?(): SkillsDirectoryHost | undefined;
+}
+
+/** Interactive `/skills` picker surface (implemented by App). */
+export interface SkillsDirectoryHost {
+	/** Open the searchable picker overlay; `query` prefills the search box. */
+	openSkillsPicker(query?: string): void;
 }
 
 /** Now-playing surface for the /music command (implemented by App). */

@@ -1,17 +1,66 @@
-// Skill commands: list, show, learn, delete, curator.
+// Skill commands: browse, list, search, show, learn, delete, curator.
+//
+// Bare `/skills` opens the interactive directory when the host provides one
+// (spec §12.3); hosts without that surface keep the legacy printed table, and
+// `/skills list` / `/skills show` stay byte-compatible for existing callers
+// (U07). `/skills search [query]` prefills the picker, or prints a bounded
+// deterministic `skills.search` table on non-overlay hosts.
 
 import { keyValues, resolvePrefix, shortId, table } from "../format.ts";
 import type { LearningReviewInfo, SkillInfo } from "../protocol.ts";
+import { classificationLabel, type SkillsSearchResult } from "../components/SkillsPicker.ts";
 import { splitSub } from "../commands.ts";
-import { confirm, options, requireArgs, requireSession, type Command } from "./types.ts";
+import { confirm, options, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
 import { isFullUuid, scopedMiss } from "./memory.ts";
+
+async function listSkills(host: FeatureHost): Promise<void> {
+	const { skills } = await host.request<{ skills: SkillInfo[] }>("skills.list");
+	host.print(
+		skills.length
+			? table(
+					["Name", "Uses", "Triggers", "Description"],
+					skills.map((s) => [s.name, String(s.usageCount), s.triggers.slice(0, 3).join(", ") || "—", s.description]),
+					60,
+				)
+			: "No skills installed. Add one with /skills learn <file|url>.",
+		"plain",
+	);
+}
+
+/** Bounded printed search for hosts without the interactive overlay. */
+async function printSkillSearch(host: FeatureHost, query: string): Promise<void> {
+	const result = await host.request<SkillsSearchResult>("skills.search", {
+		query,
+		filters: { include_excluded: true },
+		limit: 20,
+	});
+	if (result.candidates.length === 0) {
+		const label = classificationLabel(result.diagnostics?.classification ?? "", query);
+		host.print(query ? `No skills match "${query}" (${label || "no matches"}).` : "No skills match (no query given).", "plain");
+		return;
+	}
+	host.print(
+		table(
+			["Name", "State", "Source", "Why"],
+			result.candidates.map((candidate) => [
+				candidate.name,
+				candidate.applicability,
+				`${candidate.trust} (${candidate.sourceType})`,
+				candidate.reasons[0] ?? candidate.matchedPhrases[0] ?? candidate.explanation,
+			]),
+			70,
+		),
+		"plain",
+	);
+}
 
 export const skillsCommand: Command = {
 	name: "skills",
-	description: "Skills: list, show, learn, proposals, approve, reject, revert, delete, curator",
-	argumentHint: "[list|show|learn|proposals|approve|reject|revert|delete|curator]",
+	description: "Skills: browse, list, search, show, learn, proposals, approve, reject, revert, delete, curator",
+	argumentHint: "[list|search|show|learn|proposals|approve|reject|revert|delete|curator]",
 	getArgumentCompletions: options([
-		["list", "All installed skills"],
+		["list", "All installed skills (printed table)"],
+		["search", "Search skills (interactive picker)"],
 		["show", "Read a skill <name>"],
 		["learn", "Create a skill from <file|url|skill>"],
 		["proposals", "Review suggested and auto-applied skills"],
@@ -24,19 +73,28 @@ export const skillsCommand: Command = {
 	async run(args, host) {
 		const [sub, rest] = splitSub(args);
 		switch (sub) {
-			case "":
+			case "": {
+				// Interactive directory when available; legacy table otherwise.
+				const surface = host.skillsDirectory?.();
+				if (surface) {
+					surface.openSkillsPicker();
+					return;
+				}
+				await listSkills(host);
+				return;
+			}
 			case "list": {
-				const { skills } = await host.request<{ skills: SkillInfo[] }>("skills.list");
-				host.print(
-					skills.length
-						? table(
-								["Name", "Uses", "Triggers", "Description"],
-								skills.map((s) => [s.name, String(s.usageCount), s.triggers.slice(0, 3).join(", ") || "—", s.description]),
-								60,
-							)
-						: "No skills installed. Add one with /skills learn <file|url>.",
-					"plain",
-				);
+				await listSkills(host);
+				return;
+			}
+			case "search": {
+				const query = rest.trim();
+				const surface = host.skillsDirectory?.();
+				if (surface) {
+					surface.openSkillsPicker(query || undefined);
+					return;
+				}
+				await printSkillSearch(host, query);
 				return;
 			}
 			case "show": {
@@ -132,7 +190,7 @@ export const skillsCommand: Command = {
 				return;
 			}
 			default:
-				throw new Error(`Unknown /skills option "${sub}". Try: list, show, learn, proposals, approve, reject, revert, delete, curator.`);
+				throw new Error(`Unknown /skills option "${sub}". Try: list, search, show, learn, proposals, approve, reject, revert, delete, curator.`);
 		}
 	},
 };

@@ -21,6 +21,7 @@ import { parseCommand, splitSub, type ParsedCommand } from "./commands.ts";
 import { ComposerBox, Footer, header, Picker, SecretForm, TextForm, ThinkingIndicator } from "./components.ts";
 import { Menu } from "./components/Menu.ts";
 import { OAuthProgress } from "./components/OAuthProgress.ts";
+import { SkillsPicker, type SkillsDetailsSkill, type SkillsPreviewResult, type SkillsSearchParams, type SkillsSearchResult } from "./components/SkillsPicker.ts";
 import { ApprovalCard, type ApprovalDecision } from "./components/ApprovalCard.ts";
 import { AppShell } from "./components/AppShell.ts";
 import { EditorPane, uriDisplayPath } from "./components/EditorPane.ts";
@@ -38,7 +39,7 @@ import type { MusicHost } from "./features/types.ts";
 import { type FamilySession, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS, type WorkspaceHost } from "./features/index.ts";
 import type { WorkspaceAttachmentHost } from "./features/workspace.ts";
 import { guardSubmit } from "./commandDispatch.ts";
-import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions, type UiPreferenceKey, type UiSettingsHost } from "./features/types.ts";
+import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions, type SkillsDirectoryHost, type UiPreferenceKey, type UiSettingsHost } from "./features/types.ts";
 import { FamilyStore, listFamilySessions } from "./family.ts";
 import { agentSessionItems } from "./features/agents.ts";
 import type { GatewayClient } from "./gateway.ts";
@@ -403,6 +404,9 @@ export class App implements FeatureHost {
 	private completionRefilterSeq = 0;
 	private quickOpenPane: QuickOpenPane | undefined;
 	private quickOpenHandle: OverlayHandle | undefined;
+	/** `/skills` interactive directory overlay (A5, spec §12.3). */
+	private skillsPicker: SkillsPicker | undefined;
+	private skillsPickerHandle: OverlayHandle | undefined;
 	/** Re-entrancy guard for the dirty-exit review. */
 	private dirtyExitInProgress = false;
 	/** Stored workspace_ui_state captured BEFORE open (open overwrites it). */
@@ -667,6 +671,16 @@ export class App implements FeatureHost {
 	 */
 	workspace(): WorkspaceHost | undefined {
 		return this.workspaceHostSurface;
+	}
+
+	/**
+	 * FeatureHost: the interactive skills directory surface for `/skills`
+	 * (A5, spec §12.3). Present whenever the app runs; the picker talks to
+	 * `skills.search` / `skills.show` / `skills.preview_route` and falls back
+	 * to the one honest error state when a method is unavailable.
+	 */
+	skillsDirectory(): SkillsDirectoryHost | undefined {
+		return { openSkillsPicker: (query) => this.openSkillsPicker(query ?? "") };
 	}
 
 	// ─── global UI settings (closing pass) ──────────────────────────────────
@@ -2767,6 +2781,79 @@ export class App implements FeatureHost {
 			{ workspaceId: identity.workspaceId, epoch: identity.epoch, query, limit: 50 },
 			120_000,
 		);
+	}
+
+	// ─── skills directory (A5, spec §12.3) ──────────────────────────────────
+
+	/**
+	 * `/skills`: bounded overlay over `skills.search`, with `skills.show`
+	 * details and a call-free `skills.preview_route` view. The picker holds no
+	 * authority: delete is routed back through the legacy `/skills delete`
+	 * command (same confirmation/authorization), and preview cannot start a
+	 * turn, call a provider, run tools, install skills or change approvals.
+	 */
+	private openSkillsPicker(initialQuery = ""): void {
+		if (this.skillsPicker) return;
+		const pane = new SkillsPicker(
+			{
+				search: (params) => this.skillsSearch(params),
+				details: (skillId) => this.skillsDetails(skillId),
+				preview: (request) => this.skillsPreview(request),
+			},
+			{
+				onChange: () => this.tui.requestRender(),
+				initialQuery,
+			},
+		);
+		pane.onClose = () => this.closeSkillsPicker();
+		pane.onDelete = (skillName) => {
+			// Keep the legacy command as the only delete path: same
+			// confirmation, same authorization, same RPC as `/skills delete`.
+			this.closeSkillsPicker();
+			const command = parseCommand(`/skills delete ${skillName}`);
+			if (command) void runCommand(command, this);
+		};
+		this.skillsPicker = pane;
+		this.skillsPickerHandle = this.tui.showOverlay(pane, {
+			width: "100%",
+			maxHeight: "100%",
+			anchor: "bottom-center",
+		});
+		pane.activate();
+		this.tui.setFocus(pane);
+		this.tui.requestRender();
+	}
+
+	private closeSkillsPicker(): void {
+		const pane = this.skillsPicker;
+		if (!pane) return;
+		this.skillsPicker = undefined;
+		this.skillsPickerHandle?.hide();
+		this.skillsPickerHandle = undefined;
+		pane.focused = false;
+		if (!this.exiting) this.setFocusForRegion("chat-composer");
+		this.tui.requestRender();
+	}
+
+	/** `skills.search` binding: the pane's closed filter object goes as-is. */
+	private skillsSearch(params: SkillsSearchParams): Promise<SkillsSearchResult> {
+		return this.request<SkillsSearchResult>("skills.search", {
+			query: params.query,
+			filters: params.filters,
+			limit: params.limit,
+			...(params.cursor ? { cursor: params.cursor } : {}),
+		});
+	}
+
+	/** Details read: the legacy `skills.show` contract (case-insensitive id). */
+	private async skillsDetails(skillId: string): Promise<SkillsDetailsSkill> {
+		const { skill } = await this.request<{ skill: SkillsDetailsSkill }>("skills.show", { name: skillId });
+		return skill;
+	}
+
+	/** Call-free route preview: no turn, provider, tool, install or approval. */
+	private skillsPreview(request: string): Promise<SkillsPreviewResult> {
+		return this.request<SkillsPreviewResult>("skills.preview_route", { request, context: {} });
 	}
 
 	// ─── workspace events + toggles ─────────────────────────────────────────

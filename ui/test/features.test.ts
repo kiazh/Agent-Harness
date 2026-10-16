@@ -35,6 +35,12 @@ class FakeHost implements FeatureHost {
 	switched: Array<{ session: SessionInfo; history: HistoryEntry[] }> = [];
 	responses: Record<string, unknown | ((params: Record<string, unknown>) => unknown)> = {};
 	configured: ConfigResult[] = [];
+	/** Optional interactive-directory surface for the A5 `/skills` tests. */
+	skillsSurface: { openSkillsPicker: (query?: string) => void } | undefined;
+
+	skillsDirectory() {
+		return this.skillsSurface;
+	}
 
 	async request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
 		this.calls.push({ method, params });
@@ -2144,4 +2150,115 @@ test("/mcp connection confirmation shows the reviewed safe configuration", async
  assert.match(host.pickTitles.at(-1)!, /secret_refs.*DOCS_TOKEN/);
  assert.match(host.pickTitles.at(-1)!, /trust.*untrusted/);
  assert.equal(host.calls.some(call => call.method === "mcp.connect"), false);
+});
+
+// ─── A5: interactive /skills directory + legacy compatibility (spec §12.3) ──
+
+test("/skills list stays byte-identical to the legacy printed table (U07)", async () => {
+	const host = new FakeHost();
+	host.responses["skills.list"] = {
+		skills: [
+			{ name: "alpha", description: "First skill", triggers: ["one", "two", "three", "four"], version: "1.0.0", sourceType: "local", usageCount: 7, enabled: true },
+			{ name: "beta", description: "Second", triggers: [], version: "2.0.0", sourceType: "builtin-ecc", usageCount: 0, enabled: false },
+		],
+	};
+	await run("/skills list", host);
+	assert.deepEqual(host.calls, [{ method: "skills.list", params: {} }]);
+	assert.equal(host.last().kind, "plain");
+	assert.equal(
+		host.last().text,
+		"Name   Uses  Triggers         Description\n─────  ────  ───────────────  ───────────\nalpha  7     one, two, three  First skill\nbeta   0     —                Second",
+		"the printed table bytes are pinned",
+	);
+});
+
+test("/skills show keeps the legacy markdown document (U07)", async () => {
+	const host = new FakeHost();
+	host.responses["skills.show"] = {
+		skill: { name: "alpha", description: "First skill", triggers: ["one", "two"], version: "1.0.0", sourceType: "local", usageCount: 7, enabled: true, content: "Body text." },
+	};
+	await run("/skills show alpha", host);
+	assert.deepEqual(host.calls, [{ method: "skills.show", params: { name: "alpha" } }]);
+	assert.equal(host.markdown.at(-1), "## alpha\n\nFirst skill\n\n*Triggers:* one, two\n\n---\n\nBody text.");
+});
+
+test("/skills delete keeps its confirmation and stays on skills.delete (U07)", async () => {
+	const host = new FakeHost();
+	host.responses["skills.delete"] = { deleted: true };
+	host.picks.push(undefined); // cancel
+	await run("/skills delete alpha", host);
+	assert.equal(host.calls.length, 0, "cancelling deletes nothing");
+	assert.match(host.last().text, /Kept the skill\./);
+	host.picks.push("yes");
+	await run("/skills delete alpha", host);
+	assert.deepEqual(host.calls, [{ method: "skills.delete", params: { name: "alpha" } }]);
+	assert.equal(host.last().kind, "success");
+});
+
+test("bare /skills opens the interactive directory when the host provides it (U01)", async () => {
+	const host = new FakeHost();
+	const opened: Array<string | undefined> = [];
+	host.skillsSurface = { openSkillsPicker: (query) => opened.push(query) };
+	await run("/skills", host);
+	assert.deepEqual(opened, [undefined], "bare /skills opens the picker");
+	assert.equal(host.calls.length, 0, "the interactive path issues no list RPC itself");
+	await run("/skills search make me a website", host);
+	assert.deepEqual(opened, [undefined, "make me a website"], "/skills search prefills the picker query");
+	await run("/skills search", host);
+	assert.deepEqual(opened, [undefined, "make me a website", undefined]);
+});
+
+test("without a host surface the legacy table is the fallback (U07)", async () => {
+	const host = new FakeHost();
+	host.responses["skills.list"] = { skills: [{ name: "alpha", description: "First skill", triggers: ["one"], version: "1.0.0", sourceType: "local", usageCount: 1, enabled: true }] };
+	await run("/skills", host);
+	assert.deepEqual(host.calls, [{ method: "skills.list", params: {} }], "no surface: bare /skills prints the legacy table");
+	assert.match(host.last().text, /alpha/);
+});
+
+test("/skills search without a surface prints the bounded deterministic table (U01 fallback)", async () => {
+	const host = new FakeHost();
+	host.responses["skills.search"] = {
+		query: "web",
+		filters: { task_family: "", capability: "", source: [], enabled: null, include_excluded: true },
+		limit: 20,
+		browse: true,
+		candidates: [
+			{
+				skillId: "web-build",
+				name: "web-build",
+				contentRevision: "rev0000000000",
+				score: 12,
+				scoreComponents: { lexical: 12 },
+				matchedPhrases: ["build a website"],
+				matchedCapabilities: [],
+				applicability: "applicable",
+				reasons: [],
+				workflowStages: ["implement"],
+				explanation: "applicable",
+				sourceType: "builtin-ecc",
+				trust: "bundled",
+				enabled: true,
+			},
+		],
+		catalogRevision: "rev",
+		queryDescriptorRevision: "q",
+		policyRevision: "p",
+		nextCursor: null,
+		diagnostics: { classification: "ok", catalog_size: 1, retrieved: 1, applicable: 1, conditional: 0, excluded: 0, corrections: [], weights_applied: false },
+	};
+	await run("/skills search web", host);
+	assert.deepEqual(host.calls, [{ method: "skills.search", params: { query: "web", filters: { include_excluded: true }, limit: 20 } }]);
+	const text = host.last().text;
+	assert.match(text, /web-build/);
+	assert.match(text, /applicable/);
+
+	host.responses["skills.search"] = {
+		...host.responses["skills.search"] as Record<string, unknown>,
+		candidates: [],
+		nextCursor: null,
+		diagnostics: { classification: "no_lexical_evidence", catalog_size: 1, retrieved: 0, applicable: 0, conditional: 0, excluded: 0, corrections: [], weights_applied: false },
+	};
+	await run("/skills search zzz", host);
+	assert.match(host.last().text, /No skills match "zzz" \(no lexical evidence for "zzz"\)\./);
 });
