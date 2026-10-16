@@ -217,6 +217,12 @@ This document keeps current evidence separate from historical baseline logs. Nev
 - `f050bef` UX polish spec from real-frame audit, incl. the duplicate-Problems render bug (backend returns 1 diagnostic, UI rendered 2).
 - CodeRabbit pass 1 launched on the committed range `b0db077..HEAD` (background; findings fold into the closing pass; a second pass covers T10 + fixes + UX batch).
 
+### Closing pass (status: complete, commit 6f3131c)
+
+- Delivered: CodeRabbit leftover fixes (flush-before-intelligence RED→GREEN; Ctrl+←/→ region gating; editor Ctrl+V routing), syntax highlighting wired into EditorView (state-cache strategy documented; caret>selection>syntax), `/settings` 5-category menu + bare `/config` opens it + `/config list` dump, `ui_preferences` store, all polish items 1–7/9/10, footer hints wired, `/editor complete` fallback, 3 new test files.
+- Evidence: full gate 892 tests / 886 pass / 6 skip / 0 fail (orchestrator re-run); live PTY final captures recorded in WORKSPACE_UX_POLISH.md (truecolor syntax, settings menu rows, polish surfaces, completion popup, tab close, side swap).
+- CodeRabbit pass 2 launched on the final committed range; findings to be triaged into the record.
+
 ## Task record template (from plan §26)
 
 ```text
