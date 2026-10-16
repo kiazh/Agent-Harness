@@ -15,6 +15,7 @@ from typing import Any
 from machina.core.compression import CompressionConfig, CompressionResult, ContextCompressor
 from machina.core.config import config
 from machina.core.context import context_manager
+from machina.core.metrics import metrics
 from machina.core.models import Session
 from machina.db.connection import db
 from machina.observability.diagnostics import record_failure
@@ -407,6 +408,50 @@ async def _estimate_next_request(session_id) -> int:
     return total
 
 
+def _record_compaction_status(
+    status: str,
+    *,
+    reason: str = "",
+    error_class: str = "",
+    tokens_before: int | None = None,
+    tokens_after: int | None = None,
+) -> None:
+    """Bounded honest status for one auto-compaction decision (spec §14.7, §21).
+
+    Exactly one counter per decision: ``compaction.<status>``, with the reason
+    appended for skips (``compaction.skipped.busy``, ``.disabled``,
+    ``.below_threshold``, ``.no_progress``, ``.session_missing``,
+    ``.no_change``). A rich audit event is emitted only when it carries what
+    a counter cannot — the error class, and the size before/after a real
+    compaction — so the routine threshold skip on every turn boundary never
+    writes an audit row. Bounded and default-safe: labels and counts only,
+    never chunk bodies, prompts, credentials, or a raw exception message. A
+    failure here can never change the scheduling decision.
+    """
+    counter = f"compaction.{status}"
+    if status == "skipped" and reason:
+        counter = f"{counter}.{reason}"
+    try:
+        metrics.increment_counter(counter)
+    except Exception as exc:  # pragma: no cover - in-memory, best effort
+        record_failure("services.compaction_status", exc)
+        return
+    if status not in ("completed", "failed"):
+        return
+    try:
+        from machina.core.provider import audit_log
+
+        audit_log(
+            "compaction_status",
+            status=status,
+            error_class=error_class or None,
+            tokens_before=tokens_before,
+            tokens_after=tokens_after,
+        )
+    except Exception as exc:
+        record_failure("services.compaction_status", exc)
+
+
 async def maybe_auto_compact(session_id) -> dict | None:
     """Threshold-triggered rolling compaction at a safe turn boundary.
 
@@ -418,8 +463,10 @@ async def maybe_auto_compact(session_id) -> dict | None:
     """
     try:
         if not config.get("auto_compaction_enabled"):
+            _record_compaction_status("skipped", reason="disabled")
             return None
         if not config.get("compression_enabled"):
+            _record_compaction_status("skipped", reason="disabled")
             return None
     except Exception as _boundary_error:
         # Optional fallback preserves the primary outcome; report no payload.
@@ -433,14 +480,23 @@ async def maybe_auto_compact(session_id) -> dict | None:
         token = await begin_mutation(session_id)
     except Exception as _claim_error:
         record_failure("services.maybe_auto_compact", _claim_error)
+        # Failed before any claim: distinguishable from a started-then-failed
+        # compaction (no `started` counter was emitted).
+        _record_compaction_status("failed", error_class=type(_claim_error).__name__)
         return None
     if not token:
-        return None  # busy: defer, do not queue behind live work
+        # Busy: defer, do not queue behind live work. One counter, no started.
+        _record_compaction_status("skipped", reason="busy")
+        return None
+    # Claim acquired: only now is the attempt "started" (§14.7). A scheduled
+    # task that never reached this line stays visible as scheduled-only.
+    _record_compaction_status("started")
     try:
         from machina.core.session import session_manager as _sessions
 
         session = await _sessions.get(session_id)
         if session is None:
+            _record_compaction_status("skipped", reason="session_missing")
             return None
         budget = await session_context_window(session)
         try:
@@ -448,6 +504,7 @@ async def maybe_auto_compact(session_id) -> dict | None:
         except Exception:
             threshold = 0.8
         if await _estimate_next_request(session_id) < int(budget * threshold):
+            _record_compaction_status("skipped", reason="below_threshold")
             return None
         # No-progress guard: skip when a previous run already compacted at
         # nearly this size.
@@ -455,12 +512,24 @@ async def maybe_auto_compact(session_id) -> dict | None:
         last = state.get("last_auto_compact_tokens")
         total_now = await context_manager.get_token_usage(session_id)
         if isinstance(last, int) and total_now <= last + max(100, int(budget * 0.05)):
+            _record_compaction_status("skipped", reason="no_progress")
             return None
         # compress_session verifies this same token before replacing (shared
         # ownership, no double claim).
         result = await compress_session(session, mutation_token=token)
         if result is None:
+            # No-op/stale (busy is impossible here: we hold the mutation
+            # claim and pass it through). Counted once, never as `started`.
+            _record_compaction_status("skipped", reason="no_change")
             return None
+        # Compression committed (compress_session fences the token inside the
+        # archive/replace transaction), so this is a completed compaction even
+        # if the progress watermark write below is skipped.
+        _record_compaction_status(
+            "completed",
+            tokens_before=result.original_tokens,
+            tokens_after=result.compressed_tokens,
+        )
         # Ownership re-check: an expired claim means another worker may own
         # the session now — record progress only when still ours.
         try:
@@ -471,6 +540,9 @@ async def maybe_auto_compact(session_id) -> dict | None:
 
                 current = await _db_claim_state(session_id)
                 if current is None or current.get("claim_owner") != token:
+                    # Compression is already counted `completed` above; this
+                    # short-circuit withholds only the progress watermark from
+                    # a session another worker may now own.
                     return None
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
@@ -508,6 +580,8 @@ async def maybe_auto_compact(session_id) -> dict | None:
         }
     except Exception as _compact_error:
         record_failure("services.maybe_auto_compact", _compact_error)
+        # Started then failed: the class (not the message) is the only detail.
+        _record_compaction_status("failed", error_class=type(_compact_error).__name__)
         return None
     finally:
         try:

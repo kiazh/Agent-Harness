@@ -708,6 +708,10 @@ class TurnEngine:
 
             task = asyncio.create_task(_services.maybe_auto_compact(self.spec.session_id))
             task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            # Recorded at schedule time, before the task can acquire a claim
+            # (§14.7): a scheduled-but-never-started task stays distinguishable
+            # from one whose `started` counter fires only on claim acquisition.
+            _services._record_compaction_status("scheduled")
             try:
                 runtime_services.track(task)
             except Exception as exc:
