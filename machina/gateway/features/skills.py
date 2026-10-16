@@ -624,11 +624,14 @@ def _content_offset_read(
         CODE_SECTION_RANGE,
         CODE_SECTION_STALE,
         ReadSectionResult,
-        content_fingerprint,
+        skill_content_revision,
     )
 
     skill_id = str(getattr(skill, "name", ""))
-    revision = content_fingerprint(content)
+    # The canonical skill content revision (what ``skills.search`` candidates
+    # expose and ``skills.section`` binds), not the raw-byte fingerprint: a
+    # revision shown by search joins this offset read too.
+    revision = skill_content_revision(skill)
     total = len(content)
     if expected_revision is not None and expected_revision != revision:
         return ReadSectionResult(
@@ -702,9 +705,12 @@ async def skills_section(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Read one exact versioned skill passage (spec §12.2).
 
     ``section`` addresses a declared/parsed anchor; ``offset`` (optionally
-    within a section) continues a previous read. A stale ``contentRevision``
-    returns the structured stale response with empty text — never a different
-    passage at the same address.
+    within a section) continues a previous read. ``contentRevision`` is the
+    canonical skill content revision (``search.content_revision``) — the same
+    identity ``skills.search`` candidates carry — so a revision shown by a
+    search is fresh on the first read. A stale ``contentRevision`` returns the
+    structured stale response with empty text — never a different passage at
+    the same address.
     """
     gw.require_db()
     skill_id = _str(params, "skillId", max_len=200)

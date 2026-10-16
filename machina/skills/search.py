@@ -106,11 +106,15 @@ SYNONYM_EXPANSIONS = {
 }
 
 #: Technology markers used to infer a skill's stack from its name (legacy
-#: parity with ``runtime._TECHNOLOGIES``).
+#: parity with ``runtime._TECHNOLOGIES``). A6 follow-up: widely-named frontend
+#: frameworks are included so "switch the ... to Svelte" can name an explicit
+#: stack; ordinary-English-word tokens stay guarded in
+#: ``machina.core.intent.AMBIGUOUS_TECHNOLOGIES``.
 TECHNOLOGY_MARKERS = frozenset(
-    "python rust go react vue angular django laravel kotlin swift swiftui java springboot quarkus "
-    "perl cpp csharp fsharp dotnet rails redis postgres mysql clickhouse kubernetes docker fastapi "
-    "nestjs nuxt4 vite bun flutter dart android nextjs pytorch prisma netmiko cisco evm".split()
+    "python rust go react vue angular svelte solid solidjs django laravel kotlin swift swiftui "
+    "java springboot quarkus perl cpp csharp fsharp dotnet rails redis postgres mysql clickhouse "
+    "kubernetes docker fastapi nestjs nuxt nuxt4 vite bun flutter dart android nextjs pytorch "
+    "prisma netmiko cisco evm".split()
 )
 #: Specialty markers behave like stacks: an unmentioned specialty keeps the
 #: skill visible but conditional (legacy parity with ``runtime._SPECIALTIES``).
@@ -884,6 +888,16 @@ def build_explanation(
 
 
 def content_revision(skill: Any) -> str:
+    """Canonical skill content revision: one identity for every consumer.
+
+    SHA-256 (16 hex) over the skill's declared identity — version, the
+    content bytes the object carries, bundle path/revision metadata, and the
+    validated schema-v2 metadata digest. ``skills.search`` candidates, the
+    version-bound section reads (``read_skill_section`` / ``skills.section``),
+    and ``machina.skills.revisions`` all bind this value, so a revision shown
+    by search is fresh on the first section read and a text or metadata edit
+    moves all of them together. Telemetry changes never move it.
+    """
     meta = getattr(skill, "metadata", None)
     typed = _typed_metadata(skill)
     typed_digest = ""

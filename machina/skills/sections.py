@@ -16,7 +16,14 @@ This module owns the *read* side of staged skill disclosure:
 * :func:`read_section` is *version-bound*: a continuation carries the
   ``content_revision`` it was produced against, and a read against edited
   content returns ``stale=True`` with empty text — never a different passage
-  at the same offset. The existing character-offset reads in
+  at the same offset. Skill-level reads (:func:`read_skill_section`, the
+  ``skills.section`` handler, the native ``skill_read``) bind the canonical
+  skill content revision — ``machina.skills.search.content_revision(skill)``,
+  the same 16-hex identity search candidates expose — so a revision shown by
+  search is fresh on the first read and a text or metadata edit moves both
+  sides together. A bare content-string read keeps
+  :func:`content_fingerprint` (the exact bytes), which also keys the
+  per-revision parse cache. The existing character-offset reads in
   ``machina.tools.skills.skill_read`` keep their exact meaning; this module
   adds a parallel API rather than changing offset semantics.
 
@@ -98,7 +105,16 @@ _CACHE_GENERATION = GenerationCounter()
 
 
 def content_fingerprint(content: str) -> str:
-    """Stable 16-hex fingerprint of one exact content revision."""
+    """Stable 16-hex fingerprint of one exact content revision (the bytes).
+
+    This is the parse-cache key and the identity of a bare content-string
+    read (:func:`read_section` without a skill object). The cross-module
+    "skill content revision" that search candidates, ``skills.section``, and
+    ``machina.skills.revisions`` agree on covers more than the bytes
+    (version, bundle identity, typed metadata digest) and is computed by
+    :func:`machina.skills.search.content_revision` for a loaded skill — see
+    :func:`read_skill_section`.
+    """
     return hashlib.sha256((content or "").encode("utf-8", "replace")).hexdigest()[:16]
 
 
@@ -349,10 +365,11 @@ def _empty_result(
     section_id: str,
     diagnostics: tuple[MetadataDiagnostic, ...],
     stale: bool = False,
+    revision: str | None = None,
 ) -> ReadSectionResult:
     return ReadSectionResult(
         skill_id=skill_id,
-        content_revision=index.revision,
+        content_revision=index.revision if revision is None else revision,
         section_id=section_id,
         total=len(index.preamble) + sum(len(section.text) for section in index.sections),
         stale=stale,
@@ -369,6 +386,7 @@ def read_section(
     expected_revision: str | None = None,
     offset: int = 0,
     limit: int | None = None,
+    current_revision: str | None = None,
 ) -> ReadSectionResult:
     """Read one section against an explicit content revision.
 
@@ -377,10 +395,17 @@ def read_section(
     diagnostic records that the read was undeclared. ``expected_revision``
     binds continuations: a mismatch returns ``stale=True`` with empty text
     instead of a passage from edited content.
+
+    ``current_revision`` overrides the identity this read binds and reports —
+    :func:`read_skill_section` passes the canonical skill content revision
+    (``search.content_revision(skill)``), so the section side and search
+    candidates agree. Without it the byte fingerprint of ``content`` is the
+    identity (a bare content-string read).
     """
     text = content or ""
     index = index_sections(text)
-    if expected_revision is not None and expected_revision != index.revision:
+    revision = index.revision if current_revision is None else str(current_revision)
+    if expected_revision is not None and expected_revision != revision:
         return _empty_result(
             index=index,
             skill_id=skill_id,
@@ -390,13 +415,14 @@ def read_section(
                     code=CODE_SECTION_STALE,
                     message=(
                         f"section {section_id!r} was read against revision "
-                        f"{index.revision}; the requested revision {expected_revision} "
+                        f"{revision}; the requested revision {expected_revision} "
                         "no longer matches the current content"
                     ),
                     skill_id=skill_id,
                 ),
             ),
             stale=True,
+            revision=revision,
         )
 
     section: ParsedSection | None = None
@@ -429,6 +455,7 @@ def read_section(
                     skill_id=skill_id,
                     section_id=section_id,
                     diagnostics=tuple(diagnostics),
+                    revision=revision,
                 )
         else:
             section = index.find(section_id)
@@ -461,6 +488,7 @@ def read_section(
                     skill_id=skill_id,
                     section_id=section_id,
                     diagnostics=tuple(diagnostics),
+                    revision=revision,
                 )
     else:
         section = index.find(section_id)
@@ -480,6 +508,7 @@ def read_section(
                 skill_id=skill_id,
                 section_id=section_id,
                 diagnostics=tuple(diagnostics),
+                revision=revision,
             )
         address = section.section_id
 
@@ -497,7 +526,7 @@ def read_section(
         )
         return ReadSectionResult(
             skill_id=skill_id,
-            content_revision=index.revision,
+            content_revision=revision,
             section_id=address,
             heading=section.heading,
             start=section.start,
@@ -514,7 +543,7 @@ def read_section(
     continuation = end if end < section_total else None
     return ReadSectionResult(
         skill_id=skill_id,
-        content_revision=index.revision,
+        content_revision=revision,
         section_id=address,
         heading=section.heading,
         text=served,
@@ -541,6 +570,16 @@ def read_skill_section(
 ) -> ReadSectionResult:
     """Version-bound read for a loaded ``Skill`` object.
 
+    The revision this read reports and binds is the canonical skill content
+    revision (:func:`machina.skills.search.content_revision`) — the same
+    identity ``skills.search`` candidates carry and
+    ``machina.skills.revisions`` reports — so a revision shown by search is
+    fresh on the first read, and a text or metadata edit between fetch and
+    read returns ``stale=True``. It covers version, the content bytes the
+    skill object carries, the bundle path/revision metadata (bundled skills
+    are hash-pinned, so their served bytes are covered by that identity), and
+    the validated schema-v2 metadata digest; telemetry never moves it.
+
     ``content`` overrides the body when the real instructions live outside
     ``skill.content`` (bundled skills keep them in the pinned bundle); callers
     that have a registry should pass ``registry.get_skill_content(name)``.
@@ -556,6 +595,7 @@ def read_skill_section(
         expected_revision=expected_revision,
         offset=offset,
         limit=limit,
+        current_revision=skill_content_revision(skill),
     )
 
 

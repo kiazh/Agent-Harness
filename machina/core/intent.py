@@ -37,6 +37,15 @@ _FOLLOW_ON_ACTION = re.compile(
     r"migrate|deploy|install|configure|switch)\b",
     re.I,
 )
+# An explicit explanation clause after a clause boundary ("…, just explain …").
+# Used only to read the request that remains once a negated action is removed
+# (see :func:`classify_task`); it never matches a bare "how"/"what" question on
+# its own, so "don't touch it, how about you build the site" cannot flip.
+_EXPLAIN_CLAUSE = re.compile(
+    r"(?:^|[.!?;,]\s*|\b(?:and|then)\s+)"
+    r"(?:just\s+|only\s+)?(?:please\s+)?(?:explain|describe)\b",
+    re.I,
+)
 
 # Task-classifier v2: regex + keyword sets only, no model calls.
 # Precedence is load-bearing: ambiguous short follow-ons first (never guess),
@@ -92,8 +101,9 @@ _ACTION_VERB = re.compile(
 # ─── Shared TaskDescriptor vocabulary (spec §8; single source of truth) ──────
 
 #: Technology names that are ordinary English words. A bare token alone is a
-#: topic, not an implementation authorization (spec §8.2 "go/rust/swift").
-AMBIGUOUS_TECHNOLOGIES = frozenset({"go", "rust", "swift"})
+#: topic, not an implementation authorization (spec §8.2 "go/rust/swift";
+#: "solid" joins them: SolidJS is named by an ordinary adjective).
+AMBIGUOUS_TECHNOLOGIES = frozenset({"go", "rust", "swift", "solid"})
 
 #: Task words that mark coding work even without a named technology. Hoisted
 #: from ``machina.skills.workflow.plan_workflow`` so intent, workflow, and the
@@ -149,10 +159,17 @@ _WEB_BUILD_ACTION = re.compile(
     r"launch|write|code|implement|bootstrap)\b|\bspin\s+up\b|\bset\s+up\b",
     re.I,
 )
+#: Closed phrase list for web-building nouns (spec §8.2). A noun qualifies only
+#: as an explicit compound ("homepage", "landing page") or a qualified site
+#: phrase ("marketing site"); bare "site" is deliberately absent so unrelated
+#: contexts ("stock portfolio", a question about how a band site gets made)
+#: keep their observed non-web decisions.
 _WEB_BUILD_NOUN = re.compile(
-    r"\b(?:website|web\s+site|web\s?page|webpage|web\s+app(?:lication)?|webapp|"
-    r"landing\s+page|portfolio\s+(?:website|web\s+site|site|page)|"
-    r"(?:web|portfolio|e-?commerce)\s+site|web\s+front[\s-]?end|"
+    r"\b(?:website|web\s+site|web\s?page|home\s?page|"
+    r"web\s+app(?:lication)?|webapp|landing\s+page|"
+    r"portfolio\s+(?:website|web\s+site|site|page)|"
+    r"(?:web|portfolio|e-?commerce|marketing)\s+site|"
+    r"web\s+front[\s-]?end|"
     r"front[\s-]?end\s+(?:site|app|website|project))\b",
     re.I,
 )
@@ -174,11 +191,11 @@ _READONLY_CONSTRAINT = re.compile(
     re.I,
 )
 _NEGATED_ACTION = re.compile(
-    r"\b(?:don't|dont|do\s+not|never|without)\b[\s,:-]*"
-    r"(?:(?:actually|really|ever|just|now|please)\s+)*"
+    r"\b(?:don't|dont|do\s+not|never|without|no\s+need\s+to|no\s+need)\b"
+    r"[\s,:-]*(?:(?:actually|really|ever|just|now|please)\s+)*"
     r"(?:(?:want|need)\s+to\s+)?"
     r"(install|deploy|edit|change|modify|touch|delete|remove|commit|push|run|"
-    r"execute|write)\b",
+    r"execute|write|build)\b",
     re.I,
 )
 _CONSTRAINT_FOR_VERB = {
@@ -195,6 +212,9 @@ _CONSTRAINT_FOR_VERB = {
     "push": "no-push",
     "run": "no-execute",
     "execute": "no-execute",
+    # "don't build anything" forbids creating, i.e. forces the read-only scope;
+    # there is no separate "no-build" token in CONSTRAINTS.
+    "build": "read-only",
 }
 #: Canonical constraint tokens in stable order.
 CONSTRAINTS = (
@@ -300,6 +320,18 @@ def classify_task(query: str) -> str:
         return "learn-directory"
     if conversational(query):
         return "conversational" if _GREETING.fullmatch(query) else "explain"
+    if _NEGATED_ACTION.search(query):
+        # A negated action is a constraint, not authorization (spec §8.3):
+        # classify what remains once the negated span is removed, so
+        # "don't build anything, just explain how sites work" reads as the
+        # explanation it requests, while "build a website but don't deploy
+        # yet" still reads as a build carrying a no-deploy constraint.
+        remaining = _NEGATED_ACTION.sub(" ", query)
+        if _EXPLAIN_CLAUSE.search(remaining):
+            return "explain"
+        if web_build_request(remaining) or _ACTION_VERB.search(remaining):
+            return "implement"
+        return "ambiguous"
     if web_build_request(query):
         # "make me a website": the narrow action+web-noun rule (spec §8.2).
         return "implement"

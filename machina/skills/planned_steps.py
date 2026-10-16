@@ -17,8 +17,10 @@ locators.
 
 The disclosure contract (spec §10.3) is :class:`DisclosurePlan`: revisions,
 chosen sections with exact skill/content revisions, required prerequisites,
-included token estimate with its basis, omitted sections with continuation
-locators, unresolved prerequisites, and an explicit ``missing_context`` list.
+an included token estimate with its basis that counts every disclosed block
+(chosen sections **and** whole-body fallback units), omitted sections with
+continuation locators, unresolved prerequisites, and an explicit
+``missing_context`` list.
 Mandatory coherent sections are loaded whole or omitted whole — a hard cap
 never cuts a prerequisite or safety sequence into a misleading fragment.
 
@@ -413,7 +415,14 @@ class UnresolvedPrerequisite:
 
 @dataclass(frozen=True)
 class WholeBodyUnit:
-    """A skill without declared sections: legacy whole-body excerpt fallback."""
+    """A skill without declared sections: legacy whole-body excerpt fallback.
+
+    ``estimate_tokens`` is the measured cost of the assembled whole-body block
+    — ``"\\n### {skill_id}\\n{body}\\n"`` (the shape
+    ``runtime._planned_disclosure`` emits) — under the plan's token counter,
+    so ``included_tokens`` matches the serialized prompt rather than just the
+    body text.
+    """
 
     step_id: str
     skill_id: str
@@ -496,6 +505,9 @@ def plan_disclosure(
     general sections. Without an honest stage fact only bootstrap material is
     disclosed. Skills without declared sections remain on the legacy
     whole-body excerpt fallback, preserving pre-A3 output byte-for-byte.
+    ``included_tokens`` counts every disclosed block — chosen sections plus
+    whole-body fallback units — measured with ``token_count`` (the assembled
+    block shape, so the estimate shares the assembler's basis).
     """
     state = normalize_stage_state(stage_state)
     current_stage = state.stage if state is not None else ""
@@ -543,6 +555,10 @@ def plan_disclosure(
     def block_cost(skill_id: str, heading: str, text: str) -> int:
         """Exact cost of the disclosed prompt block (heading included)."""
         return token_count(f"\n### {skill_id} \u00b7 {heading}\n{text}\n")
+
+    def whole_body_block_cost(skill_id: str, text: str) -> int:
+        """Exact cost of the assembled whole-body block (the runtime's shape)."""
+        return token_count(f"\n### {skill_id}\n{text}\n")
 
     for step in steps:
         skill = skill_for(step.skill_id)
@@ -733,7 +749,7 @@ def plan_disclosure(
                 content_revision=content_fingerprint(content),
                 content=content,
                 file_path=str(getattr(skill, "file_path", "") or ""),
-                estimate_tokens=estimate_tokens(content),
+                estimate_tokens=whole_body_block_cost(step.skill_id, content),
             )
         )
         whole_count += 1
@@ -749,7 +765,9 @@ def plan_disclosure(
                 ),
             )
         ]
-    included_tokens = sum(item.estimate_tokens for item in chosen)
+    included_tokens = sum(item.estimate_tokens for item in chosen) + sum(
+        item.estimate_tokens for item in whole_body
+    )
     try:
         task_revision_value = max(0, int(task_revision))
     except (TypeError, ValueError):
