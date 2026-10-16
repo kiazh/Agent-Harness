@@ -63,6 +63,14 @@ import { selectionFill, selectionInk, theme } from "../design/theme.ts";
 import type { DocumentRecord, EditorViewState } from "./model.ts";
 import { EditorStore } from "./model.ts";
 import {
+	languageForId,
+	LineHighlighter,
+	type HighlightLanguage,
+	type LineSyntaxState,
+	type SyntaxSpan,
+} from "./syntax.ts";
+import { applySyntax } from "./syntaxTheme.ts";
+import {
 	EDITOR_TAB_WIDTH,
 	displayColumnToOffset,
 	displayWidthOf,
@@ -138,6 +146,30 @@ export function projectControlForDisplay(text: string): string {
 }
 
 const terminalColorMode = getTerminalColorMode();
+
+/** The empty-editor hint: the single restatement, at the first content row. */
+export const EMPTY_EDITOR_HINT = "No open files · Ctrl+P to open";
+/** Cells between a gutter number and the content column. */
+const GUTTER_RIGHT_PADDING = 2;
+
+/** Highlighting for a language with no spans (unknown/plain documents). */
+const NO_SPANS: readonly SyntaxSpan[] = [];
+
+/**
+ * Per-document syntax state cache. `entering.get(n)` is the state entering
+ * line n (entry 0 is the closed state); `spans.get(n)` is line n's spans;
+ * `through` is the highest line index scanned (so `entering.get(through+1)`
+ * is known). Edits invalidate from the earliest affected line — every
+ * view-driven mutation moves the caret to (or across) the change, so
+ * `min(pre-line, post-line)` is a safe lower bound for that edit; adopting an
+ * external view state drops the cache entirely.
+ */
+interface SyntaxCache {
+	version: number;
+	entering: Map<number, LineSyntaxState>;
+	spans: Map<number, SyntaxSpan[]>;
+	through: number;
+}
 
 /** Selected text: the skin's selection fill with its contrast-checked ink. */
 function paintSelected(text: string): string {
@@ -265,8 +297,14 @@ export class EditorView implements Component, Focusable {
 	private readonly onCursorMoveCallback: (() => void) | undefined;
 	private readonly requestRenderCallback: () => void;
 	private readonly clipboard: EditorClipboard;
-	private readonly softWrap: boolean;
-	private readonly tabWidth: number;
+	private softWrap: boolean;
+	private tabWidth: number;
+	/** Language-aware highlighting; off by default (the app opts in via prefs). */
+	private syntaxEnabled = false;
+	/** One highlighter per language, created lazily (pure, no per-line alloc). */
+	private readonly highlighters = new Map<HighlightLanguage, LineHighlighter>();
+	/** Per-document prefix-state cache (see SyntaxCache). */
+	private readonly syntaxCache = new Map<string, SyntaxCache>();
 	private readonly states = new Map<string, EditorViewState>();
 	private activeDocumentId: string;
 	private viewportRows = DEFAULT_EDITOR_VIEWPORT_ROWS;
@@ -330,6 +368,35 @@ export class EditorView implements Component, Focusable {
 		this.activeDocumentId = state.documentId;
 		this.dragging = false;
 		this.followCaret = true;
+		// An adopted view state follows an external store mutation (completion
+		// apply, rename, conflict reload, restore): the changed lines are
+		// unknown, so the document's syntax cache is dropped wholesale.
+		this.syntaxCache.delete(state.documentId);
+		this.requestRenderCallback();
+	}
+
+	/** Enable or disable language-aware highlighting (default off). */
+	setSyntaxEnabled(enabled: boolean): void {
+		const next = enabled === true;
+		if (next === this.syntaxEnabled) return;
+		this.syntaxEnabled = next;
+		this.requestRenderCallback();
+	}
+
+	/** Toggle soft wrap (persisted editor preference). */
+	setSoftWrap(enabled: boolean): void {
+		const next = enabled === true;
+		if (next === this.softWrap) return;
+		this.softWrap = next;
+		this.followCaret = true;
+		this.requestRenderCallback();
+	}
+
+	/** Set the display tab width (1–16; persisted editor preference). */
+	setTabWidth(width: number): void {
+		const next = Number.isFinite(width) ? Math.min(16, Math.max(1, Math.floor(width))) : EDITOR_TAB_WIDTH;
+		if (next === this.tabWidth) return;
+		this.tabWidth = next;
 		this.requestRenderCallback();
 	}
 
@@ -344,6 +411,7 @@ export class EditorView implements Component, Focusable {
 		this.states.delete(documentId);
 		this.lineCache.delete(documentId);
 		this.wrapCache.delete(documentId);
+		this.syntaxCache.delete(documentId);
 		this.lastFrame = null;
 	}
 
@@ -374,11 +442,11 @@ export class EditorView implements Component, Focusable {
 		this.lastWidth = safeWidth;
 		const rows = this.viewportRows;
 		const record = this.store.getDocument(this.activeDocumentId);
-		if (!record) return this.blankRows(safeWidth, rows);
+		if (!record) return this.emptyRows(safeWidth, rows);
 		const state = this.stateFor(record.id);
 		const starts = this.linesFor(record);
 		const digits = String(starts.length).length;
-		const gutterCells = digits + 1;
+		const gutterCells = digits + GUTTER_RIGHT_PADDING;
 		const contentCells = Math.max(0, safeWidth - gutterCells);
 		const rowCount = this.rowCount(record, starts, contentCells);
 		const maxScroll = Math.max(0, rowCount - rows);
@@ -414,9 +482,12 @@ export class EditorView implements Component, Focusable {
 			this.focused ? "1" : "0",
 			this.softWrap ? "w" : "n",
 			String(this.tabWidth),
+			this.syntaxEnabled ? "s" : "p",
 		].join(":");
 		if (this.lastFrame && this.lastFrame.key === cacheKey) return [...this.lastFrame.lines];
 
+		const language = languageForId(record.languageId);
+		const highlight = this.syntaxEnabled && language !== "plain";
 		const lines: string[] = [];
 		for (let slot = 0; slot < rows; slot++) {
 			const rowIndex = state.scrollLine + slot;
@@ -430,8 +501,9 @@ export class EditorView implements Component, Focusable {
 			const gutter = row.line === activeLine ? theme.accent(gutterNumber) : theme.dim(gutterNumber);
 			const caretCell = this.focused && rowIndex === caretRow ? this.cellInLine(info, cursor) : undefined;
 			const windowFrom = this.softWrap ? row.fromCell : state.horizontalCellOffset;
-			const content = this.composeRow(info, windowFrom, contentCells, selection, caretCell, marker);
-			lines.push(padRow(truncateDisplay(`${gutter} ${content}`, safeWidth), safeWidth));
+			const spans = highlight ? this.syntaxSpansFor(record, starts, language, row.line) : undefined;
+			const content = this.composeRow(info, windowFrom, contentCells, selection, caretCell, marker, spans);
+			lines.push(padRow(truncateDisplay(`${gutter}  ${content}`, safeWidth), safeWidth));
 		}
 		this.lastFrame = { key: cacheKey, lines };
 		return [...lines];
@@ -441,6 +513,7 @@ export class EditorView implements Component, Focusable {
 		this.lastFrame = null;
 		this.lineCache.clear();
 		this.wrapCache.clear();
+		this.syntaxCache.clear();
 	}
 
 	// --------------------------------------------------------------- input
@@ -555,7 +628,7 @@ export class EditorView implements Component, Focusable {
 		const state = this.stateFor(record.id);
 		const starts = this.linesFor(record);
 		const digits = String(starts.length).length;
-		const gutterCells = digits + 1;
+		const gutterCells = digits + GUTTER_RIGHT_PADDING;
 		const contentCells = Math.max(0, this.lastWidth - gutterCells);
 		const x = Math.floor(event.x);
 		if (x < gutterCells) {
@@ -609,8 +682,16 @@ export class EditorView implements Component, Focusable {
 
 	// ------------------------------------------------------------ internals
 
-	private blankRows(width: number, rows: number): string[] {
-		return Array.from({ length: rows }, () => " ".repeat(width));
+	/**
+	 * No active document: one dim hint (the single empty-state restatement)
+	 * gutter-aligned at the first content row, blank rows below.
+	 */
+	private emptyRows(width: number, rows: number): string[] {
+		const hint = truncateDisplay(theme.dim(EMPTY_EDITOR_HINT), width);
+		const gutter = " ".repeat(1 + GUTTER_RIGHT_PADDING);
+		const lines = [truncateDisplay(`${gutter}${hint}`, width)];
+		while (lines.length < rows) lines.push(" ".repeat(width));
+		return lines;
 	}
 
 	private cursor(): number {
@@ -659,6 +740,78 @@ export class EditorView implements Component, Focusable {
 	private cellInLine(info: LineInfo, offset: number): number {
 		const inLine = clamp(offset - info.start, 0, info.raw.length);
 		return displayWidthOf(info.projected.slice(0, inLine), this.tabWidth);
+	}
+
+	// ------------------------------------------------------------- syntax
+
+	/** Cached highlighter per language (the parser is pure and stateful only via `state`). */
+	private highlighterFor(language: HighlightLanguage): LineHighlighter {
+		let highlighter = this.highlighters.get(language);
+		if (!highlighter) {
+			highlighter = new LineHighlighter(language);
+			this.highlighters.set(language, highlighter);
+		}
+		return highlighter;
+	}
+
+	/** Raw content of one line (terminators excluded; 1:1 with the projection). */
+	private rawLineAt(text: string, starts: number[], line: number): string {
+		const start = starts[line] ?? text.length;
+		return text.slice(start, contentEndOf(text, start));
+	}
+
+	/**
+	 * Spans for one document line, prefix-scanning only as far as needed.
+	 *
+	 * Strategy (documented per the closing-pass spec): the cache stores the
+	 * lexer state ENTERING every scanned line plus that line's spans, so a
+	 * render of lines [first..last] costs `O(last - through)` new lines —
+	 * typically the edited tail of the visible window, never the whole file.
+	 * A version change the mutation hooks did not observe (an external store
+	 * edit without `setView`) resets the cache; jumps into an unscanned
+	 * region scan forward from the last known state (line 0 for a fresh
+	 * cache), which is correct and paid once, not per keystroke.
+	 */
+	private syntaxSpansFor(
+		record: DocumentRecord,
+		starts: number[],
+		language: HighlightLanguage,
+		line: number,
+	): readonly SyntaxSpan[] {
+		const cache = this.syntaxCacheFor(record);
+		while (cache.through < line) {
+			const next = cache.through + 1;
+			const state = next === 0 ? undefined : cache.entering.get(next);
+			const result = this.highlighterFor(language).line(this.rawLineAt(record.text, starts, next), state);
+			cache.entering.set(next + 1, result.state);
+			cache.spans.set(next, result.spans);
+			cache.through = next;
+		}
+		return cache.spans.get(line) ?? NO_SPANS;
+	}
+
+	private syntaxCacheFor(record: DocumentRecord): SyntaxCache {
+		let cache = this.syntaxCache.get(record.id);
+		if (!cache || cache.version !== record.version) {
+			// Unknown edit position: correctness over cleverness — rebuild.
+			cache = { version: record.version, entering: new Map(), spans: new Map(), through: -1 };
+			this.syntaxCache.set(record.id, cache);
+		}
+		return cache;
+	}
+
+	/** Drop cached states at/after `line` (the line itself is re-scanned last). */
+	private syntaxInvalidateFrom(documentId: string, line: number, version: number): void {
+		const cache = this.syntaxCache.get(documentId);
+		if (!cache) return;
+		cache.version = version;
+		for (const key of [...cache.entering.keys()]) {
+			if (key > line) cache.entering.delete(key);
+		}
+		for (const key of [...cache.spans.keys()]) {
+			if (key > line) cache.spans.delete(key);
+		}
+		if (cache.through > line) cache.through = line - 1;
 	}
 
 	private wrapRows(record: DocumentRecord, starts: number[], contentCells: number): VisualRow[] {
@@ -782,6 +935,15 @@ export class EditorView implements Component, Focusable {
 	 * One visible content window. Cells outside [windowFrom, windowFrom +
 	 * contentCells) are dropped; a wide grapheme clipped by the window edge
 	 * renders as blanks so column alignment survives.
+	 *
+	 * Syntax spans arrive in RAW line offsets. The control-character
+	 * projection is 1:1 (projectControlForDisplay maps every control to one
+	 * code unit) and tab expansion is a display-only transform, so a part is
+	 * syntaxable exactly when its text is a 1:1 slice of the raw line. Plain
+	 * runs of such parts are styled by `applySyntax` (offsets shifted into the
+	 * run); tab blanks, clipped edges and the EOL caret are emitted verbatim.
+	 * The caret cell (inverse) and selection fill always win over syntax, so
+	 * their SGR nesting never mixes.
 	 */
 	private composeRow(
 		info: LineInfo,
@@ -790,6 +952,7 @@ export class EditorView implements Component, Focusable {
 		selection: { startOffset: number; endOffset: number } | undefined,
 		caretCell: number | undefined,
 		marker: string,
+		syntax: readonly SyntaxSpan[] | undefined,
 	): string {
 		const windowEnd = windowFrom + contentCells;
 		const windowContentTo = Math.min(info.width, windowEnd);
@@ -805,6 +968,9 @@ export class EditorView implements Component, Focusable {
 			text: string;
 			width: number;
 			style: "plain" | "selected" | "caret";
+			/** Raw line offsets when the text is the 1:1 raw slice; else undefined. */
+			from?: number;
+			to?: number;
 		}
 		const parts: Part[] = [];
 		let emitted = 0;
@@ -834,7 +1000,13 @@ export class EditorView implements Component, Focusable {
 				}
 				continue;
 			}
-			parts.push({ text: segment.text, width: segment.width, style: caretHere ? "caret" : isSelected(segment) ? "selected" : "plain" });
+			parts.push({
+				text: segment.text,
+				width: segment.width,
+				style: caretHere ? "caret" : isSelected(segment) ? "selected" : "plain",
+				from: segment.from,
+				to: segment.to,
+			});
 			emitted += segment.width;
 		}
 		const caretAtEol = caretVisible && caretCell === info.width;
@@ -848,12 +1020,59 @@ export class EditorView implements Component, Focusable {
 		}
 		if (caretAtEol) parts.push({ text: " ", width: 1, style: "caret" });
 		let out = "";
+		let run = "";
+		let runStart = -1;
+		let runEnd = -1;
+		const flush = (): void => {
+			if (runStart < 0) return;
+			out += this.styleSyntaxRun(run, runStart, syntax);
+			run = "";
+			runStart = -1;
+			runEnd = -1;
+		};
 		for (const part of parts) {
-			if (part.style === "caret") out += marker + paintCaret(part.text);
-			else if (part.style === "selected") out += paintSelected(part.text);
-			else out += part.text;
+			if (part.style === "caret") {
+				flush();
+				out += marker + paintCaret(part.text);
+				continue;
+			}
+			if (part.style === "selected") {
+				flush();
+				out += paintSelected(part.text);
+				continue;
+			}
+			const oneToOne =
+				part.from !== undefined && part.to !== undefined && part.text.length === part.to - part.from;
+			if (!oneToOne) {
+				flush();
+				out += part.text;
+				continue;
+			}
+			// Consecutive 1:1 parts are adjacent raw slices; a gap (skipped
+			// grapheme) starts a new run so run text always matches its offsets.
+			if (runStart >= 0 && part.from !== runEnd) flush();
+			if (runStart < 0) runStart = part.from as number;
+			run += part.text;
+			runEnd = part.to as number;
 		}
+		flush();
 		return out;
+	}
+
+	/** Apply raw-line spans to one contiguous 1:1 run starting at `from`. */
+	private styleSyntaxRun(text: string, from: number, spans: readonly SyntaxSpan[] | undefined): string {
+		if (spans === undefined || spans.length === 0) return text;
+		const to = from + text.length;
+		const clipped: SyntaxSpan[] = [];
+		for (const span of spans) {
+			if (span.end <= from || span.start >= to) continue;
+			clipped.push({
+				start: Math.max(span.start, from) - from,
+				end: Math.min(span.end, to) - from,
+				kind: span.kind,
+			});
+		}
+		return clipped.length === 0 ? text : applySyntax(text, clipped);
 	}
 
 	// ------------------------------------------------------- store plumbing
@@ -893,10 +1112,19 @@ export class EditorView implements Component, Focusable {
 		const record = this.store.getDocument(documentId);
 		if (!record) return false;
 		const versionBefore = record.version;
+		// The pre-edit caret line bounds the syntax invalidation below: every
+		// view-driven edit happens at (or spans) the caret.
+		const lineBefore = offsetToPosition(record.text, this.cursor()).line;
 		this.syncSelectionToStore(documentId);
 		const result = action();
 		if (!result.ok) return true; // refused (read-only, …): consumed, unchanged
 		this.afterStoreMutation(documentId, versionBefore);
+		const after = this.store.getDocument(documentId);
+		if (after && after.version !== versionBefore) {
+			const state = this.states.get(documentId);
+			const lineAfter = offsetToPosition(after.text, clamp(state?.cursorOffset ?? 0, 0, after.text.length)).line;
+			this.syntaxInvalidateFrom(documentId, Math.min(lineBefore, lineAfter), after.version);
+		}
 		return true;
 	}
 
@@ -1036,7 +1264,7 @@ export class EditorView implements Component, Focusable {
 		if (!record) return false;
 		const state = this.stateFor(documentId);
 		const starts = this.linesFor(record);
-		const contentCells = Math.max(0, this.lastWidth - (String(starts.length).length + 1));
+		const contentCells = Math.max(0, this.lastWidth - (String(starts.length).length + GUTTER_RIGHT_PADDING));
 		const rowCount = this.rowCount(record, starts, contentCells);
 		if (rowCount === 0) return true;
 		const caretRow = this.rowIndexOfOffset(record, starts, contentCells, state.cursorOffset);
@@ -1057,7 +1285,7 @@ export class EditorView implements Component, Focusable {
 		if (!record) return;
 		const state = this.stateFor(record.id);
 		const starts = this.linesFor(record);
-		const contentCells = Math.max(0, this.lastWidth - (String(starts.length).length + 1));
+		const contentCells = Math.max(0, this.lastWidth - (String(starts.length).length + GUTTER_RIGHT_PADDING));
 		const rowCount = this.rowCount(record, starts, contentCells);
 		const maxScroll = Math.max(0, rowCount - this.viewportRows);
 		const next = clamp(state.scrollLine + delta, 0, maxScroll);

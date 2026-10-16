@@ -863,7 +863,7 @@ test("editor pane renders the intelligence popup directly below the viewport, ab
 	const rows = plain(harness.pane.render(60));
 	assert.equal(rows.length, 12, "allocation is honored");
 	assert.equal(harness.pane.getViewportRows(), 6, "12 - 3 chrome - 3 popup rows");
-	assert.match(rows[2] ?? "", /1 hello/, "viewport starts at row 2");
+	assert.match(rows[2] ?? "", /1 {2}hello/, "viewport starts at row 2");
 	assert.match(rows[8] ?? "", /alpha/, "popup starts directly below the viewport");
 	assert.match(rows[9] ?? "", /beta/);
 	assert.match(rows[10] ?? "", /gamma/);
@@ -917,8 +917,8 @@ test("pane mouse routing reaches the popup without moving the editor caret", () 
 	assert.equal(harness.store.getViewState(harness.doc.id)?.cursorOffset, 0, "the caret never moved");
 	// A viewport press captures the pointer: a drag crossing the popup band
 	// still belongs to the editor gesture.
-	harness.pane.handleMouse(mouseEvent({ type: "press", x: 2, y: 2, width: 60 }));
-	const drag = harness.pane.handleMouse(mouseEvent({ type: "drag", x: 2 + 5, y: popupTop, width: 60 }));
+	harness.pane.handleMouse(mouseEvent({ type: "press", x: 3, y: 2, width: 60 }));
+	const drag = harness.pane.handleMouse(mouseEvent({ type: "drag", x: 3 + 5, y: popupTop, width: 60 }));
 	assert.equal(drag?.handled, true);
 	assert.equal(harness.store.getViewState(harness.doc.id)?.cursorOffset, 5, "the drag moved the caret");
 });

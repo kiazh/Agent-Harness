@@ -103,7 +103,7 @@ test("activate requests the empty query immediately and renders provider order",
 	await delay(0);
 	const lines = plainLines(pane);
 	assert.deepEqual(pane.visibleEntries().map((entry) => entry.path), ["src/b.ts", "src/a.ts"]);
-	assert.ok(lines[0]?.includes("go to file"), "the overlay header renders the title");
+	assert.ok(lines[0]?.includes("Go to file:"), "the overlay header renders the title (finding 10)");
 	assert.ok(lines.some((line) => line.includes("b.ts")));
 	assert.ok(lines.some((line) => line.includes("2 results")), "the footer counts provider rows");
 });

@@ -11,6 +11,7 @@
 import {
 	Key,
 	matchesKey,
+	truncateToWidth,
 	type Component,
 	type Focusable,
 	type TuiMouseEvent,
@@ -39,14 +40,44 @@ export function problemsHeaderText(counts: SeverityCounts): string {
 	return parts.join(" · ");
 }
 
+/**
+ * Display path for a diagnostic URI (finding 4): root-relative when the URI
+ * lives under the known workspace root, the basename outside it (so an
+ * absolute path never leaks), and the scheme-stripped display otherwise.
+ */
+export function problemDisplayPath(uri: string, root: string | undefined): string {
+	const display = uriDisplayPath(uri);
+	if (!root) return display;
+	const prefix = root.endsWith("/") ? root : `${root}/`;
+	if (display.startsWith(prefix)) return display.slice(prefix.length);
+	const parts = display.split("/").filter((segment) => segment.length > 0);
+	return parts[parts.length - 1] ?? display;
+}
+
+export interface ProblemRowOptions {
+	/** Workspace root for the root-relative location (finding 4). */
+	root?: string;
+	/** Row width (excluding the pane's selection marker): ellipsizes the message. */
+	width?: number;
+}
+
 /** One diagnostic row: `path:line:col severity message (source)`. */
-export function formatProblemRow(row: ProblemRow): string {
-	const where = `${uriDisplayPath(row.uri)}:${row.line + 1}:${row.character + 1}`;
+export function formatProblemRow(row: ProblemRow, options: ProblemRowOptions = {}): string {
+	const where = `${problemDisplayPath(row.uri, options.root)}:${row.line + 1}:${row.character + 1}`;
 	const marker = SEVERITY_MARKERS[row.severity] ?? "?";
 	const message = sanitizeDisplay(row.message);
 	const source = row.source !== undefined && row.source.length > 0 ? ` (${sanitizeDisplay(row.source)})` : "";
 	const unversioned = row.version === null ? " [unversioned]" : "";
-	return `${where} ${marker} ${message}${source}${unversioned}`;
+	const tail = `${source}${unversioned}`;
+	if (options.width === undefined || !Number.isFinite(options.width)) {
+		return `${where} ${marker} ${message}${tail}`;
+	}
+	// Finding 4: the MESSAGE ellipsizes at the row width; the location, glyph
+	// and producer label stay at their own columns (no blind row truncation).
+	const head = `${where} ${marker} `;
+	const room = Math.max(0, Math.floor(options.width) - displayWidth(head) - displayWidth(tail));
+	const shown = truncateToWidth(message, room, "…");
+	return `${head}${shown}${tail}`;
 }
 
 function normalizeWidth(width: number): number {
@@ -84,6 +115,8 @@ export class ProblemsPane implements Component, Focusable {
 	private readonly requestRenderCallback: (() => void) | undefined;
 	private readonly onOpenCallback: ((row: ProblemRow) => void) | undefined;
 	private readonly onCloseCallback: (() => void) | undefined;
+	/** Workspace root for root-relative paths (finding 4). */
+	private workspaceRoot: string | undefined;
 	private rowBudgetValue: number;
 	private selectionValue = 0;
 	/** Geometry from the last render, for mouse hit-testing. */
@@ -108,6 +141,14 @@ export class ProblemsPane implements Component, Focusable {
 		const next = Math.max(1, Number.isFinite(rows) ? Math.floor(rows) : PROBLEMS_PANE_DEFAULT_ROWS);
 		if (next === this.rowBudgetValue) return;
 		this.rowBudgetValue = next;
+		this.requestRenderCallback?.();
+	}
+
+	/** Learn the workspace root so rows render root-relative paths. */
+	setWorkspaceRoot(root: string | undefined): void {
+		const next = root && root.length > 0 ? root : undefined;
+		if (next === this.workspaceRoot) return;
+		this.workspaceRoot = next;
 		this.requestRenderCallback?.();
 	}
 
@@ -231,7 +272,11 @@ export class ProblemsPane implements Component, Focusable {
 					if (!row) continue;
 					const selected = index === this.selectionValue;
 					const marker = selected ? "▶" : " ";
-					let line = truncateDisplay(`${marker} ${formatProblemRow(row)}`, content);
+					const width = Math.max(0, content - 2);
+					let line = truncateDisplay(
+						`${marker} ${formatProblemRow(row, { root: this.workspaceRoot, width })}`,
+						content,
+					);
 					if (selected) line = selectionBar(line, content);
 					lines.push(line);
 				}

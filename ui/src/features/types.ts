@@ -3,6 +3,7 @@
 import type { AutocompleteItem, SelectItem, SlashCommand } from "@earendil-works/pi-tui";
 import type { ConfigResult, GatewayEvent, HistoryEntry, SessionInfo } from "../protocol.ts";
 import type { WorkspaceController } from "../workspace/controller.ts";
+import type { UiPreferences } from "../workspace/preferences.ts";
 import type { ChatSide, WorkspaceMode } from "../workspace/state.ts";
 
 export type NoticeKind = "info" | "plain" | "success" | "warning" | "error";
@@ -109,6 +110,12 @@ export interface FeatureHost {
 	 * feature omit it and the workspace commands no-op with one notice.
 	 */
 	workspace?(): WorkspaceHost | undefined;
+	/**
+	 * Global UI settings surface (closing pass): editor preferences, the
+	 * workspace open/close passthroughs, LSP rows and the theme link for the
+	 * `/settings` menu. Optional: hosts without it fall back to the text dump.
+	 */
+	uiSettings?(): UiSettingsHost | undefined;
 }
 
 export interface Command extends SlashCommand {
@@ -186,6 +193,12 @@ export interface WorkspaceHost {
 	/** Open the Quick Open overlay; app-owned overlay and focus. */
 	openQuickOpen(): void;
 	/**
+	 * Run the same explicit completion flow Ctrl+Space triggers (the
+	 * `/editor complete` fallback for terminals that steal Ctrl+Space).
+	 * Optional so other hosts stay compatible.
+	 */
+	completeAtCursor?(): void;
+	/**
 	 * Explicit user command to reopen the workspace at another folder
 	 * (`/workspace open <path>`). Clean tabs from the previous root close;
 	 * dirty buffers always stay. Optional so other hosts stay compatible.
@@ -201,6 +214,46 @@ export async function confirm(host: FeatureHost, question: string, action: strin
 		{ value: "yes", label: action },
 	]);
 	return choice?.value === "yes";
+}
+
+// ─── global UI settings (closing pass) ──────────────────────────────────────
+
+/** Preference keys the settings menu can toggle; values are boolean|2|4|8. */
+export type UiPreferenceKey = "syntax" | "softWrap" | "tabWidth";
+
+/** §snapshot: what the settings menu renders against right now. */
+export interface UiSettingsSnapshot {
+	preferences: UiPreferences;
+	/** True while the integrated workspace can execute layout/file commands. */
+	workspaceAvailable: boolean;
+	/** True while the editor pane exists (editor preferences have a target). */
+	editorAvailable: boolean;
+}
+
+/** One language-server row for the settings menu (profile id + honest state). */
+export interface LspSettingsRow {
+	profile: string;
+	state: string;
+	detail?: string;
+}
+
+/**
+ * Minimal typed surface the `/settings` menu needs (closing pass). Reads are
+ * cheap snapshots; `setPreference` persists through `ui_preferences` and
+ * applies to the live view (it rejects when persistence fails, with the value
+ * still applied for the session — the menu reports that honestly).
+ */
+export interface UiSettingsHost {
+	snapshot(): UiSettingsSnapshot;
+	setPreference(key: UiPreferenceKey, value: boolean | number): Promise<UiPreferences>;
+	/** The `/workspace open <path>` flow (clean tabs close; dirty buffers stay). */
+	openWorkspaceFolder(path: string): Promise<{ ok: boolean; message: string }>;
+	/** Close the remote workspace; local buffers stay open. */
+	closeWorkspace(): Promise<void>;
+	/** One row per language-server profile from the cached snapshot. */
+	lspRows(): LspSettingsRow[];
+	/** Poll `workspace.lspStatus` so the rows are fresh before display. */
+	refreshLsp(): Promise<void>;
 }
 
 export function formatValue(value: unknown): string {

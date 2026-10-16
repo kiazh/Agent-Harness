@@ -1053,6 +1053,38 @@ test("superseded completion responses are dropped; newer ones resolve", async ()
 	await h.controller.dispose();
 });
 
+test("a pending edit sync flushes before an intelligence request on the same document", async () => {
+	// RED evidence for the CodeRabbit finding: the 150 ms edit debounce must
+	// never let a completion request precede its didChange.
+	const h = build({ editDebounceMs: 60_000 });
+	await openWorkspace(h);
+	const { documentId, uri } = await mustOpen(h, "a.ts", "hello\n");
+	h.store.setSelection(documentId, { cursorOffset: 0 });
+	h.store.insertText(documentId, "x");
+	h.controller.noteEdit(documentId); // the view's onChange path (debounce armed)
+	const document = h.store.getDocument(documentId);
+	assert.ok(document);
+	const outcome = await h.controller.request("completion", uri, document.version, { line: 0, character: 1 });
+	assert.equal(outcome.status, "ok");
+	const order = h.gateway.calls
+		.map((call) => call.method)
+		.filter((method) => method === "workspace.documentChange" || method === "workspace.intelligence");
+	assert.equal(order.length, 2, `expected a flushed change then the request, got: ${order.join(", ")}`);
+	assert.equal(order[0], "workspace.documentChange", "the didChange precedes the intelligence request");
+	assert.equal(order[1], "workspace.intelligence");
+	assert.equal(h.gateway.mirrors.get(uri)?.text, "xhello\n", "the mirror already holds the keystroke");
+	await h.controller.dispose();
+});
+
+test("intelligence for a URI without an open buffer skips the flush entirely", async () => {
+	const h = build({ editDebounceMs: 60_000 });
+	await openWorkspace(h);
+	const outcome = await h.controller.request("diagnostics", fileUri("absent.ts"), null);
+	assert.equal(outcome.status, "ok");
+	assert.equal(h.gateway.callsOf("workspace.documentChange").length, 0);
+	await h.controller.dispose();
+});
+
 test("intelligence refusals and transport failures become typed outcomes", async () => {
 	const h = build();
 	await openWorkspace(h);

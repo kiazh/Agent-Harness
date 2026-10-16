@@ -31,10 +31,10 @@ import {
 	completionPopupModelFrom,
 } from "./components/IntelligencePopups.ts";
 import { AnimationCoordinator } from "./design/motion.ts";
-import { type FamilySession, type FeatureHost, formatLspStatusLine, type NoticeKind, runCommand, SLASH_COMMANDS, type WorkspaceHost } from "./features/index.ts";
+import { type FamilySession, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS, type WorkspaceHost } from "./features/index.ts";
 import type { WorkspaceAttachmentHost } from "./features/workspace.ts";
 import { guardSubmit } from "./commandDispatch.ts";
-import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions } from "./features/types.ts";
+import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions, type UiPreferenceKey, type UiSettingsHost } from "./features/types.ts";
 import { FamilyStore, listFamilySessions } from "./family.ts";
 import { agentSessionItems } from "./features/agents.ts";
 import type { GatewayClient } from "./gateway.ts";
@@ -54,6 +54,7 @@ import { RpcError } from "./protocol.ts";
 import { EditorStore, type DocumentRecord } from "./editor/model.ts";
 import { TabModel } from "./editor/tabs.ts";
 import { EditorView } from "./editor/view.ts";
+import { languageForId } from "./editor/syntax.ts";
 import { ExplorerModel, ExplorerPane } from "./editor/explorer.ts";
 import { QuickOpenPane } from "./editor/quickOpen.ts";
 import {
@@ -79,6 +80,11 @@ import {
 } from "./workspace/controller.ts";
 import { WorkspaceGatewayAdapter, type WorkspaceRequestFn } from "./workspace/gateway.ts";
 import { WorkspacePersistence } from "./workspace/persistence.ts";
+import {
+	defaultUiPreferences,
+	UiPreferencesPersistence,
+	type UiPreferences,
+} from "./workspace/preferences.ts";
 import { computeLayout } from "./workspace/layout.ts";
 import type {
 	FocusRegion,
@@ -165,6 +171,14 @@ function workspaceShellKey(input: LayoutInput, columns: number, rows: number): s
  */
 const SHIFT_F6_SEQUENCE = "\x1b[17;2~";
 const SHIFT_F12_SEQUENCE = "\x1b[24;2~";
+
+/**
+ * Footer workspace hints (closing pass), shown only while a workspace
+ * identity is live. Truthful to the editor-scoped Ctrl+←/→ semantics:
+ * Ctrl+→ maximizes chat and Ctrl+← returns to the 50/50 split while the
+ * editor region owns focus (the composer keeps its word motion).
+ */
+const WORKSPACE_FOOTER_HINTS = "Ctrl+T explorer · Ctrl+←/→ panes";
 
 /** Basename for notices (scheme-stripped, percent-decoded; never the raw URI). */
 function displayUriName(uri: string): string {
@@ -366,6 +380,8 @@ export class App implements FeatureHost {
 	/** Stored workspace_ui_state captured BEFORE open (open overwrites it). */
 	private workspacePreOpenRaw: string | undefined;
 	private workspacePreOpenCaptured = false;
+	/** Global editor preferences (ui_preferences); defaults until loaded. */
+	private uiPrefs: UiPreferences = defaultUiPreferences();
 
 	// Match the server turn timeout (turn_timeout=300s) so the UI does not
 	// time out and unlock while the server is still running the turn (which
@@ -607,6 +623,107 @@ export class App implements FeatureHost {
 	 */
 	workspace(): WorkspaceHost | undefined {
 		return this.workspaceHostSurface;
+	}
+
+	// ─── global UI settings (closing pass) ──────────────────────────────────
+
+	/**
+	 * FeatureHost: the global UI settings surface for `/settings` (and bare
+	 * `/config`). Present whenever the app runs; the snapshot reports which
+	 * categories have a live target (workspace / editor view).
+	 */
+	uiSettings(): UiSettingsHost | undefined {
+		return {
+			snapshot: () => ({
+				preferences: { ...this.uiPrefs },
+				workspaceAvailable: this.workspaceHostSurface?.controllerAvailable() ?? false,
+				editorAvailable: this.integration !== undefined,
+			}),
+			setPreference: (key, value) => this.setUiPreference(key, value),
+			openWorkspaceFolder: (path) => this.switchWorkspaceRoot(path),
+			closeWorkspace: async () => {
+				const integration = this.integration;
+				if (!integration) return;
+				await integration.controller.closeWorkspace();
+				this.syncWorkspaceShell();
+			},
+			lspRows: () => this.lspSettingsRows(),
+			refreshLsp: async () => {
+				await this.integration?.controller.lspStatus();
+			},
+		};
+	}
+
+	/** Apply one preference, persist it, and hand back the effective set. */
+	private async setUiPreference(key: UiPreferenceKey, value: boolean | number): Promise<UiPreferences> {
+		const next: UiPreferences = { ...this.uiPrefs };
+		if (key === "syntax") next.syntax = value === true;
+		else if (key === "softWrap") next.softWrap = value === true;
+		else next.tabWidth = value === 2 || value === 4 || value === 8 ? value : 4;
+		this.applyUiPreferences(next);
+		// Persistence failure keeps the value applied for this session; the
+		// caller (settings menu) reports that honestly and never blocks editing.
+		await this.uiPreferencesStore().save(next);
+		return { ...next };
+	}
+
+	/** Push preferences into the live editor view (no view: kept for later). */
+	private applyUiPreferences(preferences: UiPreferences): void {
+		this.uiPrefs = { ...preferences };
+		const view = this.integration?.view;
+		if (!view) return;
+		view.setSyntaxEnabled(preferences.syntax);
+		view.setSoftWrap(preferences.softWrap);
+		view.setTabWidth(preferences.tabWidth);
+	}
+
+	/** Best-effort load of `ui_preferences` after initialize; never blocks. */
+	private async loadUiPreferences(): Promise<void> {
+		try {
+			const preferences = await this.uiPreferencesStore().load();
+			this.applyUiPreferences(preferences);
+		} catch {
+			// Defaults stay; the editor keeps working.
+		}
+	}
+
+	private uiPreferencesStore(): UiPreferencesPersistence {
+		return new UiPreferencesPersistence({
+			get: async () => {
+				const { config } = await this.client.request<ConfigGetResult>("config.get", {}, 30_000);
+				const raw = config["ui_preferences"];
+				return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+			},
+			set: async (value) => {
+				await this.client.request("config.set", { key: "ui_preferences", value, persist: true }, 30_000);
+			},
+		});
+	}
+
+	/** One settings row per language-server profile (server rows win). */
+	private lspSettingsRows(): Array<{ profile: string; state: string; detail?: string }> {
+		const controller = this.integration?.controller;
+		if (!controller || controller.phase !== "ready") return [];
+		const snapshot = controller.lspStatusSnapshot();
+		const rows = new Map<string, { profile: string; state: string; detail?: string }>();
+		for (const server of snapshot.servers) {
+			const profile = server.profile || server.languageId;
+			if (!profile) continue;
+			rows.set(profile, {
+				profile,
+				state: server.state,
+				...(server.detail !== undefined ? { detail: server.detail } : {}),
+			});
+		}
+		for (const [profile, entry] of Object.entries(snapshot.profiles)) {
+			if (rows.has(profile)) continue;
+			rows.set(profile, {
+				profile,
+				state: entry.state,
+				...(entry.detail !== undefined ? { detail: entry.detail } : {}),
+			});
+		}
+		return [...rows.values()];
 	}
 
 	printMarkdown(text: string): void {
@@ -1117,19 +1234,21 @@ export class App implements FeatureHost {
 	}
 
 	/**
-	 * Dirty-quit review (plan §9): lists the dirty basenames (bounded to 8 plus
-	 * a count) and offers Save all & exit / Discard & exit / Cancel. Save-all
-	 * drives sequential controller saves; the first failure (conflict,
-	 * refusal, transport) keeps the app open with a notice naming the file.
+	 * Dirty-quit review (plan §9): lists up to two dirty basenames plus a
+	 * `+N` remainder (finding 6: `1 unsaved file: main.py`) and offers
+	 * Save all & exit / Discard & exit / Cancel. Save-all drives sequential
+	 * controller saves; the first failure (conflict, refusal, transport) keeps
+	 * the app open with a notice naming the file.
 	 */
 	private async reviewDirtyExit(): Promise<boolean> {
 		const integration = this.integration;
 		if (!integration || this.exiting) return true;
 		const dirty = integration.store.documents().filter((document) => document.dirty);
 		if (dirty.length === 0) return true;
-		const names = dirty.slice(0, 8).map((document) => displayUriName(document.uri));
-		const more = dirty.length > names.length ? ` (+${dirty.length - names.length} more)` : "";
-		const choice = await this.pick(`Unsaved changes: ${names.join(", ")}${more}`, [
+		const names = dirty.slice(0, 2).map((document) => displayUriName(document.uri));
+		const more = dirty.length > names.length ? ` +${dirty.length - names.length}` : "";
+		const label = `${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"}: ${names.join(", ")}${more}`;
+		const choice = await this.pick(label, [
 			{ value: "save", label: "Save all & exit" },
 			{ value: "discard", label: "Discard & exit" },
 			{ value: "cancel", label: "Cancel" },
@@ -1209,10 +1328,10 @@ export class App implements FeatureHost {
 			{ value: "save", label: "Ctrl+S — save file", description: "Save the active editor buffer" },
 			{ value: "closetab", label: "Ctrl+W — close tab", description: "Close the active editor tab (dirty: save/discard/cancel)" },
 			{ value: "explorer", label: "Ctrl+T — file tree", description: "Toggle the right-edge explorer; → or enter expands folders (/explorer)" },
-			{ value: "intel", label: "Ctrl+Space — completion", description: "F12 definition · Shift+F12 references · F2 rename · /problems lists diagnostics" },
+			{ value: "intel", label: "Ctrl+Space — completion", description: "macOS may steal Ctrl+Space · fallback /editor complete · F12 definition · Shift+F12 references · F2 rename · /problems lists diagnostics" },
 			{ value: "wsroot", label: "/workspace open <path> — open a folder", description: "Also /workspace split|chat|editor|ratio|side|status|close" },
 			{ value: "focus", label: "F6 / Shift+F6 — cycle focus", description: "Composer → editor → explorer → problems" },
-			{ value: "chatmax", label: "Ctrl+→ maximize chat · Ctrl+← back to the 50/50 split", description: "Editor word motion stays alt+arrows" },
+			{ value: "chatmax", label: "Ctrl+→ maximize chat · Ctrl+← 50/50 split (editor focus)", description: "The composer keeps Ctrl+←/→ word motion; editor word motion stays alt+arrows" },
 			{ value: "help", label: "? / F1 — shortcuts", description: "? on empty input, F1 with a draft" },
 			{ value: "commands", label: "/help — all commands", description: "/growth shows learning details" },
 			{ value: "learning", label: "□ / ▪ — activity and learning", description: "Pulses while working and briefly when learning is saved" },
@@ -1255,6 +1374,12 @@ export class App implements FeatureHost {
 			if (workspaceKey) return workspaceKey;
 		}
 
+        // Region-aware Ctrl+V: with the editor focused, the key belongs to the
+        // editor view's own clipboard path (the TUI focus is the EditorPane →
+        // EditorView.handleInput, which pastes via the injected clipboard).
+        // Returning undefined lets the focused component see it; the composer
+        // (and forwarded ⌘V) keep the image-aware global handler below.
+        if (matchesKey(data, Key.ctrl("v")) && this.activeRegion === "editor") return undefined;
         if (matchesKey(data, Key.ctrl("v")) || matchesKey(data, Key.super("v"))) {
             const epoch = this.imageEpoch;
             this.loadImages(async () => {
@@ -1404,6 +1529,7 @@ export class App implements FeatureHost {
 			onSelectTab: () => {
 				// Tab focus refreshes the Problems projection for the new active file.
 				void this.refreshProblemsForActiveDocument();
+				this.refreshLspStatus();
 				this.tui.requestRender();
 			},
 			onCloseTab: (documentId) => void this.closeWorkspaceTab(documentId),
@@ -1488,6 +1614,7 @@ export class App implements FeatureHost {
 			layoutChanged: () => this.syncWorkspaceShell(),
 			openProblems: () => this.openProblems(),
 			openQuickOpen: () => void this.openQuickOpen(),
+			completeAtCursor: () => void this.startCompletion(),
 			openRoot: (path) => this.switchWorkspaceRoot(path),
 			// T10 explicit sharing: capture the editor selection into the
 			// composer draft (plan §20). Never called by open/view paths.
@@ -1514,6 +1641,8 @@ export class App implements FeatureHost {
 			this.setExplorerRequested(!explorer);
 		};
 		this.client.onWorkspaceEvent = (event) => this.onWorkspaceEvent(event);
+		// Global editor preferences (ui_preferences): best-effort, non-blocking.
+		void this.loadUiPreferences();
 		void this.openWorkspaceBackground(root);
 	}
 
@@ -1537,6 +1666,9 @@ export class App implements FeatureHost {
 		const identity = await integration.controller.openWorkspace(root);
 		if (!identity || this.integration !== integration || this.exiting) return;
 		this.workspaceLayoutActive = true;
+		// Preferences are view-global; re-assert them once the editor exists so
+		// a prefs load racing the background open can never be lost.
+		this.applyUiPreferences(this.uiPrefs);
 		const restored = await integration.controller.restore(identity.resolvedRoot);
 		// The controller's default intent is already the split; only a stored
 		// state overrides it (and an explicit command issued during the open
@@ -1553,10 +1685,12 @@ export class App implements FeatureHost {
 		if (integration.controller.getLayoutInput().explorerRequested) {
 			void integration.explorerModel.load();
 		}
-		integration.controller.setLspStatusListener((snapshot) => {
-			integration.pane.setLspStatus(formatLspStatusLine(snapshot));
+		integration.controller.setLspStatusListener(() => {
+			integration.pane.setLspStatus(this.lspStatusText());
 		});
-		void integration.controller.lspStatus();
+		void integration.controller.lspStatus().then(() => {
+			if (this.integration === integration) integration.pane.setLspStatus(this.lspStatusText());
+		});
 		void this.refreshProblemsForActiveDocument();
 		this.syncWorkspaceShell();
 	}
@@ -1701,6 +1835,13 @@ export class App implements FeatureHost {
 		const rows = Math.max(0, this.tui.terminal.rows);
 		this.lastWorkspaceShellKey = workspaceShellKey(input, columns, rows);
 		this.shell.setWorkspaceState(input);
+		// Breadcrumb root (finding 2): pushed here so open/switch/close all
+		// converge on the same single call site.
+		const root = integration.controller.identity?.resolvedRoot;
+		integration.pane.setWorkspaceRoot(root);
+		integration.problemsPane.setWorkspaceRoot(root);
+		// Footer workspace hints stay only while a workspace identity exists.
+		this.footer.workspaceHints = integration.controller.identity ? WORKSPACE_FOOTER_HINTS : "";
 		const layout = computeLayout({ ...input, columns, rows });
 		this.workspaceLayout = layout;
 		// Composer + optional approval dock + footer are full-width rows under
@@ -1823,18 +1964,6 @@ export class App implements FeatureHost {
 			this.closeActiveWorkspaceTab();
 			return { consume: true };
 		}
-		// Ctrl+Right — toggle chat maximize; Ctrl+Left — always return to the
-		// 50/50 split (never a second toggle: after mode hops the split must
-		// stay reachable). When delivered, the global bindings win; editor word
-		// motion stays alt+arrows (help text).
-		if (matchesKey(data, Key.ctrl("right"))) {
-			this.workspaceHostSurface?.toggleChatMaximize();
-			return { consume: true };
-		}
-		if (matchesKey(data, Key.ctrl("left"))) {
-			this.workspaceHostSurface?.restoreSplit();
-			return { consume: true };
-		}
 		// F6 / Shift+F6 — cycle focus. pi-tui 1.0.0's matchesKey cannot express
 		// shift+F-keys (the f-key branch requires modifier 0), so the legacy
 		// xterm sequence is decoded explicitly; the matchesKey form is kept for
@@ -1845,6 +1974,20 @@ export class App implements FeatureHost {
 			return { consume: true };
 		}
 		if (!ready || this.activeRegion !== "editor") return undefined;
+		// Ctrl+Right — toggle chat maximize; Ctrl+Left — always return to the
+		// 50/50 split (never a second toggle: after mode hops the split must
+		// stay reachable). These are EDITOR-scoped: while the composer owns
+		// focus, Ctrl+←/→ keep their standard word-motion meaning. When the
+		// editor region owns focus, the global bindings win there; editor word
+		// motion stays alt+arrows (help text).
+		if (matchesKey(data, Key.ctrl("right"))) {
+			this.workspaceHostSurface?.toggleChatMaximize();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.ctrl("left"))) {
+			this.workspaceHostSurface?.restoreSplit();
+			return { consume: true };
+		}
 		// Ctrl+Shift+A — attach the editor selection to the composer draft
 		// (plan §20 explicit sharing). Delivered as a distinct CSI-u sequence
 		// only under the Kitty keyboard protocol; legacy terminals send Ctrl+A,
@@ -2242,6 +2385,7 @@ export class App implements FeatureHost {
 		integration.view.releaseDocument(documentId);
 		const active = integration.tabs.activeDocumentId();
 		if (active) integration.view.setDocument(active);
+		this.refreshLspStatus();
 		this.tui.requestRender();
 	}
 
@@ -2259,6 +2403,7 @@ export class App implements FeatureHost {
 		if (outcome.status === "opened" || outcome.status === "focused") {
 			integration.view.setDocument(outcome.documentId);
 			void this.refreshProblemsForActiveDocument();
+			this.refreshLspStatus();
 			this.tui.requestRender();
 		}
 	}
@@ -2336,6 +2481,36 @@ export class App implements FeatureHost {
 		if (!record) return;
 		await integration.problemsModel.refresh(record.uri, record.version);
 		this.tui.requestRender();
+	}
+
+	/**
+	 * Right-aligned editor status text for the ACTIVE document's language
+	 * (finding 3): the raw LSP state only ("ready", "starting…", "missing"),
+	 * never repeating the language name shown on the left. No reported server
+	 * means no segment — absence is not invented as a state.
+	 */
+	private lspStatusText(): string | undefined {
+		const integration = this.integration;
+		const controller = integration?.controller;
+		if (!integration || !controller || controller.phase !== "ready") return undefined;
+		const documentId = integration.tabs.activeDocumentId();
+		const record = documentId ? integration.store.getDocument(documentId) : undefined;
+		if (!record) return undefined;
+		const target = languageForId(record.languageId);
+		if (target === "plain") return undefined;
+		const shown = (state: string): string => (state === "starting" ? "starting…" : state);
+		const snapshot = controller.lspStatusSnapshot();
+		for (const server of snapshot.servers) {
+			if (languageForId(server.languageId || server.profile) === target) return shown(server.state);
+		}
+		for (const [profile, entry] of Object.entries(snapshot.profiles)) {
+			if (languageForId(profile) === target) return shown(entry.state);
+		}
+		return undefined;
+	}
+
+	private refreshLspStatus(): void {
+		this.integration?.pane.setLspStatus(this.lspStatusText());
 	}
 
 	// ─── workspace quick open ───────────────────────────────────────────────
@@ -2429,6 +2604,7 @@ export class App implements FeatureHost {
 	private noteWorkspaceUnsupported(): void {
 		if (this.workspaceUnsupported) return;
 		this.workspaceUnsupported = true;
+		this.footer.workspaceHints = "";
 		this.print("workspace commands unavailable on this backend", "info");
 	}
 

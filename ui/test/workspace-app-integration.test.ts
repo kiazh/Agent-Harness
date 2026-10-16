@@ -19,10 +19,12 @@ import {
 	visibleWidth,
 	type Component,
 	type OverlayHandle,
+	type SelectItem,
 	type Terminal,
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
+import { theme } from "../src/design/theme.ts";
 import { runCommand } from "../src/features/index.ts";
 import { RpcError } from "../src/protocol.ts";
 import type { GatewayClient } from "../src/gateway.ts";
@@ -275,10 +277,10 @@ function captureNotices(app: App): Array<{ text: string; kind: unknown }> {
 /** Internal handles the production wiring owns (read-only test access). */
 function internals(app: App): {
 	integration?: {
-		controller: { phase: string; identity?: { workspaceId: string }; getLayoutInput(): { requestedMode: string; explorerRequested: boolean; splitRatio: number; preferredPane: string; chatSide?: string }; mode: string; setChatSide(side: "left" | "right"): void };
+		controller: { phase: string; identity?: { workspaceId: string }; getLayoutInput(): { requestedMode: string; explorerRequested: boolean; splitRatio: number; preferredPane: string; chatSide?: string }; mode: string; chatSide: string; setRatio(ratio: number): void; setChatSide(side: "left" | "right"): void; lspStatus(): Promise<unknown> };
 		store: { documents(): Array<{ id: string; uri: string; dirty: boolean }>; insertText(id: string, text: string): unknown; setSelection(id: string, selection: { cursorOffset: number }): unknown; getViewState(id: string): { cursorOffset: number } | undefined; applyEdit(id: string, edits: Array<{ range: { startOffset: number; endOffset: number }; text: string }>): unknown };
 		tabs: { activeDocumentId(): string | null; count(): number; list(): Array<{ documentId: string }> };
-		view: { focused: boolean };
+		view: { focused: boolean; setView(state: unknown): void };
 		pane: {
 			render(width: number): string[];
 			handleIntelligenceKey(data: string): string;
@@ -519,8 +521,8 @@ test("at 160x48 the composed frame carries a real editor column beside chat", as
 		for (const line of screen) assert.ok(visibleWidth(line) <= 160);
 		const joined = screen.join("\n");
 		assert.match(joined, /Ask anything/, "chat composer visible");
-		assert.match(joined, /No open files/, "editor tab strip visible in the split");
-		assert.match(joined, /No open document/, "editor status row visible");
+		assert.match(joined, /No open files · Ctrl\+P to open/, "the single empty-editor hint lives in the viewport (finding 1)");
+		assert.doesNotMatch(joined, /No open document/, "no repeated empty-state restatement");
 		assert.equal(internals(app).workspaceLayout?.effectiveMode, "split");
 	} finally {
 		await app.exit();
@@ -598,11 +600,24 @@ test("a direct viewport click restores the caret with no key input (item 1)", as
 
 // ─── keys ───────────────────────────────────────────────────────────────────
 
-test("Ctrl+Right maximizes chat; Ctrl+Left always returns to the 50/50 split", async () => {
+test("Ctrl+Right maximizes chat; Ctrl+Left always returns to the 50/50 split (editor region only)", async () => {
 	const { app, tui } = makeApp();
 	await app.start();
 	await waitForWorkspace(app);
+	assert.equal(internals(app).activeRegion, "chat-composer");
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split");
+
+	// Composer focus keeps the keys' word-motion meaning: the layout is
+	// untouched (the CodeRabbit finding: the maximize branch must sit behind
+	// the editor-region gate).
+	tui.press("\x1b[1;5C");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "composer Ctrl+Right never maximizes chat");
+	tui.press("\x1b[1;5D");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split");
+
+	// Editor region: the global bindings win there.
+	await internals(app).openWorkspacePath("a.ts");
+	assert.equal(internals(app).activeRegion, "editor");
 
 	// Ctrl+Left while already split is a no-op, never a second toggle.
 	tui.press("\x1b[1;5D");
@@ -624,6 +639,37 @@ test("Ctrl+Right maximizes chat; Ctrl+Left always returns to the 50/50 split", a
 	tui.press("\x1b[1;5D");
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "the 50/50 split stays reachable");
 	assert.equal(internals(app).integration?.controller.getLayoutInput().requestedMode, "split");
+	await app.exit();
+});
+
+test("Ctrl+V with the editor focused falls through to the view; the composer keeps the global path", async () => {
+	const { app, tui } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	// Intercept the global image-aware loader: the decision (consumed vs
+	// routed to the focused pane) is what this test pins, not OS clipboard I/O.
+	const loads: string[] = [];
+	(app as unknown as { loadImages(load: () => Promise<unknown>): void }).loadImages = () => {
+		loads.push("global");
+	};
+	const dispatch = (data: string) =>
+		(app as unknown as { onKey(data: string): { consume: boolean } | undefined }).onKey(data);
+
+	// Editor region: NOT consumed by the app — the TUI focus is the pane, so
+	// EditorView.handleInput sees Ctrl+V and pastes through its own clipboard.
+	await internals(app).openWorkspacePath("a.ts");
+	assert.equal(internals(app).activeRegion, "editor");
+	assert.equal(tui.focused, internals(app).integration?.pane, "editor focus is the pane (the view receives the key)");
+	assert.equal(dispatch("\x16"), undefined, "editor region: Ctrl+V is left to the focused view");
+	assert.equal(loads.length, 0, "the composer image path never ran");
+
+	// Composer region: the global image-aware handler consumes it (as before).
+	tui.press("\x1b[17~"); // F6 → explorer
+	tui.press("\x1b[17~"); // F6 → chat-composer
+	assert.equal(internals(app).activeRegion, "chat-composer");
+	const consumed = dispatch("\x16");
+	assert.deepEqual(consumed, { consume: true }, "composer region: Ctrl+V is consumed by the global handler");
+	assert.equal(loads.length, 1, "the composer paste path ran");
 	await app.exit();
 });
 
@@ -823,7 +869,10 @@ test("the shortcuts picker lists Ctrl+W, drops /attach and documents the split k
 	const closetab = items.find((item) => item.value === "closetab");
 	assert.equal(closetab?.label, "Ctrl+W — close tab");
 	const chatmax = items.find((item) => item.value === "chatmax");
-	assert.match(chatmax?.label ?? "", /Ctrl\+→ maximize chat · Ctrl\+← back to the 50\/50 split/);
+	assert.equal(chatmax?.label, "Ctrl+→ maximize chat · Ctrl+← 50/50 split (editor focus)");
+	const intel = items.find((item) => item.value === "intel");
+	assert.match(intel?.description ?? "", /macOS may steal Ctrl\+Space/, "the macOS Ctrl+Space caveat names the fallback");
+	assert.match(intel?.description ?? "", /\/editor complete/);
 	const wsroot = items.find((item) => item.value === "wsroot");
 	assert.match(wsroot?.description ?? "", /ratio\|side/, "workspace subcommands stay discoverable");
 });
@@ -1161,5 +1210,310 @@ test("/workspace open switches the root, closing clean tabs and keeping dirty on
 	assert.ok(!remaining.some((uri) => uri.endsWith("clean.ts")), "clean tab from the previous root closed");
 	// The kept dirty buffer triggers the quit review; answer it explicitly.
 	(app as unknown as { pick: () => Promise<{ value: string }> }).pick = async () => ({ value: "discard" });
+	await app.exit();
+});
+
+// ─── closing-pass: settings menu, footer hints and polish frames ────────────
+
+/** Script `pick` answers by value; records every picker call. */
+function scriptPicks(
+	app: App,
+	answers: Array<string | undefined>,
+): { calls: Array<{ title: string; items: SelectItem[] }> } {
+	const calls: Array<{ title: string; items: SelectItem[] }> = [];
+	(app as unknown as {
+		pick: (title: string, items: SelectItem[]) => Promise<SelectItem | undefined>;
+	}).pick = async (title: string, items: SelectItem[]) => {
+		calls.push({ title, items });
+		const value = answers.shift();
+		if (value === undefined) return undefined;
+		return items.find((item) => item.value === value) ?? { value, label: value };
+	};
+	return { calls };
+}
+
+test("/settings menu: Editor prefs persist to ui_preferences and reach the live view", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	client.handlers.set("workspace.read", (params) => ({
+		...readResult(String(params.uri)),
+		text: "return 1\n",
+		languageId: "python",
+	}));
+	await internals(app).openWorkspacePath("p.py");
+	await settle();
+	const pane = internals(app).integration!.pane;
+	assert.ok(
+		pane.render(80).join("\n").includes(theme.accent("return")),
+		"syntax highlighting is on by default",
+	);
+
+	const picks = scriptPicks(app, ["cat-editor", "syntax", "off", undefined]);
+	await runCommand({ name: "settings", args: "" }, app);
+	assert.equal(picks.calls[0]?.title, "Settings");
+	assert.ok(picks.calls[0]?.items.some((item) => item.value === "cat-editor"), "Editor category present");
+	const saved = client.requests.filter(
+		(entry) => entry.method === "config.set" && entry.params.key === "ui_preferences",
+	);
+	assert.equal(saved.length, 1, "exactly one ui_preferences save");
+	assert.equal(saved[0]?.params.persist, true);
+	assert.match(String(saved[0]?.params.value), /"syntax":false/);
+	assert.ok(
+		!pane.render(80).join("\n").includes(theme.accent("return")),
+		"the live viewport dropped the keyword styling",
+	);
+	// eslint-disable-next-line no-control-regex -- stripping SGR sequences
+	const frame = pane.render(80).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(frame, /return 1/, "text intact with highlighting off");
+	await app.exit();
+});
+
+test("/settings menu: tab width applies to the viewport and persists", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	client.handlers.set("workspace.read", (params) => ({
+		...readResult(String(params.uri)),
+		text: "a\tb\n",
+		languageId: "plaintext",
+	}));
+	await internals(app).openWorkspacePath("tabs.txt");
+	await settle();
+	const pane = internals(app).integration!.pane;
+	assert.ok(pane.render(80).join("\n").includes("a   b"), "4-column default tab stop");
+	scriptPicks(app, ["cat-editor", "tab", "8", undefined]);
+	await runCommand({ name: "settings", args: "" }, app);
+	const saved = client.requests.filter(
+		(entry) => entry.method === "config.set" && entry.params.key === "ui_preferences",
+	);
+	assert.equal(saved.length, 1);
+	assert.match(String(saved[0]?.params.value), /"tabWidth":8/);
+	assert.ok(pane.render(80).join("\n").includes("a       b"), "8-column tab stop in the live viewport");
+	await app.exit();
+});
+
+test("/settings menu: chat side and ratio reset follow the workspace surface", async () => {
+	const { app } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const controller = internals(app).integration!.controller;
+	controller.setRatio(0.62);
+	assert.equal(controller.getLayoutInput().splitRatio, 0.62);
+	const picks = scriptPicks(app, ["cat-workspace", "side", "right", undefined]);
+	await runCommand({ name: "settings", args: "" }, app);
+	assert.equal(internals(app).integration?.controller.chatSide, "right", "chat side applied");
+	assert.ok(picks.calls.some((call) => call.title === "Chat side"), "chat side picker opened");
+	const picks2 = scriptPicks(app, ["cat-workspace", "ratio", "reset", undefined]);
+	await runCommand({ name: "settings", args: "" }, app);
+	assert.equal(internals(app).integration?.controller.getLayoutInput().splitRatio, 0.5, "50/50 reset applied");
+	assert.ok(picks2.calls.some((call) => call.title === "Split ratio"), "ratio picker opened");
+	await app.exit();
+});
+
+test("/settings menu: a language-server row restarts through the controller", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	client.responses.set("workspace.lspStatus", {
+		servers: [{ profile: "pyright", languageId: "python", state: "ready", generation: 3 }],
+	});
+	client.responses.set("workspace.lspControl", { action: "restart", profile: "pyright", state: "starting" });
+	const picks = scriptPicks(app, ["cat-lsp", "pyright", "restart", undefined]);
+	await runCommand({ name: "settings", args: "" }, app);
+	const lspPicks = picks.calls.find((call) => call.title === "Language servers");
+	assert.ok(lspPicks, "language servers category opened");
+	assert.ok(
+		lspPicks.items.some((item) => item.value === "pyright" && /current: ready/.test(item.description ?? "")),
+		`the profile row shows its current state: ${lspPicks.items.map((item) => `${item.value}=${item.description}`).join(", ")}`,
+	);
+	const control = client.requests.filter((entry) => entry.method === "workspace.lspControl");
+	assert.equal(control.length, 1);
+	const params = control[0]?.params ?? {};
+	assert.equal(params.profile, "pyright");
+	assert.equal(params.action, "restart");
+	await app.exit();
+});
+
+test("cancelling the settings menu exits every loop with no side effects", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const before = client.requests.length;
+	const picks = scriptPicks(app, [undefined]);
+	await runCommand({ name: "settings", args: "" }, app);
+	assert.equal(picks.calls.length, 1, "one category picker, then cancelled");
+	assert.equal(picks.calls[0]?.title, "Settings");
+	assert.equal(client.requests.length, before, "no RPC beyond the open initialization");
+	await app.exit();
+});
+
+test("an unavailable workspace shows one notice and hides its categories", async () => {
+	const previous = process.env.MACHINA_WORKSPACE;
+	process.env.MACHINA_WORKSPACE = "0";
+	const { app } = makeApp();
+	try {
+		await app.start();
+		const notices = captureNotices(app);
+		const picks = scriptPicks(app, [undefined]);
+		await runCommand({ name: "config", args: "" }, app); // bare /config opens the menu
+		const unavailable = notices.filter((notice) => notice.text === "Workspace is not available.");
+		assert.equal(unavailable.length, 1, "exactly one notice");
+		const items = picks.calls[0]?.items ?? [];
+		const values = items.map((item) => item.value);
+		assert.ok(!values.includes("cat-workspace"), "workspace category hidden");
+		assert.ok(!values.includes("cat-lsp"), "language servers hidden with the workspace");
+		assert.ok(!values.includes("cat-editor"), "editor category needs the live view");
+		assert.ok(values.includes("cat-appearance"), "appearance stays available");
+		assert.ok(values.includes("cat-chat"), "chat & agent stays available");
+	} finally {
+		if (previous === undefined) delete process.env.MACHINA_WORKSPACE;
+		else process.env.MACHINA_WORKSPACE = previous;
+		await app.exit();
+	}
+});
+
+test("stored ui_preferences load after initialize and reach the viewport", async () => {
+	const { app, client } = makeApp();
+	client.handlers.set("config.get", () => ({
+		config: {
+			ui_preferences: JSON.stringify({ version: 1, syntax: false, softWrap: false, tabWidth: 2 }),
+		},
+		secrets: [],
+	}));
+	await app.start();
+	await waitForWorkspace(app);
+	await settle();
+	client.handlers.set("workspace.read", (params) => ({
+		...readResult(String(params.uri)),
+		text: "def a\tb:\n",
+		languageId: "python",
+	}));
+	await internals(app).openWorkspacePath("p.py");
+	await settle();
+	const pane = internals(app).integration!.pane;
+	const frame = pane.render(80).join("\n");
+	assert.ok(!frame.includes(theme.accent("def")), "stored prefs disabled syntax highlighting");
+	assert.ok(frame.includes("a b"), "stored tab width 2 applied to the viewport");
+	await app.exit();
+});
+
+test("/editor complete runs the same completion flow as Ctrl+Space", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	await internals(app).openWorkspacePath("src/a.ts");
+	client.handlers.set("workspace.intelligence", (params) => ({
+		workspaceId: "ws1",
+		source: "editor-buffer",
+		uri: params.uri,
+		documentVersion: params.version,
+		serverGeneration: 1,
+		workspaceEpoch: 1,
+		operation: params.operation,
+		state: "ready",
+		freshness: "versioned",
+		truncated: false,
+		result: { items: [{ label: "alpha" }] },
+	}));
+	assert.equal(internals(app).completionSession, undefined);
+	await runCommand({ name: "editor", args: "complete" }, app);
+	await settle();
+	assert.ok(internals(app).completionSession, "the fallback mounted the completion session");
+	const request = client.requests.filter((entry) => entry.method === "workspace.intelligence").at(-1);
+	assert.equal(request?.params.operation, "completion");
+	await app.exit();
+});
+
+test("footer workspace hints appear with a live workspace and clear on close", async () => {
+	const { app } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const footer = (app as unknown as { footer: { workspaceHints: string } }).footer;
+	assert.equal(footer.workspaceHints, "Ctrl+T explorer · Ctrl+←/→ panes");
+	await runCommand({ name: "workspace", args: "close" }, app);
+	assert.equal(footer.workspaceHints, "", "closed workspace clears the hints");
+	await app.exit();
+});
+
+test("dirty exit copy pluralizes and caps the file list at two names", async () => {
+	const { app } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	await internals(app).openWorkspacePath("a.ts", { preview: false });
+	await internals(app).openWorkspacePath("b.ts", { preview: false });
+	await internals(app).openWorkspacePath("c.ts", { preview: false });
+	const integration = internals(app).integration!;
+	for (const document of integration.store.documents()) {
+		integration.store.applyEdit(document.id, [{ range: { startOffset: 0, endOffset: 0 }, text: "x" }]);
+	}
+	const titles: string[] = [];
+	(app as unknown as { pick: (title: string) => Promise<{ value: string }> }).pick = async (title: string) => {
+		titles.push(title);
+		return { value: "cancel" };
+	};
+	await app.exit();
+	assert.equal(titles.length, 1);
+	assert.match(titles[0] ?? "", /^3 unsaved files: a\.ts, b\.ts \+1$/);
+	await app.exit();
+});
+
+test("a python file in the composed frame carries keyword styling (finding 2/3 surfaces)", async () => {
+	const { app, tui, client } = await bootFramed(160, 48);
+	try {
+		client.handlers.set("workspace.read", (params) => ({
+			...readResult(String(params.uri)),
+			text: "def run():\n    return 1\n",
+			languageId: "python",
+		}));
+		await internals(app).openWorkspacePath("main.py");
+		await settle();
+		// Move the caret off the keyword so the styled run is not split by the
+		// inverse caret cell (the pane-level check below asserts the exact ink).
+		const integration = internals(app).integration!;
+		const documentId = integration.tabs.activeDocumentId()!;
+		integration.store.setSelection(documentId, { cursorOffset: 10 });
+		integration.view.setView({ documentId, cursorOffset: 10, scrollLine: 0, horizontalCellOffset: 0 });
+		tui.renderNow(true);
+		const screen = tui.getScreenLines();
+		const joined = screen.join("\n");
+		// eslint-disable-next-line no-control-regex -- asserting an SGR prefix
+		assert.match(joined, /\x1b\[[0-9;]*mreturn/, "the live frame paints the keyword");
+		const plainJoined = screen.map(stripTerminalSequences).join("\n");
+		assert.match(plainJoined, /main\.py\s+Python/, "root-relative breadcrumb with the language right-aligned");
+		assert.doesNotMatch(plainJoined, /\/ws\/main\.py/, "no absolute path in the breadcrumb");
+		// The pane's own render carries the exact theme styling for the keywords.
+		const paneFrame = integration.pane.render(80).join("\n");
+		assert.ok(paneFrame.includes(theme.accent("def")), "pane styling uses the theme accent");
+		assert.ok(paneFrame.includes(theme.accent("return")), "the continuation line is styled too");
+	} finally {
+		await app.exit();
+	}
+});
+
+test("the editor status row shows the LSP state right-aligned without repeating the language", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	client.responses.set("workspace.lspStatus", {
+		servers: [{ profile: "pyright", languageId: "python", state: "ready", generation: 3 }],
+	});
+	client.handlers.set("workspace.read", (params) => ({
+		...readResult(String(params.uri)),
+		text: "x = 1\n",
+		languageId: "python",
+	}));
+	await internals(app).openWorkspacePath("main.py");
+	await settle();
+	// A fresh LSP poll over the new snapshot reaches the pane.
+	const controller = internals(app).integration!.controller;
+	await controller.lspStatus();
+	const pane = internals(app).integration!.pane;
+	const frame = pane.render(80).map(stripTerminalSequences);
+	const statusRow = frame.find((line) => line.includes("Ln 1, Col 1"));
+	assert.ok(statusRow, `status row present: ${frame.join(" | ")}`);
+	assert.match(statusRow, /Python/);
+	assert.match(statusRow, /ready$/);
+	assert.doesNotMatch(statusRow, /python ready/, "the language name is never repeated");
 	await app.exit();
 });

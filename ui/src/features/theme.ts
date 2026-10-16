@@ -25,7 +25,12 @@ export const themeCommand: Command = {
 	},
 };
 
-async function applySkin(host: FeatureHost, name: string): Promise<void> {
+/**
+ * Apply a skin and persist it exactly once. Exported for the `/settings`
+ * menu's Appearance → Theme row (the same single persistence path `/theme`
+ * uses); a failed save keeps the skin for the session and says so.
+ */
+export async function applySkin(host: FeatureHost, name: string): Promise<void> {
 	setSkin(name);
 	host.restyle();
 	try {

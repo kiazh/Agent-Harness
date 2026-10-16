@@ -673,6 +673,11 @@ test("/config sets a value and --save persists it", async () => {
 
 	await run("/config", host);
 	assert.match(host.last().text, /openrouter_api_key\s+set \(in \.env\)/);
+	// `/config list` is the explicit text dump (bare /config opens the menu on
+	// hosts that implement uiSettings; this FakeHost does not, so it falls
+	// back to the same dump — both paths are covered here).
+	await run("/config list", host);
+	assert.match(host.last().text, /openrouter_api_key\s+set \(in \.env\)/);
 	await run("/config bogus 1", host);
 	assert.match(host.last().text, /Unknown setting/);
 });

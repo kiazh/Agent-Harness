@@ -948,6 +948,14 @@ export class WorkspaceController {
 	): Promise<IntelligenceOutcome> {
 		if (this.phaseValue !== "ready" || !this.currentIdentity) return { status: "no-workspace" };
 		const document = uri === null ? undefined : this.findDocumentByUri(uri);
+		// Edit sync is trailing-debounced (150 ms). A completion/hover fired
+		// right after typing would otherwise reach the gateway BEFORE the
+		// didChange that describes the keystroke, and the server would answer
+		// against stale text. Flush the buffer's pending sync first whenever
+		// the request targets a live document (null-uri/disk queries carry no
+		// buffer to flush).
+		if (document) await this.flushPending(document.id);
+
 		const superseding = method === "completion" || method === "hover";
 		const key = superseding && document ? `${document.id}\u0000${method}` : undefined;
 		const seq = key === undefined ? 0 : ++this.supersedeSeq;

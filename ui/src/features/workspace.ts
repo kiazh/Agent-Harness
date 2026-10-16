@@ -80,7 +80,8 @@ function capabilitiesSummary(capabilities: Record<string, unknown> | undefined):
 	return `capabilities: ${shown.join(", ")}`;
 }
 
-function printLspRows(host: FeatureHost, snapshot: WorkspaceLspStatusSnapshot): void {
+/** Per-server rows for `/lsp status` and the `/settings` language servers. */
+export function printLspRows(host: FeatureHost, snapshot: WorkspaceLspStatusSnapshot): void {
 	if (snapshot.servers.length === 0) {
 		const profiles = Object.entries(snapshot.profiles);
 		if (profiles.length === 0) {
@@ -232,10 +233,11 @@ const workspaceCommand: Command = {
 const editorCommand: Command = {
 	name: "editor",
 	description: "Maximize or restore the editor pane",
-	argumentHint: "[maximize|restore|close]",
+	argumentHint: "[maximize|restore|complete|close]",
 	getArgumentCompletions: options([
 		["maximize", "Show the editor pane alone"],
 		["restore", "Return to the chat/editor split"],
+		["complete", "Request completion at the cursor (Ctrl+Space fallback)"],
 		["close", "Close the active editor tab (dirty: save/discard/cancel)"],
 	]),
 	async run(args, host) {
@@ -252,11 +254,21 @@ const editorCommand: Command = {
 			host.print("split restored", "info");
 			return;
 		}
+		if (sub === "complete") {
+			// Same flow as Ctrl+Space; the key is stolen by some terminals
+			// (macOS) so the command is the dependable entry point.
+			if (!surface.completeAtCursor) {
+				host.print("Completion is not available on this host.", "warning");
+				return;
+			}
+			surface.completeAtCursor();
+			return;
+		}
 		if (sub === "close") {
 			surface.closeActiveTab();
 			return;
 		}
-		host.print("Usage: /editor [maximize|restore|close]", "warning");
+		host.print("Usage: /editor [maximize|restore|complete|close]", "warning");
 	},
 };
 

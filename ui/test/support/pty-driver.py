@@ -70,6 +70,7 @@ def main() -> int:
     parser.add_argument("--env", action="append", default=[])
     parser.add_argument("--actions", required=True)
     parser.add_argument("--outdir", required=True)
+    parser.add_argument("--raw-log", default=None, help="also tee the raw ANSI stream here")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
@@ -91,6 +92,7 @@ def main() -> int:
 
     screen = pyte.Screen(args.cols, args.rows)
     stream = pyte.Stream(screen)
+    raw_file = open(args.raw_log, "wb") if args.raw_log else None
 
     pid, master = pty.fork()
     if pid == 0:  # child
@@ -120,6 +122,9 @@ def main() -> int:
                 return
             if not chunk:
                 return
+            if raw_file is not None:
+                raw_file.write(chunk)
+                raw_file.flush()
             stream.feed(chunk.decode("utf-8", errors="replace"))
 
     try:
@@ -174,6 +179,8 @@ def main() -> int:
             except ProcessLookupError:
                 pass
         os.close(master)
+        if raw_file is not None:
+            raw_file.close()
     return 0
 
 

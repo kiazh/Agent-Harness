@@ -10,7 +10,7 @@ const plain = (rows: string[]) => rows.map(stripTerminalSequences);
 test("reference header keeps brand and workspace on one row", () => {
  const rows = plain(header("1.0", {model:"actual", provider:"test", cwd:"/repo", branch:"main"}).render(120));
  assert.equal(rows.length, 1);
- assert.match(rows[0]!, /^>_ Machina\s+\/repo · main$/);
+ assert.match(rows[0]!, /^>_ Machina\s+workspace · repo$/);
 });
 
 test("reference tools have quiet indented frames with bounded reading width", () => {

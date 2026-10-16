@@ -20,8 +20,20 @@
 // `editor.save` binding as a fallback under the future command registry).
 //
 // States are text, never color-only (plan §23): dirty `●`, read-only `[ro]`,
-// conflict `!`, plus the LSP status text supplied by the controller through
+// conflict `!`, plus the LSP status text supplied by the app through
 // `setLspStatus` (no invented states).
+//
+// Closing-pass polish:
+// - The empty editor restates itself nowhere but the viewport: the strip,
+//   breadcrumb and status row render blank without a document, and the view
+//   shows one dim hint (`EditorView.EMPTY_EDITOR_HINT`).
+// - The breadcrumb is root-relative (`src/main.py`) with the language name
+//   right-aligned; `setWorkspaceRoot` learns the root from the app. Paths
+//   outside the root fall back to the basename, never an absolute path.
+// - The status row never repeats the language name: position/encoding/language
+//   on the left, the per-language LSP state right-aligned when it fits.
+// - The Problems section is separated from the viewport by one full-width
+//   border rule (theme.border), counted in the pane's row budget.
 
 import {
 	Key,
@@ -165,6 +177,24 @@ function chipText(chip: TabChip, closable: boolean): string {
 	return closable ? `[${body} ${TAB_CLOSE_GLYPH}]` : `[${body}]`;
 }
 
+/**
+ * Human language name for chrome (breadcrumb/status row): known ids keep
+ * their brand casing, anything else capitalizes its first letter. Pure and
+ * total — never invents a language, only formats the given id.
+ */
+export function displayLanguageName(languageId: string): string {
+	const known: Record<string, string> = {
+		python: "Python",
+		typescript: "TypeScript",
+		javascript: "JavaScript",
+		typescriptreact: "TSX",
+		javascriptreact: "JSX",
+	};
+	const key = languageId.trim().toLowerCase();
+	if (key in known) return known[key] as string;
+	return key.length === 0 ? languageId : key[0]!.toUpperCase() + key.slice(1);
+}
+
 function clampRows(rows: number): number {
 	if (!Number.isFinite(rows)) return EDITOR_PANE_DEFAULT_ROWS;
 	return Math.max(1, Math.floor(rows));
@@ -208,6 +238,8 @@ export class EditorPane implements Component, Focusable {
 	private readonly onCloseTabCallback: ((documentId: string) => void) | undefined;
 	private readonly onSaveCallback: (() => void) | undefined;
 	private lspStatus: string | undefined;
+	/** Workspace root for root-relative breadcrumbs (undefined: none). */
+	private workspaceRoot: string | undefined;
 	private allocatedRows = EDITOR_PANE_DEFAULT_ROWS;
 	private viewportRows: number;
 	private lastRenderedWidth = 0;
@@ -256,6 +288,17 @@ export class EditorPane implements Component, Focusable {
 		const next = text && text.length > 0 ? text : undefined;
 		if (next === this.lspStatus) return;
 		this.lspStatus = next;
+		this.requestRenderCallback();
+	}
+
+	/**
+	 * Learn the workspace root so the breadcrumb renders root-relative paths
+	 * (finding 2). A no-op for the same value keeps hot re-syncs cheap.
+	 */
+	setWorkspaceRoot(root: string | undefined): void {
+		const next = root && root.length > 0 ? root : undefined;
+		if (next === this.workspaceRoot) return;
+		this.workspaceRoot = next;
 		this.requestRenderCallback();
 	}
 
@@ -386,7 +429,7 @@ export class EditorPane implements Component, Focusable {
 				});
 			}
 		}
-		const problemsTop = popupTop + this.lastIntelligenceRows + 1;
+		const problemsTop = popupTop + this.lastIntelligenceRows + 1 + (this.lastProblemsRows > 0 ? 1 : 0);
 		if (!pointerGesture && this.problemsComponent && this.lastProblemsRows > 0) {
 			if (y >= problemsTop && y < problemsTop + this.lastProblemsRows) {
 				return this.problemsComponent.handleMouse?.({
@@ -416,16 +459,18 @@ export class EditorPane implements Component, Focusable {
 
 		// The popup and problems slots share one budget with the viewport: at
 		// least one viewport row always survives, and the popup wins contested
-		// rows because it carries the focused interaction.
+		// rows because it carries the focused interaction. A mounted Problems
+		// section also reserves its one-row separation rule.
 		const slotBudget = Math.max(0, this.allocatedRows - EDITOR_PANE_CHROME_ROWS - 1);
 		const popupLines = this.intelligencePopup ? this.intelligencePopup.render(safeWidth) : [];
 		const popupShown = popupLines.slice(0, slotBudget);
 		const problemsRows = this.problemsComponent
 			? Math.min(this.problemsRowBudget, Math.max(0, slotBudget - popupShown.length))
 			: 0;
+		const problemsDivider = problemsRows > 0 ? 1 : 0;
 		const viewportRows = Math.max(
 			1,
-			this.allocatedRows - EDITOR_PANE_CHROME_ROWS - popupShown.length - problemsRows,
+			this.allocatedRows - EDITOR_PANE_CHROME_ROWS - popupShown.length - problemsRows - problemsDivider,
 		);
 		this.lastIntelligenceRows = popupShown.length;
 		this.lastProblemsRows = problemsRows;
@@ -446,7 +491,8 @@ export class EditorPane implements Component, Focusable {
 		lines.push(...viewLines.slice(0, viewportRows));
 		lines.push(...popupShown);
 		surface.add(lines.length);
-		lines.push(this.statusRow());
+		lines.push(this.statusRow(safeWidth));
+		if (problemsDivider > 0) lines.push(theme.border("─".repeat(safeWidth)));
 		lines.push(...problemLines);
 		return lines.slice(0, this.allocatedRows).map((line, index) => {
 			const row = padRow(truncateDisplay(line, safeWidth), safeWidth);
@@ -467,9 +513,10 @@ export class EditorPane implements Component, Focusable {
 		const problemsRows = this.problemsComponent
 			? Math.min(this.problemsRowBudget, Math.max(0, slotBudget - popupRows))
 			: 0;
+		const problemsDivider = problemsRows > 0 ? 1 : 0;
 		this.viewportRows = Math.max(
 			1,
-			this.allocatedRows - EDITOR_PANE_CHROME_ROWS - popupRows - problemsRows,
+			this.allocatedRows - EDITOR_PANE_CHROME_ROWS - popupRows - problemsRows - problemsDivider,
 		);
 		this.view.setViewportRows(this.viewportRows);
 	}
@@ -530,7 +577,9 @@ export class EditorPane implements Component, Focusable {
 	 */
 	private tabStrip(width: number): { text: string; hitAreas: TabHitArea[] } {
 		const chips = this.tabChips();
-		if (chips.length === 0) return { text: theme.dim("No open files"), hitAreas: [] };
+		// Finding 1: no extra restatement — the empty editor speaks only
+		// through the viewport hint (EditorView.EMPTY_EDITOR_HINT).
+		if (chips.length === 0) return { text: "", hitAreas: [] };
 		const active = this.tabModel.activeDocumentId();
 		const closable = chips.map((chip) => chip.documentId === active);
 		const styles = chips.map((chip, index) =>
@@ -584,31 +633,61 @@ export class EditorPane implements Component, Focusable {
 		return { text, hitAreas };
 	}
 
+	/**
+	 * Root-relative path (finding 2) with the language right-aligned. Files
+	 * outside the workspace root fall back to their basename so an absolute
+	 * path never leaks into the chrome; the full path stays in
+	 * `/workspace status`. Blank without a document (finding 1).
+	 */
 	private breadcrumb(width: number): string {
 		const record = this.activeRecord();
-		if (!record) return theme.dim("No file open");
-		const language = theme.dim(record.languageId);
+		if (!record) return "";
+		const display = uriDisplayPath(record.uri);
+		const language = theme.dim(displayLanguageName(record.languageId));
 		const languageWidth = visibleWidth(language);
 		const pathBudget = Math.max(0, width - languageWidth - 2);
-		const left = theme.muted(truncateDisplay(uriDisplayPath(record.uri), pathBudget));
+		const left = theme.muted(truncateDisplay(this.relativeDisplayPath(display), pathBudget));
 		const gap = Math.max(1, width - visibleWidth(left) - languageWidth);
 		return `${left}${" ".repeat(gap)}${language}`;
 	}
 
-	private statusRow(): string {
+	private relativeDisplayPath(display: string): string {
+		const root = this.workspaceRoot;
+		// Without a learned root the display path renders as-is (the pane only
+		// sees one in a live workspace); files outside a known root fall back
+		// to the basename so absolute paths never leak past the root boundary.
+		if (!root) return display;
+		const prefix = root.endsWith("/") ? root : `${root}/`;
+		if (display === root) return display;
+		if (display.startsWith(prefix)) return display.slice(prefix.length);
+		const parts = display.split("/").filter((segment) => segment.length > 0);
+		return parts[parts.length - 1] ?? display;
+	}
+
+	/**
+	 * Finding 3: `Ln 5, Col 1 · UTF-8 · LF · Python` on the left; the LSP
+	 * state right-aligned when it fits (`ready`, `starting…`, `missing`) and
+	 * dropped first when it cannot — the language name is never repeated.
+	 * Blank without a document (finding 1).
+	 */
+	private statusRow(width: number): string {
 		const record = this.activeRecord();
-		if (!record) return theme.dim("No open document");
+		if (!record) return "";
 		const position = this.view.cursorDisplayPosition();
 		const parts = [
 			theme.text(`Ln ${position.line}, Col ${position.column}`),
 			theme.dim("UTF-8"),
 			theme.dim(record.lineEnding === "mixed" ? "mixed endings" : record.lineEnding),
-			theme.dim(record.languageId),
+			theme.dim(displayLanguageName(record.languageId)),
 		];
-		if (this.lspStatus) parts.push(theme.dim(this.lspStatus));
 		if (record.dirty) parts.push(theme.warning("●"));
 		if (record.readOnly) parts.push(theme.dim("[ro]"));
 		if (record.conflict) parts.push(theme.error("!"));
-		return parts.join(theme.dim(" · "));
+		const left = parts.join(theme.dim(" · "));
+		if (!this.lspStatus) return left;
+		const state = theme.dim(this.lspStatus);
+		const room = width - visibleWidth(left) - visibleWidth(state);
+		if (room < 2) return left;
+		return `${left}${" ".repeat(room)}${state}`;
 	}
 }

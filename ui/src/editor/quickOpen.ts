@@ -62,7 +62,7 @@ export interface QuickOpenPaneOptions {
 	debounceMs?: number;
 	/** Maximum visible result rows; defaults to 10. Values below 1 are raised to 1. */
 	maxVisible?: number;
-	/** Overlay title; defaults to the literal `go to file`. */
+	/** Overlay title; defaults to the literal `Go to file` (finding 10). */
 	title?: string;
 	/** Called after any state change that should re-render the pane. */
 	onChange?: () => void;
@@ -151,7 +151,7 @@ export class QuickOpenPane implements Component {
 		this.provider = provider;
 		this.debounceMs = Math.max(0, options.debounceMs ?? DEFAULT_DEBOUNCE_MS);
 		this.maxVisible = Math.max(1, Math.floor(options.maxVisible ?? DEFAULT_MAX_VISIBLE));
-		this.title = options.title ?? "go to file";
+		this.title = options.title ?? "Go to file";
 		this.onChange = options.onChange;
 	}
 
@@ -449,10 +449,11 @@ export class QuickOpenPane implements Component {
 	private styleRow(row: PaneRow): string {
 		switch (row.kind) {
 			case "header": {
+				// Finding 10: `Go to file: main` — a colon join, not a fragment.
 				const query = row.query
 					? theme.text(singleLine(row.query))
 					: theme.dim("type to search");
-				return `${theme.accentBold(this.title)} ${query}`;
+				return `${theme.accentBold(`${this.title}:`)} ${query}`;
 			}
 			case "entry": {
 				const prefix = row.selected ? SELECTED_PREFIX : PLAIN_PREFIX;

@@ -124,7 +124,7 @@ test("gutter numbers align and no row exceeds the width at 20/40/80/120", () => 
 		assert.equal(stripped[8]?.slice(0, 2), " 9", "single-digit numbers are right-aligned");
 		assert.equal(stripped[9]?.slice(0, 2), "10", "double-digit numbers fill the gutter");
 		assert.ok(stripped[4]?.includes("日本語テスト行"), "wide CJK content renders at the shared content column");
-		assert.equal(stripped[4]?.indexOf("日"), 3, "content starts after the fixed gutter");
+		assert.equal(stripped[4]?.indexOf("日"), 4, "content starts after the fixed gutter (digits + 2-cell padding)");
 	}
 });
 
@@ -269,20 +269,20 @@ test("mouse clicks map through the gutter and horizontal offset; drags select", 
 	const { store, doc } = freshStore("hello world");
 	const harness = makeView(store, doc.id);
 	harness.view.setViewportRows(5);
-	// One line -> gutter is one digit plus one space (2 cells).
-	const press = harness.view.handleMouse(mouseEvent({ type: "press", x: 2 + 3, y: 0 }));
+	// One line -> gutter is one digit plus the 2-cell padding (3 cells).
+	const press = harness.view.handleMouse(mouseEvent({ type: "press", x: 3 + 3, y: 0 }));
 	assert.deepEqual(press, { capture: true, focus: true, handled: true });
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 3);
-	const drag = harness.view.handleMouse(mouseEvent({ type: "drag", x: 2 + 8, y: 0 }));
+	const drag = harness.view.handleMouse(mouseEvent({ type: "drag", x: 3 + 8, y: 0 }));
 	assert.equal(drag?.handled, true);
 	assert.equal(drag?.capture, true);
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 8);
 	assert.equal(store.getViewState(doc.id)?.selectionAnchorOffset, 3);
-	const release = harness.view.handleMouse(mouseEvent({ type: "release", x: 2 + 8, y: 0 }));
+	const release = harness.view.handleMouse(mouseEvent({ type: "release", x: 3 + 8, y: 0 }));
 	assert.equal(release?.handled, true);
-	assert.equal(harness.view.handleMouse(mouseEvent({ type: "release", x: 2 + 8, y: 0 })), undefined);
+	assert.equal(harness.view.handleMouse(mouseEvent({ type: "release", x: 3 + 8, y: 0 })), undefined);
 	// Double-click selects the word under the pointer.
-	const double = harness.view.handleMouse(mouseEvent({ type: "click", x: 2 + 8, y: 0, clickCount: 2 }));
+	const double = harness.view.handleMouse(mouseEvent({ type: "click", x: 3 + 8, y: 0, clickCount: 2 }));
 	assert.equal(double?.handled, true);
 	assert.equal(store.getViewState(doc.id)?.selectionAnchorOffset, 6);
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 11);
@@ -311,39 +311,39 @@ test("a lone viewport click positions the caret and claims focus (no press neede
 	const harness = makeView(store, doc.id);
 	harness.view.setViewportRows(5);
 	// Gesture without a preceding press: the click alone must place the caret.
-	const click = harness.view.handleMouse(mouseEvent({ type: "click", x: 2 + 7, y: 0 }));
+	const click = harness.view.handleMouse(mouseEvent({ type: "click", x: 3 + 7, y: 0 }));
 	assert.deepEqual(click, { handled: true, focus: true });
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 7, "the click positions the caret");
 	// A press-then-click sequence keeps the click idempotent and preserves focus.
-	const press = harness.view.handleMouse(mouseEvent({ type: "press", x: 2 + 3, y: 0 }));
+	const press = harness.view.handleMouse(mouseEvent({ type: "press", x: 3 + 3, y: 0 }));
 	assert.equal(press?.capture, true);
-	const again = harness.view.handleMouse(mouseEvent({ type: "click", x: 2 + 3, y: 0 }));
+	const again = harness.view.handleMouse(mouseEvent({ type: "click", x: 3 + 3, y: 0 }));
 	assert.deepEqual(again, { handled: true, focus: true });
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 3);
 	// Clicking a read-only document still focuses (the store refuses movement,
 	// but a click never breaks the pane's caret plumbing).
 	const sealed = freshStore("sealed", { readOnly: true });
 	const sealedHarness = makeView(sealed.store, sealed.doc.id);
-	const roClick = sealedHarness.view.handleMouse(mouseEvent({ type: "click", x: 2 + 4, y: 0 }));
+	const roClick = sealedHarness.view.handleMouse(mouseEvent({ type: "click", x: 3 + 4, y: 0 }));
 	assert.equal(roClick?.focus, true);
 });
 
 test("horizontal scrolling maps mouse columns through horizontalCellOffset", () => {
 	const { store, doc } = freshStore("0123456789");
-	store.setSelection(doc.id, { cursorOffset: 9 });
+	store.setSelection(doc.id, { cursorOffset: 8 });
 	const harness = makeView(store, doc.id);
 	harness.view.setViewportRows(3);
-	harness.view.render(12); // gutter 2 -> 10 visible content cells
-	// Caret at cell 9 fits; move right to 10 and the view scrolls by one cell.
+	harness.view.render(12); // gutter 3 -> 9 visible content cells
+	// Caret at cell 8 fits; move right to 9 and the view scrolls by one cell.
 	harness.view.handleInput("\x1b[C");
-	assert.equal(store.getViewState(doc.id)?.cursorOffset, 10);
+	assert.equal(store.getViewState(doc.id)?.cursorOffset, 9);
 	harness.view.render(12);
 	assert.equal(harness.view.getViewState()?.horizontalCellOffset, 1);
 	const rows = plain(harness.view.render(12));
-	// The window starts at cell 1; the caret sits at end-of-line cell 10.
-	assert.equal(rows[0]?.slice(2, 12), "123456789 ");
+	// The window starts at cell 1; the caret sits at cell 9 (end of the line).
+	assert.equal(rows[0]?.slice(3, 12), "123456789");
 	// Click at content column 0 now maps to document offset 1.
-	harness.view.handleMouse(mouseEvent({ type: "press", x: 2, y: 0, width: 12 }));
+	harness.view.handleMouse(mouseEvent({ type: "press", x: 3, y: 0, width: 12 }));
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 1);
 });
 
@@ -407,14 +407,14 @@ test("tabs render at tabWidth stops and mouse columns respect them", () => {
 	const { store, doc } = freshStore("a\tb\nab");
 	const harness = makeView(store, doc.id, { tabWidth: 4 });
 	const rows = plain(harness.view.render(40));
-	assert.equal(rows[0]?.slice(2).trimEnd(), "a   b");
-	assert.equal(rows[1]?.slice(2).trimEnd(), "ab");
+	assert.equal(rows[0]?.slice(3).trimEnd(), "a   b");
+	assert.equal(rows[1]?.slice(3).trimEnd(), "ab");
 	// Cells 2 and 3 sit inside the tab's stop gap and stay before the tab offset.
-	harness.view.handleMouse(mouseEvent({ type: "press", x: 2 + 2, y: 0 }));
+	harness.view.handleMouse(mouseEvent({ type: "press", x: 3 + 2, y: 0 }));
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 1);
-	harness.view.handleMouse(mouseEvent({ type: "press", x: 2 + 3, y: 0 }));
+	harness.view.handleMouse(mouseEvent({ type: "press", x: 3 + 3, y: 0 }));
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 1);
-	harness.view.handleMouse(mouseEvent({ type: "press", x: 2 + 4, y: 0 }));
+	harness.view.handleMouse(mouseEvent({ type: "press", x: 3 + 4, y: 0 }));
 	assert.equal(store.getViewState(doc.id)?.cursorOffset, 2);
 });
 
@@ -434,17 +434,17 @@ test("control characters render as placeholders and never leak as live sequences
 	const weird = freshStore("a\x9bb\u2028c", { uri: "file:///w/weird.txt" });
 	const weirdHarness = makeView(weird.store, weird.doc.id);
 	const weirdRow = plain(weirdHarness.view.render(40))[0] ?? "";
-	assert.equal(weirdRow.slice(2).trimEnd(), "a\uFFFDb\uFFFDc");
+	assert.equal(weirdRow.slice(3).trimEnd(), "a\uFFFDb\uFFFDc");
 });
 
 test("soft wrap renders every visual row and keeps the caret visible", () => {
 	const { store, doc } = freshStore("abcdefghij");
 	const harness = makeView(store, doc.id, { softWrap: true });
 	harness.view.setViewportRows(6);
-	const rows = plain(harness.view.render(8)); // gutter 2 -> 6 content cells per row
+	const rows = plain(harness.view.render(8)); // gutter 3 -> 5 content cells per row
 	assert.equal(rows.length, 6);
-	assert.equal(rows[0]?.slice(2).trimEnd(), "abcdef");
-	assert.equal(rows[1]?.slice(2).trimEnd(), "ghij");
+	assert.equal(rows[0]?.slice(3).trimEnd(), "abcde");
+	assert.equal(rows[1]?.slice(3).trimEnd(), "fghij");
 	assert.equal(rows[1]?.slice(0, 2), "1 ", "both visual rows carry the same line number");
 	for (const row of rows) assert.ok(visibleWidth(row) <= 8);
 });

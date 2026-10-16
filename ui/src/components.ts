@@ -1,6 +1,6 @@
 // Transcript and chrome widgets built from pi-tui primitives.
 
-import { homedir } from "node:os";
+import { basename } from "node:path";
 import {
 	Box,
 	type Component,
@@ -71,12 +71,6 @@ export class ThinkingIndicator implements Component {
 	invalidate(): void {}
 }
 
-/** Shorten a path with `~`, Codex session-header style. */
-function shortCwd(cwd: string): string {
-	const home = homedir();
-	return home && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
-}
-
 // Compact transcript widgets live in components/*. New code imports them
 // directly; this facade re-exports the shared surface plus legacy helper
 // names (diffStyle/formatArgs) so existing callers keep compiling.
@@ -101,12 +95,19 @@ export interface SessionHeaderInfo {
 	branch: string;
 }
 
+/** Basename of a cwd for the header's right-side workspace label. */
+function workspaceName(cwd: string): string {
+	return basename(cwd) || cwd;
+}
+
 /** One brand row with workspace and branch aligned right. */
 export function header(_version: string, info?: SessionHeaderInfo): Component {
 	return {
 		render(width: number): string[] {
 			const brand = `${theme.accent(">_")} ${theme.bold("Machina")}`;
-			const where = info?.cwd ? theme.dim(sanitizeDisplay(shortCwd(info.cwd) + (info.branch ? ` · ${info.branch}` : ""))) : "";
+			// Finding 7: one grouped, quiet label (`workspace · ws-fixture`);
+			// the branch stays in the footer, so the header never reads detached.
+			const where = info?.cwd ? theme.dim(sanitizeDisplay(`workspace · ${workspaceName(info.cwd)}`)) : "";
 			const room = Math.max(0, width - visibleWidth(brand) - 3);
 			const right = room >= 6 ? truncateToWidth(where, room) : "";
 			return [truncateToWidth(`${brand}${" ".repeat(Math.max(0, width - visibleWidth(brand) - visibleWidth(right)))}${right}`, width)];

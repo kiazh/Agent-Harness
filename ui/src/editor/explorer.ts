@@ -450,7 +450,7 @@ export interface ExplorerPaneOptions {
 }
 
 type PaneRow =
-	| { type: "header"; toggleStart: number; toggleEnd: number; hidden: boolean }
+	| { type: "header"; hidden: boolean }
 	| {
 		type: "entry";
 		node: ExplorerEntryNode;
@@ -502,6 +502,8 @@ export class ExplorerPane implements Component {
 	private readonly onChange: (() => void) | undefined;
 	private readonly title: string;
 	private rowBudget: number | undefined;
+	/** Width of the last render, for the right-aligned header hint. */
+	private lastWidth = 0;
 
 	constructor(model: ExplorerModel, options: ExplorerPaneOptions = {}) {
 		this.model = model;
@@ -523,6 +525,7 @@ export class ExplorerPane implements Component {
 
 	render(width: number): string[] {
 		const total = Math.max(0, Math.floor(width));
+		this.lastWidth = total;
 		return this.layoutRows().map((row) => {
 			const line = truncateDisplay(this.styleRow(row), total);
 			if ((row.type === "entry" || row.type === "load-more") && row.selected) {
@@ -566,7 +569,9 @@ export class ExplorerPane implements Component {
 		if (!row) return undefined;
 		this.onFocusRequested?.();
 		if (row.type === "header") {
-			if (event.type === "click" && event.x >= row.toggleStart && event.x < row.toggleEnd) {
+			// The whole header row is the hidden-entries toggle (the right-side
+			// hint states the current mode; finding 5).
+			if (event.type === "click") {
 				void this.model.toggleHidden();
 			}
 			return { handled: true, focus: true };
@@ -621,18 +626,20 @@ export class ExplorerPane implements Component {
 		const rows: PaneRow[] = [
 			{
 				type: "header",
-				toggleStart: displayWidth(this.title) + 1,
-				toggleEnd: displayWidth(this.title) + 4,
 				hidden: this.model.hidden,
 			},
 			...tree,
 		];
 		const exclusions = this.model.exclusions();
 		if (exclusions.length > 0) {
+			// Finding 5: the footer shortens to the first two exclusions plus a
+			// count; the full list stays in `/workspace status`.
+			const shown = exclusions.slice(0, 2).map(singleLineName);
+			const more = exclusions.length > shown.length ? `, +${exclusions.length - shown.length}` : "";
 			rows.push({
 				type: "footer",
 				label: "excluded:",
-				value: exclusions.map(singleLineName).join(" · "),
+				value: `${shown.join(", ")}${more}`,
 			});
 		}
 		if (this.model.hasMorePages()) {
@@ -672,6 +679,8 @@ export class ExplorerPane implements Component {
 				type: "entry",
 				node,
 				selected: node.id === selectedId,
+				// Files render name-only (finding 5: no leading `·`); the click
+				// column still anchors at the glyph slot for directories.
 				glyphColumn: PLAIN_PREFIX.length + INDENT.length * node.depth,
 				name: singleLineName(entry.name),
 				suffix,
@@ -712,16 +721,24 @@ export class ExplorerPane implements Component {
 	private styleRow(row: PaneRow): string {
 		switch (row.type) {
 			case "header": {
-				const affordance = row.hidden ? "[h] hidden on" : "[h] hidden off";
-				return `${theme.accentBold(this.title)} ${theme.dim(affordance)}`;
+				// Finding 5: `workspace` on the left, a dim toggle hint on the
+				// right stating the current hidden-entries mode (press h or
+				// click the row to flip it).
+				const hintText = row.hidden ? "h: hide hidden" : "h: show hidden";
+				const hint = theme.dim(hintText);
+				const title = theme.accentBold(this.title);
+				const gap = Math.max(1, this.lastWidth - displayWidth(this.title) - displayWidth(hintText));
+				return `${title}${" ".repeat(gap)}${hint}`;
 			}
 			case "entry": {
 				const prefix = row.selected ? SELECTED_PREFIX : PLAIN_PREFIX;
-				const glyph = row.node.expandable
-					? (row.node.expanded ? EXPLORER_GLYPHS.expanded : EXPLORER_GLYPHS.collapsed)
-					: EXPLORER_GLYPHS.file;
 				const indent = INDENT.repeat(row.depth);
 				const suffix = row.suffix ? theme.dim(row.suffix) : "";
+				if (!row.node.expandable) {
+					// Files drop the leading glyph (finding 5): indent only.
+					return `${prefix}${indent}${theme.text(row.name)}${suffix}`;
+				}
+				const glyph = row.node.expanded ? EXPLORER_GLYPHS.expanded : EXPLORER_GLYPHS.collapsed;
 				return `${prefix}${indent}${theme.accent(glyph)} ${theme.text(row.name)}${suffix}`;
 			}
 			case "load-more": {

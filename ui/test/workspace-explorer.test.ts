@@ -304,7 +304,7 @@ test("hidden toggle re-requests listings with the flag and updates the affordanc
 	await model.load();
 	await model.expand("src");
 	assert.doesNotMatch(plain(pane), /\.env/);
-	assert.match(plain(pane), /\[h\] hidden off/);
+	assert.match(plain(pane), /h: show hidden/, "the hint states the current mode (hidden entries excluded)");
 	await model.setHidden(true);
 	assert.equal(model.hidden, true);
 	assert.equal(calls.at(-1)?.hidden, true, "the root is re-requested with includeHidden");
@@ -313,7 +313,7 @@ test("hidden toggle re-requests listings with the flag and updates the affordanc
 		"expanded directories are re-requested too",
 	);
 	assert.match(plain(pane), /\.env/, "hidden entries appear after the toggle");
-	assert.match(plain(pane), /\[h\] hidden on/);
+	assert.match(plain(pane), /h: hide hidden/);
 	await model.toggleHidden();
 	assert.equal(model.hidden, false);
 	assert.doesNotMatch(plain(pane), /\.env/);

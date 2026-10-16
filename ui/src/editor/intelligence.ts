@@ -1205,6 +1205,27 @@ function compareRows(a: ProblemRow, b: ProblemRow): number {
 }
 
 /**
+ * Display identity for the dedupe (finding 4): everything the pane shows
+ * except the producer label. `code` stringifies so 0 stays distinct from
+ * undefined; the full range participates so same-start/different-span rows
+ * stay distinct.
+ */
+function problemRowKey(row: ProblemRow): string {
+	const { start, end } = row.range;
+	const code = row.code === undefined ? "" : String(row.code);
+	return [
+		row.uri,
+		String(start.line),
+		String(start.character),
+		String(end.line),
+		String(end.character),
+		code,
+		String(row.severity),
+		row.message,
+	].join("\u0000");
+}
+
+/**
  * Per-uri, per-producer diagnostics cache fed by `workspace.diagnostics`
  * pushes and by `refresh(uri)` pulls.
  *
@@ -1299,28 +1320,43 @@ export class ProblemsModel {
 		return { ok: true, producers: groups.size, records };
 	}
 
-	/** Sorted projection: severity → uri → line → character → producer. */
+	/**
+	 * Sorted, deduplicated projection: severity → uri → line → character →
+	 * producer. Finding 4: rows a user cannot tell apart (same uri, range,
+	 * code, message and severity) collapse to one — the event feed and the
+	 * refresh pull can deliver the same diagnostic under different producer
+	 * labels; distinct content still renders as distinct rows.
+	 */
 	rows(): ProblemRow[] {
+		return this.projected().map((row) => ({ ...row, range: copyRange(row.range) }));
+	}
+
+	/** Deduped projection shared by `rows()` and `counts()` (one truth). */
+	private projected(): ProblemRow[] {
 		const all: ProblemRow[] = [];
 		for (const uriMap of this.entries.values()) {
 			for (const entry of uriMap.values()) all.push(...entry.rows);
 		}
 		all.sort(compareRows);
-		return all.map((row) => ({ ...row, range: copyRange(row.range) }));
+		const seen = new Set<string>();
+		const out: ProblemRow[] = [];
+		for (const row of all) {
+			const key = problemRowKey(row);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			out.push(row);
+		}
+		return out;
 	}
 
 	counts(): SeverityCounts {
 		const counts: SeverityCounts = { error: 0, warning: 0, info: 0, hint: 0, total: 0 };
-		for (const uriMap of this.entries.values()) {
-			for (const entry of uriMap.values()) {
-				for (const row of entry.rows) {
-					if (row.severity === 1) counts.error += 1;
-					else if (row.severity === 2) counts.warning += 1;
-					else if (row.severity === 3) counts.info += 1;
-					else counts.hint += 1;
-					counts.total += 1;
-				}
-			}
+		for (const row of this.projected()) {
+			if (row.severity === 1) counts.error += 1;
+			else if (row.severity === 2) counts.warning += 1;
+			else if (row.severity === 3) counts.info += 1;
+			else counts.hint += 1;
+			counts.total += 1;
 		}
 		return counts;
 	}

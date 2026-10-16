@@ -165,8 +165,8 @@ test("pane renders tab strip, breadcrumb, viewport and status within its allocat
 	assert.equal(rows.length, 10);
 	assert.match(rows[0] ?? "", /\[main\.ts ✕\]/, "the active chip carries the close cell");
 	assert.match(rows[1] ?? "", /\/w\/src\/main\.ts/);
-	assert.match(rows[1] ?? "", /typescript/);
-	assert.match(rows[2] ?? "", /1 hello/);
+	assert.match(rows[1] ?? "", /TypeScript/);
+	assert.match(rows[2] ?? "", /1 {2}hello/, "gutter (1 digit + 2-cell padding) then content");
 	assert.match(rows[9] ?? "", /Ln 1, Col 1/);
 	assert.match(rows[9] ?? "", /UTF-8/);
 	assert.match(rows[9] ?? "", /LF/);
@@ -351,12 +351,12 @@ test("viewport mouse events are translated into view-local coordinates", () => {
 	const harness = setup("hello world");
 	harness.pane.layout(8);
 	harness.pane.render(60);
-	// Row 2 is the first viewport row (strip 0, breadcrumb 1); gutter is 2 cells.
-	const press = harness.pane.handleMouse(mouseEvent({ type: "press", x: 2 + 3, y: 2, width: 60 }));
+	// Row 2 is the first viewport row (strip 0, breadcrumb 1); gutter is 3 cells.
+	const press = harness.pane.handleMouse(mouseEvent({ type: "press", x: 3 + 3, y: 2, width: 60 }));
 	assert.equal(press?.capture, true);
 	assert.equal(press?.focus, true);
 	assert.equal(harness.store.getViewState(harness.doc.id)?.cursorOffset, 3);
-	const drag = harness.pane.handleMouse(mouseEvent({ type: "drag", x: 2 + 8, y: 3, width: 60 }));
+	const drag = harness.pane.handleMouse(mouseEvent({ type: "drag", x: 3 + 8, y: 3, width: 60 }));
 	assert.equal(drag?.handled, true);
 	assert.equal(harness.store.getViewState(harness.doc.id)?.cursorOffset, 8);
 	assert.equal(harness.store.getViewState(harness.doc.id)?.selectionAnchorOffset, 3);
@@ -445,11 +445,11 @@ test("pane boots as a real alt-screen root: focus, mouse dispatch and capture en
 
 		// Real mouse dispatch: press at content column 3 of the first viewport row.
 		const inject = term.onInput as (data: string) => void;
-		inject(sgr(0, 2 + 3, 2));
+		inject(sgr(0, 3 + 3, 2));
 		assert.equal(harness.store.getViewState(harness.doc.id)?.cursorOffset, 3);
 		// Capture keeps the drag inside the pane even across a row change.
-		inject(sgr(32, 2 + 8, 3));
-		inject(sgr(0, 2 + 8, 3, true));
+		inject(sgr(32, 3 + 8, 3));
+		inject(sgr(0, 3 + 8, 3, true));
 		assert.equal(harness.store.getViewState(harness.doc.id)?.cursorOffset, 8);
 		assert.equal(harness.store.getViewState(harness.doc.id)?.selectionAnchorOffset, 3);
 

@@ -376,9 +376,10 @@ test("editor pane renders the problems section as a fixed bottom budget below th
 	harness.pane.layout(12);
 	const rows = plain(harness.pane.render(60));
 	assert.equal(rows.length, 12, "allocation is honored");
-	assert.equal(harness.pane.getViewportRows(), 5, "12 - 3 chrome - 4 problems rows");
-	assert.match(rows[2] ?? "", /1 hello/);
-	assert.match(rows[7] ?? "", /Ln 1, Col 1/, "status row moves up");
+	assert.equal(harness.pane.getViewportRows(), 4, "12 - 3 chrome - 4 problems rows - 1 divider rule");
+	assert.match(rows[2] ?? "", /1 {2}hello/);
+	assert.match(rows[6] ?? "", /Ln 1, Col 1/, "status row moves up");
+	assert.equal((rows[7] ?? "").trimEnd(), "─".repeat(60), "one full-width rule separates the section");
 	assert.match(rows[8] ?? "", /✗ 1 · ! 1 · i 1/);
 	assert.match(rows[9] ?? "", /main\.ts:3:5 ✗/);
 	assert.match(rows[10] ?? "", /main\.ts:1:1 !/);

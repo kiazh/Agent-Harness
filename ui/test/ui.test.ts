@@ -515,7 +515,7 @@ test("session header is a minimal codex-style brand line", async () => {
 	const { header } = await import("../src/components.ts");
 	const out = plain(header("0.1.0", { model: "gpt-x", provider: "acme", cwd: "/repo", branch: "main" }), 80);
 	assert.match(out, />_ Machina/);
-	assert.match(out, /\/repo · main/);
+	assert.match(out, /workspace · repo/, "finding 7: one grouped workspace label");
 	assert.doesNotMatch(out, /─/);
 });
 
