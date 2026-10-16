@@ -46,6 +46,11 @@ REASONING_UNSET_EFFORTS: tuple[str, ...] = ("", "none", "off", "default", "auto"
 # imports config; config never imports the provider stack.
 MAX_TOKENS = 32768
 
+# Upper bound (UTF-8 bytes) for the versioned workspace UI state JSON string
+# (plan §21). The state holds layout/URIs only and is small by construction;
+# the bound keeps a runaway client from growing config.yaml without limit.
+WORKSPACE_UI_STATE_MAX_BYTES = 64 * 1024
+
 # Secrets live in the environment (.env), never in config.yaml.
 SECRET_KEYS = frozenset(
     {
@@ -101,6 +106,7 @@ __all__ = [
     "LEGACY_ENV_VARS",
     "DEFAULTS",
     "MAX_TOKENS",
+    "WORKSPACE_UI_STATE_MAX_BYTES",
     "REASONING_EFFORTS",
     "REASONING_CATALOG_EFFORTS",
     "REASONING_UNSET_EFFORTS",
@@ -257,6 +263,12 @@ DEFAULTS: dict[str, Any] = {
     "memory_consolidation_enabled": True,
     "auto_compaction_enabled": True,
     "eviction_max_tokens": 0,
+    # Versioned workspace UI state (plan §21): one JSON string document
+    # ({"version": 1, "byRoot": {resolvedRoot: state}}) holding layout mode,
+    # split ratio, explorer state, open non-sensitive file URIs and cursor
+    # offsets only — never document text or secrets. Bounded to 64 KiB by
+    # validate_value (WORKSPACE_UI_STATE_MAX_BYTES).
+    "workspace_ui_state": "",
 }
 
 # Map config keys to their legacy environment variable names
@@ -332,6 +344,17 @@ def validate_value(key: str, value: Any) -> Any:
         if normalized not in ("auto", "cohere", "local", "http", "none"):
             raise ValueError("reranker_backend must be auto|cohere|local|http|none")
         return normalized
+    if key == "workspace_ui_state":
+        # Versioned UI layout JSON (plan §21): a plain string, but typed and
+        # byte-bounded here so config.set and every transport coercion path
+        # share one refusal (AH-AUDIT-042 single-source contract).
+        if not isinstance(value, str):
+            raise ValueError("workspace_ui_state must be a string")
+        if len(value.encode("utf-8")) > WORKSPACE_UI_STATE_MAX_BYTES:
+            raise ValueError(
+                f"workspace_ui_state is too long (max {WORKSPACE_UI_STATE_MAX_BYTES} bytes)"
+            )
+        return value
     if key not in DEFAULTS:
         return value
     default_value = DEFAULTS[key]
@@ -504,6 +527,9 @@ class Config:
     memory_consolidation_enabled: bool = True
     auto_compaction_enabled: bool = True
     eviction_max_tokens: int = 0
+    # Versioned, non-sensitive workspace UI state (plan §21); see DEFAULTS for
+    # the document contract and WORKSPACE_UI_STATE_MAX_BYTES for the bound.
+    workspace_ui_state: str = ""
     # n4: compaction_check_enabled was dead config surface (no production
     # reader); it was removed rather than kept as a misleading toggle.
 
