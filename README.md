@@ -8,8 +8,79 @@ Machina runs against frontier APIs (OpenRouter, OpenAI, Anthropic, DeepSeek, xAI
 
 **Status: `0.2.0` development release candidate.** Verified in this checkout: the budgeted request projector wired into both agent loops against a real DeepSeek turn ([docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md](docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md) §10) and the live macOS now-playing bar (real PTY + gateway + detector, [docs/verification/NOWPLAYING_NATIVE_VERIFICATION.md](docs/verification/NOWPLAYING_NATIVE_VERIFICATION.md)). **Environment-gated / unverified:** native Anthropic/OpenAI signed-block replay at the provider transport (`DETERMINISTIC_SKILLS_B3_EVIDENCE.md` §73, §116), hosted CI runs, and any live-provider quality or performance claim — fixture tests are not evidence of model quality. There is **no Python test suite in this repository**; the backend suite lives in the sibling [Machina-DevTools](../Machina-DevTools) checkout.
 
+## How it fits together
+
+End-to-end view of the surfaces, transport, gateway, agent core, provider layer, and storage (GitHub renders this diagram; the second screenshot is [docs/screenshot.png](docs/screenshot.png)).
+
+```mermaid
+flowchart TB
+    subgraph surfaces["Entry surfaces"]
+        TUI["Terminal UI - TypeScript / pi-tui<br/>chat, workspace editor + LSP, menus, music bar"]
+        CLI["Typer CLI - chat, repl, serve, init, skills, memory, usage"]
+        API["HTTP API - FastAPI + SSE<br/>/health /ready /metrics"]
+        EXT["External harnesses - OpenCode, Codex, Hermes via MCP"]
+    end
+
+    subgraph transport["Transport"]
+        RPC["JSON-RPC over stdio<br/>ui-gateway-protocol.md"]
+        HTTP["HTTP / RPC"]
+        MCP["MCP server + connector manager"]
+    end
+
+    subgraph gateway["Gateway - machina/gateway"]
+        FEAT["Feature handlers<br/>sessions, workspace + LSP, skills.search / preview_route / section,<br/>memory, usage, approvals, jobs, music, auth, interop"]
+    end
+
+    subgraph core["Agent core - machina/core"]
+        LOOP["Agent loops<br/>run / run_stream"]
+        GATE["Request gate + budgeted projector<br/>pins, round groups, recoverable views"]
+        COMPACT["Compression + post-turn auto-compaction<br/>+ honest status counters"]
+        SKILLS["Skills<br/>registry + provenance, metadata v2 + enrichment sidecar,<br/>canonical search/ranking, planned steps + sections + disclosure,<br/>install-time enrichment, revisions + observed events"]
+        MEM["Context assembly, memory,<br/>consolidation + approval, dense+sparse retrieval, reranker"]
+        TOOLS["Tool registry + result reducers + durable artifacts<br/>store-before-publish, completeness, recovery cursors"]
+        PERM["Permission broker + approval modes + sandbox"]
+        DELEG["Subagents / families / delegation"]
+        SELF["Self-knowledge, growth, RSI"]
+        USAGE["Usage ledger + dated pricing + prompt cache"]
+    end
+
+    subgraph providers["Providers"]
+        CLOUD["Cloud APIs<br/>OpenRouter, OpenAI, Anthropic, DeepSeek, xAI, Groq,<br/>Together, Mistral, Google, Kimi, OpenCode Zen"]
+        SEAT["Subscription seats<br/>ChatGPT, Copilot"]
+        LOCALP["Custom OpenAI-compatible endpoints<br/>Ollama local models"]
+    end
+
+    DB["PostgreSQL + pgvector<br/>sessions, context chunks, memories, skills + telemetry,<br/>usage, approvals, artifacts"]
+    DEV["Machina-DevTools<br/>backend suite, benchmarks, architecture ratchets, CI"]
+
+    TUI --> RPC --> FEAT
+    CLI --> FEAT
+    API --> HTTP --> FEAT
+    EXT --> MCP --> FEAT
+    FEAT --> LOOP
+    LOOP --> GATE --> COMPACT
+    LOOP --> SKILLS
+    LOOP --> MEM
+    LOOP --> TOOLS
+    TOOLS --> PERM
+    LOOP --> DELEG
+    LOOP --> SELF
+    LOOP --> USAGE
+    GATE --> CLOUD
+    GATE --> SEAT
+    GATE --> LOCALP
+    SKILLS --> DB
+    MEM --> DB
+    TOOLS --> DB
+    GATE --> DB
+    USAGE --> DB
+    PERM --> DB
+    DEV -. verifies .-> core
+```
+
 ## Contents
 
+- [How it fits together](#how-it-fits-together)
 - [Highlights](#highlights)
 - [Requirements](#requirements)
 - [Install](#install)
