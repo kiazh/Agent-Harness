@@ -6,6 +6,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { type GatewayEvent, RpcError } from "./protocol.ts";
+import { isWorkspaceEvent, type WorkspaceEvent } from "./workspace/protocol.ts";
 
 type Pending = {
 	resolve: (value: unknown) => void;
@@ -15,6 +16,8 @@ type Pending = {
 
 export class JsonRpcChannel {
 	onEvent?: (event: GatewayEvent) => void;
+	/** Workspace notifications (plan §19): a separate family, never turn events. */
+	onWorkspaceEvent?: (event: WorkspaceEvent) => void;
 	private readonly send: (line: string) => void;
 	private readonly pending = new Map<number, Pending>();
 	private nextId = 1;
@@ -62,7 +65,14 @@ export class JsonRpcChannel {
 
 		if (message.method === "event") {
 			if (message.params && typeof message.params === "object") {
-				this.onEvent?.(message.params as GatewayEvent);
+				// Workspace notifications carry no session/turn identity and are
+				// routed to their own observer so they can never enter turn
+				// bookkeeping with fabricated IDs (plan §19).
+				if (isWorkspaceEvent(message.params as { type?: string })) {
+					this.onWorkspaceEvent?.(message.params as WorkspaceEvent);
+				} else {
+					this.onEvent?.(message.params as GatewayEvent);
+				}
 			}
 			return;
 		}
@@ -103,6 +113,8 @@ const STDERR_TAIL_LINES = 40;
 
 export class GatewayClient {
 	onEvent?: (event: GatewayEvent) => void;
+	/** Workspace notifications (plan §19). */
+	onWorkspaceEvent?: (event: WorkspaceEvent) => void;
 	/** Called once if the gateway process exits on its own. */
 	onExit?: (code: number | null, stderrTail: string[]) => void;
 
@@ -133,6 +145,7 @@ export class GatewayClient {
 			proc.stdin.write(line);
 		});
 		channel.onEvent = (event) => this.onEvent?.(event);
+		channel.onWorkspaceEvent = (event) => this.onWorkspaceEvent?.(event);
 		this.channel = channel;
 
 		this.stdoutInterface = createInterface({ input: proc.stdout! });
