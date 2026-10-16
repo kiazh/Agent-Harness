@@ -604,9 +604,14 @@ def _refusal_failure(
         context_window=refusal.budget_tokens,
         refusal=refusal.code,
     )
+    # Keep the stable legacy capacity phrase first: every capacity failure
+    # (legacy hard guard or projection refusal) reports the same user-facing
+    # "exceeds the model context window" signal, then the specific diagnosis
+    # and safe options. Callers/tests that match the stable phrase keep
+    # working while the refusal adds structured detail.
     options = " ".join(refusal.safe_options)
     return AgentResponse(
-        content=f"{refusal.message} Safe options: {options}",
+        content=f"{_CAPACITY_MESSAGE} {refusal.message} Safe options: {options}",
         outcome="failed",
         tool_calls=tool_calls_made if tool_calls_made is not None else [],
         tokens_used=total_tokens,

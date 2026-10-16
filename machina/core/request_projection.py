@@ -121,6 +121,11 @@ _PIN_KINDS = (
     "blockers",
     "task_state",
 )
+# Pins that frame a request and therefore render ahead of the current turn's
+# instruction (§14.3). Every other pin kind (read-only scope, blockers, task
+# state) is a derived runtime annotation: it renders *after* the instruction
+# so projection can never demote or drop the turn's instruction text.
+_GOVERNING_PIN_KINDS = frozenset({"objective", "constraints", "core_instructions"})
 _RETRIEVED_REASON = "retrieved_over_budget"
 _OLDER_GROUP_REASON = "older_group_over_budget"
 _REFUSAL_REASON = "capacity_refusal"
@@ -544,17 +549,52 @@ def _render_unit(
 
 def _compose(
     messages: Sequence[ProjectionMessage],
-    pin_messages: Sequence[Mapping[str, Any]],
+    pin_items: Sequence[RetainedPin],
     included: Collection[str],
     viewed: Mapping[str, str],
     native_cache: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Render the plan in canonical order: pins first, then units as planned."""
-    plan = [{"role": "system", "content": pin["content"]} for pin in pin_messages]
+    """Render the plan: governing pins, the instruction, derived pins, units.
+
+    Governing pins (objective, constraints, core instructions) frame the
+    request and render first. The current turn's instruction is the first
+    included ``required`` unit (the assembled user prompt); it renders ahead of
+    the derived scope/blockers/task-state pins so projection can never demote
+    or drop instruction text (§14.3). When no required unit is in the plan,
+    derived pins keep their canonical place directly after the governing pins
+    (pin-only and floor measurements are unchanged).
+    """
+    governing = [
+        {"role": "system", "content": pin.text}
+        for pin in pin_items
+        if pin.kind in _GOVERNING_PIN_KINDS
+    ]
+    derived = [
+        {"role": "system", "content": pin.text}
+        for pin in pin_items
+        if pin.kind not in _GOVERNING_PIN_KINDS
+    ]
+    instruction_id = next(
+        (
+            unit.unit_id
+            for unit in messages
+            if unit.kind == "required" and unit.unit_id in included
+        ),
+        None,
+    )
+    plan = list(governing)
+    if instruction_id is None:
+        plan.extend(derived)
+        for unit in messages:
+            if unit.unit_id in included:
+                plan.append(_render_unit(unit, native_cache, text=viewed.get(unit.unit_id)))
+        return plan
     for unit in messages:
         if unit.unit_id not in included:
             continue
         plan.append(_render_unit(unit, native_cache, text=viewed.get(unit.unit_id)))
+        if unit.unit_id == instruction_id:
+            plan.extend(derived)
     return plan
 
 
@@ -577,7 +617,6 @@ def project_request(inp: ProjectionInput) -> ProjectionResult:
         if unit.native_blocks is not None
     }
     pin_items = inp.pins.items()
-    pin_messages = [{"role": "system", "content": pin.text} for pin in pin_items]
 
     pinned_ids = {unit.unit_id for unit in messages if unit.protected}
     pinned_ids |= set(inp.pins.provider_required_blocks)
@@ -649,7 +688,7 @@ def project_request(inp: ProjectionInput) -> ProjectionResult:
             "included": included,
             "viewed": viewed,
             "revisions": {unit_id: view_texts[unit_id][1] for unit_id in viewed},
-            "plan": _compose(messages, pin_messages, included, viewed, native_cache),
+            "plan": _compose(messages, pin_items, included, viewed, native_cache),
         }
 
     cache: dict[tuple[str, int], tuple[bool, int, dict[str, Any]]] = {}
@@ -691,7 +730,7 @@ def project_request(inp: ProjectionInput) -> ProjectionResult:
                     counter,
                     revision,
                     messages,
-                    pin_messages,
+                    pin_items,
                     native_cache,
                     budget,
                     floor_measured,
@@ -755,7 +794,7 @@ def project_request(inp: ProjectionInput) -> ProjectionResult:
                 counter,
                 revision,
                 messages,
-                pin_messages,
+                pin_items,
                 native_cache,
                 budget,
                 final_tokens,
@@ -781,7 +820,7 @@ def project_request(inp: ProjectionInput) -> ProjectionResult:
             counter,
             revision,
             messages,
-            pin_messages,
+            pin_items,
             native_cache,
             budget,
             counter.last_tokens,
@@ -878,7 +917,7 @@ def _refusal(
     counter: _Counter,
     revision: str,
     messages: Sequence[ProjectionMessage],
-    pin_messages: Sequence[Mapping[str, Any]],
+    pin_items: Sequence[RetainedPin],
     native_cache: Mapping[str, Any],
     budget: int,
     floor_measured: int,
@@ -892,7 +931,7 @@ def _refusal(
         code, required = _diagnose(
             counter,
             messages,
-            pin_messages,
+            pin_items,
             native_cache,
             budget,
             floor_measured,
@@ -929,7 +968,7 @@ def _refusal(
 def _diagnose(
     counter: _Counter,
     messages: Sequence[ProjectionMessage],
-    pin_messages: Sequence[Mapping[str, Any]],
+    pin_items: Sequence[RetainedPin],
     native_cache: Mapping[str, Any],
     budget: int,
     floor_measured: int,
@@ -948,7 +987,7 @@ def _diagnose(
     def measure(ids: Collection[str]) -> int:
         key = frozenset(ids)
         if key not in cache:
-            cache[key] = counter(_compose(messages, pin_messages, key, {}, native_cache))
+            cache[key] = counter(_compose(messages, pin_items, key, {}, native_cache))
         return cache[key]
 
     pins_only = measure(())
