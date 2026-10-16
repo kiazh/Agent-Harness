@@ -118,6 +118,10 @@ interface TabHitArea {
  * Sanitization runs AFTER decoding so encoded control bytes (`%1B`, `%07`, …)
  * are neutralized rather than reconstructed for the terminal; every consumer
  * (breadcrumb, tab strip, problems rows) renders this already-safe string.
+ * Line breaks (`%0A`-decoded `\n`, plus `\r`/U+2028/U+2029) flatten to one
+ * space after sanitization: this is single-line chrome (tab strip,
+ * breadcrumb), and a preserved newline would skew the row layout. Only this
+ * path flattens; `sanitizeDisplay` keeps newlines for multi-line callers.
  */
 export function uriDisplayPath(uri: string): string {
 	let path = uri;
@@ -128,7 +132,7 @@ export function uriDisplayPath(uri: string): string {
 	} catch {
 		// Malformed percent-encoding: keep the raw path rather than throwing.
 	}
-	return sanitizeDisplay(path);
+	return sanitizeDisplay(path).replace(/[\n\r\u2028\u2029]/g, " ");
 }
 
 function pathSegments(path: string): string[] {

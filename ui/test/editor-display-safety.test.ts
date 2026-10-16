@@ -106,3 +106,24 @@ test("a raw control byte in a URI that sanitizes to an empty path never reaches 
 	assert.ok(!strip.includes("\x07"), "no BEL survives either");
 	assert.ok(!strip.includes("file://"), "the raw URI is not painted verbatim");
 });
+
+test("a percent-encoded newline in a URI flattens to one space in single-line chrome", () => {
+	// sanitizeDisplay preserves `\n` for multi-line callers, but the tab strip
+	// and breadcrumb are single-line: a `%0A` in a file name used to render a
+	// real newline inside the row element and skew the chrome layout.
+	const newlineUri = "file:///w/a%0Ab.py";
+	const benignUri = "file:///w/a%20b.py";
+	const label = uriDisplayPath(newlineUri);
+	assert.equal(label, "/w/a b.py");
+	assert.ok(!label.includes("\n"), "no newline survives uriDisplayPath");
+	assert.equal(label, uriDisplayPath(benignUri), "byte-equal to the space-joined counterpart");
+
+	const pane = setupPane(newlineUri);
+	pane.layout(8);
+	const rows = pane.render(80);
+	for (const [name, row] of [["tab strip", rows[0] ?? ""], ["breadcrumb", rows[1] ?? ""]] as const) {
+		assert.ok(!row.includes("\n"), `${name} stays on one physical row`);
+	}
+	assert.match(stripTerminalSequences(rows[0] ?? ""), /\[a b\.py ✕\]/);
+	assert.match(stripTerminalSequences(rows[1] ?? ""), /\/w\/a b\.py/);
+});
