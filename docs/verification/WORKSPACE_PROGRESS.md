@@ -102,6 +102,8 @@ This document keeps current evidence separate from historical baseline logs. Nev
 - UI committed state @ 9427928 re-run in an isolated worktree (`/private/tmp/opencode/machina-verify`, node_modules symlinked): `npm run check` exit 0 → 602 tests, 596 pass, 6 skip, 0 fail; eslint clean.
 - Python committed state: `run-tests.sh tests/test_workspace_service.py tests/test_workspace_gateway.py tests/test_lsp_transport.py tests/test_lsp_lifecycle.py tests/test_features_split.py` → 109 passed in 5.03s (includes pre-existing `test_gateway.py` DB-dependent failures reproduced at baseline and excluded here).
 - Note: DevTools' `machina` symlink shadows `PYTHONPATH`, so Python runs always exercise the live checkout — mid-wave runs are only meaningful when the relevant agents are idle.
+- CI-gate observation (pre-existing, NOT ours): `ruff format --check machina/ tools/` reports 13 unformatted files at baseline (`api/routes/streaming.py`, `core/provider/ollama.py`, `core/turn_engine.py`, `gateway/__main__.py`, `gateway/features/secrets.py`, `memory/store.py`, `permissions/{broker,policy,store}.py`, `rag/pipeline.py`, `security/{env_file,providers}.py`, `tools/file.py`). None are touched by this feature; all files we added/modified are format-clean. Left untouched deliberately (no unrelated audit backlog smuggling); flagged for the maintainers.
+- Bandit sweep on new modules: 0 medium/high issues (CI uses `-ll`).
 
 ## Task record template (from plan §26)
 
