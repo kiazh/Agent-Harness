@@ -9,6 +9,17 @@ Design laws applied to TUI: hierarchy via weight/dim + one accent; spacing rhyth
 uniform padding); every label earns its place (no restated words); states carry text,
 never color alone; borders are structure, not decoration.
 
+## CodeRabbit pass 1 triage (b0db077..HEAD)
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| didOpen sent profile language, not the document's protocol id (.tsx/.js grammar family) | major | **FIXED** (service.py uses `language_id_for`; regression added to integration suite; 31/31) |
+| Problems duplicates: push keyed `pyright`, pull keyed `Pyright` | major | **FIXED at root** (backend tags each row with producer; TS narrowing parses producer objects + rows; refresh groups by producer key; 2 new tests) |
+| Runbook personal absolute paths | minor | **FIXED** (env vars + setup note; zero /Users/shadow paths) |
+| Ctrl+Left/Right maximize before region gate | minor | queued: closing pass (app.ts locked; composer word-motion must win) |
+| Flush pending edit sync before intelligence request | major | queued: closing pass (`controller.request` must `await flushPending(document.id)` so the debounced didChange precedes the request; this is the second reason live completion never visibly rendered) |
+| Ctrl+V in editor region pastes into the composer | minor | queued: closing pass (region-aware paste routing; EditorView clipboard path handles it) |
+
 ## Findings and required changes
 
 1. **Empty editor restates itself.** Strip shows `No open files`, viewport shows

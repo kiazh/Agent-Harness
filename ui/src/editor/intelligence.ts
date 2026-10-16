@@ -377,6 +377,12 @@ export interface NarrowedDiagnostic {
 	message: string;
 	source?: string;
 	code?: string | number;
+	/**
+	 * Backend producer key (the same key workspace.diagnostics events use).
+	 * Pulled payloads tag every row with it; display `source` stays the
+	 * server's own label ("Pyright"), which must never be used as the key.
+	 */
+	producer?: string;
 }
 
 function narrowSeverity(value: unknown): DiagnosticSeverity {
@@ -394,6 +400,7 @@ function narrowDiagnosticEntry(raw: unknown): NarrowedDiagnostic | undefined {
 		message: raw.message,
 	};
 	if (typeof raw.source === "string" && raw.source.length > 0) diagnostic.source = raw.source;
+	if (typeof raw.producer === "string" && raw.producer.length > 0) diagnostic.producer = raw.producer;
 	if (typeof raw.code === "string" || (typeof raw.code === "number" && Number.isFinite(raw.code))) {
 		diagnostic.code = raw.code;
 	}
@@ -424,7 +431,13 @@ export function narrowDiagnosticsPayload(payload: unknown): NarrowedDiagnosticsP
 	const producers: string[] = [];
 	if (Array.isArray(payload.producers)) {
 		for (const entry of payload.producers) {
-			if (typeof entry === "string" && entry.length > 0) producers.push(entry);
+			// The backend sends producer objects ({source, version, freshness,
+			// count}); older payloads sent bare strings. Accept both.
+			if (typeof entry === "string" && entry.length > 0) {
+				producers.push(entry);
+			} else if (isRecord(entry) && typeof entry.source === "string" && entry.source.length > 0) {
+				producers.push(entry.source);
+			}
 		}
 	}
 	return {
@@ -1260,7 +1273,15 @@ export class ProblemsModel {
 		const effectiveVersion = result.documentVersion !== null ? result.documentVersion : version;
 		const groups = new Map<string, ProblemRow[]>();
 		for (const diagnostic of payload.diagnostics) {
-			const producer = diagnostic.source ?? "";
+			// Group under the BACKEND producer key so a pull replaces the set a
+			// workspace.diagnostics push created instead of adding duplicate
+			// rows under the server's display label ("Pyright" vs "pyright").
+			// Single-producer payloads attribute unattributed rows to that key.
+			const producer =
+				diagnostic.producer ??
+				(payload.producers.length === 1 ? payload.producers[0] : undefined) ??
+				diagnostic.source ??
+				"";
 			const rows = groups.get(producer) ?? [];
 			rows.push(this.toRow(uri, producer, effectiveVersion, diagnostic));
 			groups.set(producer, rows);

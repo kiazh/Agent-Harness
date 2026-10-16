@@ -413,3 +413,44 @@ test("the popup wins contested slot rows; problems never overdraw the allocation
 	assert.equal(after.length, 12);
 	assert.match(after[8] ?? "", /✗ 1 · ! 1 · i 1/, "the problems section returns once the popup unmounts");
 });
+
+test("a pull replaces the set a push created (no duplicate rows from producer labels)", async () => {
+	// CodeRabbit pass-1 finding, matches the live-frame duplicate: events key
+	// by the backend producer ("pyright") while pulls keyed by the server's
+	// display label ("Pyright"), so the same diagnostic appeared twice.
+	const model = new ProblemsModel({
+		request: async () =>
+			ok({
+				diagnostics: [
+					{ ...diagnostic(2, 6, 1, 'Argument of type "Literal[123]" cannot be assigned'), source: "Pyright", producer: "pyright" },
+				],
+				omitted: 0,
+				producers: [{ source: "pyright", version: 2, freshness: "versioned", count: 1 }],
+			}),
+	});
+	model.push({
+		uri: URI,
+		version: 2,
+		source: "pyright",
+		diagnostics: [diagnostic(2, 6, 1, 'Argument of type "Literal[123]" cannot be assigned')],
+	});
+	assert.equal(model.rows().length, 1, "event push stored one row");
+	await model.refresh(URI, 2);
+	assert.equal(model.rows().length, 1, "refresh replaced the same producer's set, not added a duplicate");
+	assert.deepEqual(model.producers(), ["pyright"], "one producer key survives");
+});
+
+test("legacy string producers and unattributed rows still map to one key", async () => {
+	const model = new ProblemsModel({
+		request: async () =>
+			ok({
+				diagnostics: [diagnostic(0, 0, 2, "unused import")],
+				omitted: 0,
+				producers: ["pyright"],
+			}),
+	});
+	await model.refresh(URI, 1);
+	const rows = model.rows();
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0]?.producer, "pyright", "single-producer payload attributes unattributed rows");
+});

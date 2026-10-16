@@ -103,6 +103,7 @@ from machina.workspace.models import (
     diagnostics_event,
     file_changed_event,
     index_progress_event,
+    language_id_for,
     lsp_language_for,
     lsp_state_event,
 )
@@ -121,6 +122,18 @@ _BASE_CAPABILITIES = (
     "close",
 )
 _TRUSTED_CAPABILITIES = ("intelligence", "lspStatus", "lspControl")
+
+#: Operations the bounded agent-facing ``code_intelligence`` tool exposes
+#: (plan §20). Single source for the tool schema enum, the self-knowledge
+#: brief and its tests: tool modules may import this, and ``machina.core``
+#: may import it, so the three surfaces cannot drift apart.
+CODE_INTELLIGENCE_OPERATIONS = (
+    "diagnostics",
+    "definition",
+    "references",
+    "symbols",
+    "hover",
+)
 
 #: How long a requested didOpen may wait for the handshake before reporting a
 #: truthful ``starting``/``initializing`` (the reopen hook completes it later).
@@ -283,6 +296,10 @@ class WorkspaceService:
             language: lsp_module.resolve_profile(language) is not None
             for language in LSP_PROFILE_LANGUAGES
         }
+        # T10 (plan §20): the process-wide "the app opened this workspace"
+        # registry (one workspace per process, v1). Last open wins; close only
+        # clears when this service is still the active one.
+        set_active_workspace_service(self)
         return self._identity
 
     def close(self) -> dict[str, Any]:
@@ -299,6 +316,7 @@ class WorkspaceService:
         self._files = None
         self._identity = None
         self._generation += 1
+        clear_active_workspace_service(self)
         manager = self._lsp_manager
         if manager is not None:
             self._request_manager_stop(manager)
@@ -865,7 +883,16 @@ class WorkspaceService:
         record = self._open_records.get(uri)
         generation = int(connection.generation)
         if record is None or record.generation != generation:
-            connection.did_open(uri, language, mirror_version, snapshot["text"])
+            # didOpen carries the DOCUMENT's protocol languageId (what the
+            # server uses for language behavior, e.g. "typescriptreact" for
+            # .tsx), while `language` above only selected the server profile
+            # by extension. Prefer the extension mapping; fall back to the
+            # client-declared id when the extension has no mapping.
+            protocol_language = language_id_for(uri)
+            if protocol_language == "plaintext":
+                declared = snapshot.get("languageId")
+                protocol_language = str(declared) if declared else language
+            connection.did_open(uri, protocol_language, mirror_version, snapshot["text"])
             self._open_records[uri] = _OpenRecord(
                 language=language, version=mirror_version, generation=generation
             )
@@ -1241,7 +1268,11 @@ class WorkspaceService:
                     "count": len(stored.diagnostics),
                 }
             )
-            combined.extend(stored.diagnostics)
+            # Tag every row with its producer key so clients group pulled
+            # diagnostics under the SAME key as workspace.diagnostics events
+            # (otherwise the display source string duplicates the set).
+            for diagnostic in stored.diagnostics:
+                combined.append({**diagnostic, "producer": stored.producer})
             omitted += stored.omitted
         capped = combined[:MAX_DIAGNOSTICS_PER_FILE]
         omitted += len(combined) - len(capped)
@@ -1715,3 +1746,110 @@ class WorkspaceService:
                 done,
             )
         )
+
+    # ─── T10 read-only facts for agent awareness (plan §20) ────────────────
+    def resolve_workspace_uri(self, path: str) -> str:
+        """Canonical file URI for one workspace-relative path (T10 tool seam).
+
+        Additive read-only helper: ``WorkspaceFiles.normalized_rel`` validates
+        the shape (NUL/absolute/``..``/backslash forms are structured
+        ``denied`` refusals) and ``_uri_to_rel`` re-runs real containment, so
+        a symlink escape or an outside path can never yield a URI.
+        """
+        files = self._require_files()
+        rel = files.normalized_rel(path)
+        uri = self._rel_to_uri(rel)
+        self._uri_to_rel(uri)  # real-path containment (raises on an escape)
+        return uri
+
+    def status_facts(self) -> dict[str, Any] | None:
+        """Sync, truth-only facts for self-knowledge and status surfaces.
+
+        ``None`` when no workspace is open. Never file contents, diagnostics
+        text or unsaved buffer text: the root *label* (basename only, never
+        the full path), trust/epoch, the open-time profile resolution
+        snapshot merged with the attached manager's synchronously-readable
+        per-language state, and the open-mirror count. A manager whose status
+        is only awaitable reports ``unknown`` here; the async ``lsp_status``
+        RPC read stays the live path for clients.
+        """
+        identity = self._identity
+        if identity is None:
+            return None
+        live_states: dict[str, str] = {}
+        generations: dict[str, int] = {}
+        manager = self._lsp_manager
+        if manager is not None:
+            status = getattr(manager, "status", None)
+            if callable(status) and not inspect.iscoroutinefunction(status):
+                try:
+                    payload = status()
+                except Exception:
+                    logger.debug("lsp manager status failed", exc_info=True)
+                    payload = None
+                if not inspect.isawaitable(payload):
+                    rows = payload.get("servers") if isinstance(payload, Mapping) else payload
+                    if isinstance(rows, (list, tuple)):
+                        for row in rows:
+                            if not isinstance(row, Mapping):
+                                continue
+                            language = row.get("languageId")
+                            state = row.get("state")
+                            if not isinstance(language, str) or not isinstance(state, str):
+                                continue
+                            live_states[language] = state
+                            generation = row.get("generation")
+                            if isinstance(generation, int) and not isinstance(generation, bool):
+                                generations[language] = generation
+        profiles: dict[str, dict[str, Any]] = {}
+        for language in LSP_PROFILE_LANGUAGES:
+            resolved = bool(self._profiles.get(language))
+            if language in live_states:
+                state = live_states[language]
+            elif resolved and manager is not None:
+                state = STATE_STOPPED  # resolved at open, not started yet
+            else:
+                state = STATE_MISSING
+            profiles[language] = {
+                "resolved": resolved,
+                "state": state,
+                "generation": generations.get(language, 0),
+            }
+        mirrors = len(self._documents.uris()) if self._documents is not None else 0
+        return {
+            "available": True,
+            "root_label": identity.root_label,
+            "trusted": identity.trusted,
+            "epoch": identity.epoch,
+            "mirrors": mirrors,
+            "profiles": profiles,
+        }
+
+
+# ─── active workspace registry (T10, plan §20; one workspace per process) ───
+_active_workspace_service: WorkspaceService | None = None
+
+
+def active_workspace_service() -> WorkspaceService | None:
+    """The service an open workspace is bound to in this process, else ``None``.
+
+    ``WorkspaceService.open`` registers the instance and ``close`` clears it,
+    so self-knowledge, ``harness_status`` and read-only tools reach the SAME
+    instance the gateway opened — never a second service or manager. v1 keeps
+    a single workspace per process: the most recently opened instance wins,
+    and a service only clears the registry while it is still the active one.
+    """
+    return _active_workspace_service
+
+
+def set_active_workspace_service(service: WorkspaceService | None) -> None:
+    """Register *service* as the process's active workspace (or ``None``)."""
+    global _active_workspace_service
+    _active_workspace_service = service
+
+
+def clear_active_workspace_service(service: WorkspaceService | None = None) -> None:
+    """Clear the registry; identity-checked unless called with ``None``."""
+    global _active_workspace_service
+    if service is None or _active_workspace_service is service:
+        _active_workspace_service = None
