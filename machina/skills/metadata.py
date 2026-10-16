@@ -143,6 +143,13 @@ V2_FIELDS = frozenset(
         "sections",
     }
 )
+
+#: Provenance recorded when catalog metadata is machine-generated at install
+#: time (``machina.skills.enrich``). Recognized in front matter — never an
+#: opaque extension warning, never routed on, never authority-shaped — and
+#: deliberately excluded from the strict sidecar field set (sidecars are
+#: machine-written routing data, not an install audit trail).
+PROVENANCE_FIELDS = frozenset({"metadata_source", "metadata_generated_at"})
 STACK_FIELDS = frozenset({"languages", "frameworks", "independent"})
 SECTION_FIELDS = frozenset({"id", "heading", "stage", "requires_sections"})
 
@@ -799,6 +806,8 @@ def _extensions(values: Mapping[str, Any], *, policy: str, warn: _Warn) -> dict[
     # set: a smuggled ``description``/``source_type`` must be rejected, not
     # silently accepted and ignored.
     known = V1_FRONTMATTER_FIELDS | V2_FIELDS if policy != "reject" else V2_FIELDS
+    if policy != "reject":
+        known |= PROVENANCE_FIELDS
     extensions: dict[str, Any] = {}
     dropped_for_size = 0
     for key in sorted(key for key in values if key not in known):

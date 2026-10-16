@@ -100,6 +100,18 @@ def launch_ui(
     # from MACHINA_GATEWAY_TOKEN and includes it in the initialize call.
     gateway_token = secrets.token_hex(32)
     env = {**os.environ, "MACHINA_PYTHON": sys.executable, "MACHINA_GATEWAY_TOKEN": gateway_token}
+    # Transparent background (persisted config): export it so the UI applies the
+    # setting before its first frame instead of flashing the opaque canvas. The
+    # UI also re-applies the value from config.get, so a direct `npm start`
+    # launch is still correct (just later).
+    try:
+        from machina.core.config import get_config
+
+        if get_config().get("transparent_background"):
+            env["MACHINA_TRANSPARENT_BACKGROUND"] = "1"
+    except Exception:
+        # Best-effort: a config read must never block the interactive UI.
+        pass
     # Config-gated Firecrawl/SearXNG stack lifecycle (off by default): the
     # interactive session brings the local stack up in the background and the
     # last live session stops containers + VM on exit. Fail-open by contract —

@@ -13,7 +13,7 @@ import asyncio
 import logging
 import shutil
 
-from machina.skills import repo_install
+from machina.skills import enrich, repo_install
 from machina.skills.registry import skill_registry
 from machina.tools.base import registry
 from machina.tools.file import _run_worker_joined
@@ -134,7 +134,9 @@ def _stage_result(plan, source, revision) -> str:
     description=(
         "Install staged repo skills for an exact reviewed digest from repo_stage. "
         "Re-verifies every file, validates SKILL.md files, and refuses on any "
-        "change, conflict, or validation failure. Never executes repo code."
+        "change, conflict, or validation failure. Never executes repo code. "
+        "Each installed skill's v2 catalog metadata (task families, capabilities) "
+        "is generated once on install; never regenerate it when already present."
     ),
     parameters={
         "type": "object",
@@ -158,6 +160,25 @@ async def repo_activate(digest: str) -> str:
         return "Error: activation failed (filesystem error)"
 
 
+def _generate_installed_metadata(names: list[str]) -> None:
+    """One-time v2 metadata generation for freshly installed skills.
+
+    Runs in the activation worker thread (no event loop), so the sync bridge
+    is safe. Idempotent and fail-open: a failed generation is reported and
+    never fails the install or rolls it back.
+    """
+    for name in names:
+        skill = skill_registry.get(name)
+        if skill is None:
+            continue
+        try:
+            enrich.ensure_skill_metadata_sync(
+                skill, agent_seam=enrich.default_agent_seam(), registry=skill_registry
+            )
+        except Exception:  # noqa: BLE001 - metadata generation never fails an install
+            logger.warning("skill metadata generation failed for %s", name, exc_info=True)
+
+
 def _activate_result(detail, staged, skills_dir) -> str:
     installed = repo_install.activate_plan(detail, staged, skills_dir)
     if not installed:
@@ -171,6 +192,7 @@ def _activate_result(detail, staged, skills_dir) -> str:
             "skill registry needs a reload before they are visible. "
             "No repo code was executed."
         )
+    _generate_installed_metadata(installed)
     return (
         f"Installed {len(installed)} skill(s): {', '.join(installed)}. "
         "No repo code was executed. MCP drafts (if any) still need human /mcp review."

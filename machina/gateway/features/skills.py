@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from machina import services
 from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, OPERATION_FAILED, RpcError
 from machina.gateway.features._common import _bool, _int, _skill, _str, _uuid
+from machina.observability.diagnostics import record_failure
 
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
@@ -117,6 +118,26 @@ def _registry():
     return skill_registry
 
 
+async def _generate_installed_metadata(gw: Gateway, skill: Any) -> None:
+    """One-time v2 metadata generation for a freshly installed/learned skill.
+
+    Install and learn surfaces call this once per new skill so the
+    deterministic selector has metadata from first use. Idempotent (a skill
+    that already carries ``schema_version`` is skipped) and fail-open: a
+    provider or validation failure reports and leaves the skill on its
+    baseline path, never failing the install.
+    """
+    from machina.skills import enrich
+
+    try:
+        seam = enrich.default_agent_seam(
+            provider=getattr(gw, "provider", None), model=getattr(gw, "model", None)
+        )
+        await enrich.ensure_skill_metadata(skill, agent_seam=seam, registry=_registry())
+    except Exception as exc:  # noqa: BLE001 - metadata generation never fails an install
+        record_failure("gateway.skills.learn.metadata", exc)
+
+
 async def skills_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """List all skills."""
     gw.require_db()
@@ -156,6 +177,7 @@ async def skills_learn(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         )
     except services.ServiceError as e:
         raise RpcError(OPERATION_FAILED, str(e)) from None
+    await _generate_installed_metadata(gw, skill)
     return {"skill": _skill(skill)}
 
 

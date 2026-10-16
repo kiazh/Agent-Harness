@@ -1129,6 +1129,73 @@ class SkillRegistry(SkillSource):
                 pass
             raise
 
+    def persist_skill_metadata(self, skill: Skill, metadata: SkillMetadata) -> None:
+        """Merge validated v2 metadata into a skill's SKILL.md front matter.
+
+        Only the front-matter block is re-serialized; the instruction body is
+        copied byte-for-byte (unlike ``_write_skill_file``, which re-emits the
+        parsed body). The write is atomic — temp file + fsync + replace, the
+        ``_write_skill_file`` idiom — and the live object is published only
+        after the write succeeds. Used by one-time metadata generation at
+        install/learn time (``machina.skills.enrich``): a later load then sees
+        ``schema_version`` and never regenerates. Honest provenance
+        (``metadata_source``/``metadata_generated_at``) is recorded so an
+        operator can tell generated metadata from authored metadata.
+        """
+        path = Path(skill.file_path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise OSError(f"cannot read skill file {path}: {exc}") from exc
+        match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.DOTALL)
+        if match:
+            yaml_text, body = match.group(1), match.group(2)
+            try:
+                frontmatter = yaml.safe_load(yaml_text) or {}
+            except yaml.YAMLError:
+                frontmatter = {}
+            if not isinstance(frontmatter, dict):
+                frontmatter = {}
+        else:
+            frontmatter = {
+                "name": skill.name,
+                "description": skill.description,
+                "triggers": skill.triggers,
+                "version": skill.version,
+                "enabled": skill.enabled,
+                "created_at": skill.created_at.isoformat(),
+                "source": skill.source,
+                "source_type": skill.source_type,
+            }
+            body = text
+        frontmatter.setdefault("name", skill.name)
+        frontmatter.update(metadata.to_dict())
+        frontmatter["metadata_source"] = "generated"
+        frontmatter["metadata_generated_at"] = datetime.now(UTC).isoformat()
+        yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
+        merged = f"---\n{yaml_text}---\n{body}"
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent)
+        )
+        try:
+            if hasattr(os, "fchmod"):  # not available on Windows
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(merged)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, path)
+        except BaseException:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            raise
+        skill.skill_metadata = metadata
+        self._invalidate()
+
     def update_skill(
         self,
         name: str,
@@ -1471,7 +1538,7 @@ class SkillHub:
             raise SkillHubError(
                 f"Skill '{name}' hub entry has no publishable content; publish it again"
             )
-        return self.registry.create_skill(
+        skill = self.registry.create_skill(
             name=entry_name,
             description=description,
             content=content,
@@ -1480,6 +1547,17 @@ class SkillHub:
             source_type="hub",
             version=version,
         )
+        # One-time v2 metadata generation for the freshly installed skill.
+        # Deferred import keeps the registry's module-level machina edges pinned
+        # to the ports+observability seam (test_architecture_pairs); the sync
+        # bridge is fail-open and idempotent, so a failed generation never
+        # blocks or rolls back the install.
+        from machina.skills import enrich
+
+        enrich.ensure_skill_metadata_sync(
+            skill, agent_seam=enrich.default_agent_seam(), registry=self.registry
+        )
+        return skill
 
     def get_hub_telemetry(self) -> list[dict[str, Any]]:
         """Get telemetry for all hub skills."""
