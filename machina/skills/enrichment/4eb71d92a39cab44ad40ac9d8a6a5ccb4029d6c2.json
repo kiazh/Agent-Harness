@@ -1,0 +1,806 @@
+{
+  "schema_version": 1,
+  "revision": "4eb71d92a39cab44ad40ac9d8a6a5ccb4029d6c2",
+  "skills": {
+    "ecc-search-first": {
+      "task_families": [
+        "research"
+      ],
+      "capabilities": [],
+      "aliases": [
+        "search-first",
+        "research-before-code",
+        "search-before-build"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [
+        "a concrete feature or dependency decision to research before coding"
+      ],
+      "required_tools": [
+        "web_search"
+      ],
+      "exclusions": [
+        "purely conceptual question that needs no external evidence"
+      ],
+      "sections": [
+        {
+          "id": "workflow",
+          "heading": "Workflow",
+          "stage": "inspect"
+        },
+        {
+          "id": "decision-matrix",
+          "heading": "Decision Matrix",
+          "stage": "plan"
+        },
+        {
+          "id": "preflight",
+          "heading": "Step 0: Tool Availability Preflight",
+          "stage": "inspect",
+          "requires_sections": [
+            "workflow"
+          ]
+        },
+        {
+          "id": "anti-patterns",
+          "heading": "Anti-Patterns",
+          "stage": "review"
+        }
+      ]
+    },
+    "ecc-tdd-workflow": {
+      "task_families": [
+        "testing"
+      ],
+      "capabilities": [
+        "test-authoring"
+      ],
+      "aliases": [
+        "tdd",
+        "test-driven-development",
+        "red-green-refactor"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [
+        "a test runner that can execute the project's suite"
+      ],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "principles",
+          "heading": "Core Principles",
+          "stage": "plan"
+        },
+        {
+          "id": "plan-handoff",
+          "heading": "Plan Handoff",
+          "stage": "plan"
+        },
+        {
+          "id": "workflow-steps",
+          "heading": "TDD Workflow Steps",
+          "stage": "implement",
+          "requires_sections": [
+            "principles"
+          ]
+        },
+        {
+          "id": "testing-patterns",
+          "heading": "Testing Patterns",
+          "stage": "implement",
+          "requires_sections": [
+            "workflow-steps"
+          ]
+        },
+        {
+          "id": "coverage",
+          "heading": "Test Coverage Verification",
+          "stage": "verify"
+        },
+        {
+          "id": "mistakes",
+          "heading": "Common Testing Mistakes to Avoid",
+          "stage": "review"
+        }
+      ]
+    },
+    "ecc-verification-loop": {
+      "task_families": [
+        "testing",
+        "maintenance"
+      ],
+      "capabilities": [
+        "test-authoring",
+        "observability"
+      ],
+      "aliases": [
+        "verification-loop",
+        "verify-changes",
+        "pre-ship-checks"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "phases",
+          "heading": "Verification Phases",
+          "stage": "verify"
+        },
+        {
+          "id": "output-format",
+          "heading": "Output Format",
+          "stage": "deliver"
+        },
+        {
+          "id": "continuous-mode",
+          "heading": "Continuous Mode",
+          "stage": "maintain"
+        },
+        {
+          "id": "integration",
+          "heading": "Integration with Hooks",
+          "stage": "maintain"
+        }
+      ]
+    },
+    "ecc-security-review": {
+      "task_families": [
+        "security-review"
+      ],
+      "capabilities": [
+        "authentication",
+        "error-handling"
+      ],
+      "aliases": [
+        "security-audit",
+        "secure-review",
+        "appsec-review"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [
+        "a diff, module, or endpoint surface to review"
+      ],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "checklist",
+          "heading": "Security Checklist",
+          "stage": "review"
+        },
+        {
+          "id": "testing",
+          "heading": "Security Testing",
+          "stage": "verify"
+        },
+        {
+          "id": "pre-deployment",
+          "heading": "Pre-Deployment Security Checklist",
+          "stage": "deliver"
+        }
+      ]
+    },
+    "ecc-python-testing": {
+      "task_families": [
+        "testing"
+      ],
+      "capabilities": [
+        "test-authoring"
+      ],
+      "aliases": [
+        "pytest",
+        "python-tests",
+        "python-testing"
+      ],
+      "stack": {
+        "languages": [
+          "python"
+        ],
+        "frameworks": [
+          "pytest"
+        ],
+        "independent": false
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "philosophy",
+          "heading": "Core Testing Philosophy",
+          "stage": "plan"
+        },
+        {
+          "id": "pytest-fundamentals",
+          "heading": "pytest Fundamentals",
+          "stage": "implement"
+        },
+        {
+          "id": "fixtures",
+          "heading": "Fixtures",
+          "stage": "implement"
+        },
+        {
+          "id": "mocking",
+          "heading": "Mocking and Patching",
+          "stage": "implement"
+        },
+        {
+          "id": "best-practices",
+          "heading": "Best Practices",
+          "stage": "verify"
+        },
+        {
+          "id": "quick-reference",
+          "heading": "Quick Reference",
+          "stage": "maintain"
+        }
+      ]
+    },
+    "ecc-fastapi-patterns": {
+      "task_families": [
+        "backend-api"
+      ],
+      "capabilities": [
+        "api-design",
+        "type-safety"
+      ],
+      "aliases": [
+        "fastapi",
+        "fastapi-service",
+        "async-api"
+      ],
+      "stack": {
+        "languages": [
+          "python"
+        ],
+        "frameworks": [
+          "fastapi"
+        ],
+        "independent": false
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "app-factory",
+          "heading": "App Factory and Lifespan",
+          "stage": "implement"
+        },
+        {
+          "id": "schemas",
+          "heading": "Pydantic Schemas (v2)",
+          "stage": "implement"
+        },
+        {
+          "id": "dependency-injection",
+          "heading": "Dependency Injection",
+          "stage": "implement"
+        },
+        {
+          "id": "router",
+          "heading": "Router and Endpoint Design",
+          "stage": "implement"
+        },
+        {
+          "id": "testing",
+          "heading": "Testing with httpx and pytest",
+          "stage": "verify"
+        },
+        {
+          "id": "anti-patterns",
+          "heading": "Anti-Patterns",
+          "stage": "review"
+        }
+      ]
+    },
+    "ecc-python-patterns": {
+      "task_families": [
+        "backend-api",
+        "refactoring"
+      ],
+      "capabilities": [
+        "type-safety",
+        "error-handling"
+      ],
+      "aliases": [
+        "python-patterns",
+        "pythonic",
+        "python-style"
+      ],
+      "stack": {
+        "languages": [
+          "python"
+        ],
+        "frameworks": [],
+        "independent": false
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "type-hints",
+          "heading": "Type Hints",
+          "stage": "implement"
+        },
+        {
+          "id": "error-handling",
+          "heading": "Error Handling Patterns",
+          "stage": "implement"
+        },
+        {
+          "id": "context-managers",
+          "heading": "Context Managers",
+          "stage": "implement"
+        },
+        {
+          "id": "concurrency",
+          "heading": "Concurrency Patterns",
+          "stage": "implement"
+        },
+        {
+          "id": "anti-patterns",
+          "heading": "Anti-Patterns to Avoid",
+          "stage": "review"
+        }
+      ]
+    },
+    "ecc-api-design": {
+      "task_families": [
+        "backend-api"
+      ],
+      "capabilities": [
+        "api-design",
+        "authentication",
+        "error-handling"
+      ],
+      "aliases": [
+        "rest-api",
+        "api-conventions",
+        "api-guidelines"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "resource-design",
+          "heading": "Resource Design",
+          "stage": "plan"
+        },
+        {
+          "id": "http-methods",
+          "heading": "HTTP Methods and Status Codes",
+          "stage": "implement"
+        },
+        {
+          "id": "response-format",
+          "heading": "Response Format",
+          "stage": "implement"
+        },
+        {
+          "id": "pagination",
+          "heading": "Pagination",
+          "stage": "implement"
+        },
+        {
+          "id": "auth",
+          "heading": "Authentication and Authorization",
+          "stage": "review"
+        },
+        {
+          "id": "versioning",
+          "heading": "Versioning",
+          "stage": "plan"
+        },
+        {
+          "id": "checklist",
+          "heading": "API Design Checklist",
+          "stage": "review"
+        }
+      ]
+    },
+    "ecc-database-migrations": {
+      "task_families": [
+        "backend-api",
+        "deployment"
+      ],
+      "capabilities": [
+        "database",
+        "migration"
+      ],
+      "aliases": [
+        "db-migrations",
+        "schema-migrations",
+        "migration-safety"
+      ],
+      "stack": {
+        "languages": [
+          "sql"
+        ],
+        "frameworks": [
+          "postgres"
+        ],
+        "independent": false
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "safety-checklist",
+          "heading": "Migration Safety Checklist",
+          "stage": "plan"
+        },
+        {
+          "id": "postgres",
+          "heading": "PostgreSQL Patterns",
+          "stage": "implement"
+        },
+        {
+          "id": "zero-downtime",
+          "heading": "Zero-Downtime Migration Strategy",
+          "stage": "implement",
+          "requires_sections": [
+            "postgres"
+          ]
+        },
+        {
+          "id": "anti-patterns",
+          "heading": "Anti-Patterns",
+          "stage": "review"
+        }
+      ]
+    },
+    "ecc-postgres-patterns": {
+      "task_families": [
+        "backend-api",
+        "data-analysis"
+      ],
+      "capabilities": [
+        "database",
+        "performance"
+      ],
+      "aliases": [
+        "postgres",
+        "postgresql",
+        "pg-tuning"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [
+          "postgres"
+        ],
+        "independent": false
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "quick-reference",
+          "heading": "Quick Reference",
+          "stage": "implement"
+        }
+      ]
+    },
+    "ecc-docker-patterns": {
+      "task_families": [
+        "deployment"
+      ],
+      "capabilities": [
+        "configuration"
+      ],
+      "aliases": [
+        "docker",
+        "docker-compose",
+        "containers"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [
+          "docker"
+        ],
+        "independent": false
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "compose",
+          "heading": "Docker Compose for Local Development",
+          "stage": "implement"
+        },
+        {
+          "id": "networking",
+          "heading": "Networking",
+          "stage": "implement"
+        },
+        {
+          "id": "container-security",
+          "heading": "Container Security",
+          "stage": "review"
+        },
+        {
+          "id": "debugging",
+          "heading": "Debugging",
+          "stage": "debug"
+        },
+        {
+          "id": "anti-patterns",
+          "heading": "Anti-Patterns",
+          "stage": "review"
+        }
+      ]
+    },
+    "ecc-deployment-patterns": {
+      "task_families": [
+        "deployment"
+      ],
+      "capabilities": [
+        "configuration",
+        "observability"
+      ],
+      "aliases": [
+        "deployment",
+        "release",
+        "production-readiness"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "strategies",
+          "heading": "Deployment Strategies",
+          "stage": "deliver"
+        },
+        {
+          "id": "docker",
+          "heading": "Docker",
+          "stage": "deliver"
+        },
+        {
+          "id": "ci-cd",
+          "heading": "CI/CD Pipeline",
+          "stage": "deliver"
+        },
+        {
+          "id": "health-checks",
+          "heading": "Health Checks",
+          "stage": "verify"
+        },
+        {
+          "id": "rollback",
+          "heading": "Rollback Strategy",
+          "stage": "maintain"
+        },
+        {
+          "id": "readiness",
+          "heading": "Production Readiness Checklist",
+          "stage": "verify"
+        }
+      ]
+    },
+    "ecc-error-handling": {
+      "task_families": [
+        "backend-api",
+        "refactoring"
+      ],
+      "capabilities": [
+        "error-handling"
+      ],
+      "aliases": [
+        "error-handling",
+        "exceptions",
+        "failure-handling"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "principles",
+          "heading": "Core Principles",
+          "stage": "plan"
+        },
+        {
+          "id": "typescript",
+          "heading": "TypeScript / JavaScript",
+          "stage": "implement"
+        },
+        {
+          "id": "python",
+          "heading": "Python",
+          "stage": "implement"
+        },
+        {
+          "id": "retry",
+          "heading": "Retry with Exponential Backoff",
+          "stage": "implement"
+        },
+        {
+          "id": "user-messages",
+          "heading": "User-Facing Error Messages",
+          "stage": "deliver"
+        },
+        {
+          "id": "checklist",
+          "heading": "Error Handling Checklist",
+          "stage": "review"
+        }
+      ]
+    },
+    "ecc-git-workflow": {
+      "task_families": [
+        "maintenance"
+      ],
+      "capabilities": [
+        "cli"
+      ],
+      "aliases": [
+        "git",
+        "version-control",
+        "commit-conventions"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "branching",
+          "heading": "Branching Strategies",
+          "stage": "plan"
+        },
+        {
+          "id": "commits",
+          "heading": "Commit Messages",
+          "stage": "implement"
+        },
+        {
+          "id": "merge-rebase",
+          "heading": "Merge vs Rebase",
+          "stage": "implement"
+        },
+        {
+          "id": "pr-workflow",
+          "heading": "Pull Request Workflow",
+          "stage": "deliver"
+        },
+        {
+          "id": "conflict-resolution",
+          "heading": "Conflict Resolution",
+          "stage": "debug"
+        },
+        {
+          "id": "anti-patterns",
+          "heading": "Anti-Patterns",
+          "stage": "review"
+        }
+      ]
+    },
+    "ecc-architecture-decision-records": {
+      "task_families": [
+        "documentation",
+        "research"
+      ],
+      "capabilities": [],
+      "aliases": [
+        "adr",
+        "decision-records",
+        "architecture-decisions"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "adr-format",
+          "heading": "ADR Format",
+          "stage": "plan"
+        },
+        {
+          "id": "workflow",
+          "heading": "Workflow",
+          "stage": "deliver"
+        },
+        {
+          "id": "good-adr",
+          "heading": "What Makes a Good ADR",
+          "stage": "review"
+        },
+        {
+          "id": "lifecycle",
+          "heading": "ADR Lifecycle",
+          "stage": "maintain"
+        }
+      ]
+    },
+    "ecc-deep-research": {
+      "task_families": [
+        "research"
+      ],
+      "capabilities": [],
+      "aliases": [
+        "deep-research",
+        "literature-review",
+        "cited-report"
+      ],
+      "stack": {
+        "languages": [],
+        "frameworks": [],
+        "independent": true
+      },
+      "preconditions": [],
+      "required_tools": [],
+      "exclusions": [],
+      "sections": [
+        {
+          "id": "workflow",
+          "heading": "Workflow",
+          "stage": "inspect"
+        },
+        {
+          "id": "parallel",
+          "heading": "Parallel Research with Subagents",
+          "stage": "inspect",
+          "requires_sections": [
+            "workflow"
+          ]
+        },
+        {
+          "id": "quality-rules",
+          "heading": "Quality Rules",
+          "stage": "verify"
+        }
+      ]
+    }
+  }
+}
