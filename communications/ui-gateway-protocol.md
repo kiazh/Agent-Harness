@@ -182,3 +182,56 @@ harness is never abandoned early; without the field it refuses to start a run.
 Register and unregister edit platform config outside this repository behind an
 explicit confirmation. Streaming harness output is not in scope — one bounded
 result per invocation.
+
+## Integrated editor workspace (2026-10-15)
+
+Backend-issued workspace identity with bounded file access, revision-checked
+saves and structured refusals (plan §11/§19). Workspace events are a separate
+family from the chat stream: they carry `workspaceId`/`epoch` and never
+`sessionId`/`turnId`, so they cannot enter the transcript reducer.
+Request params claiming `actor`/`role` are ignored — the authenticated gateway
+token is the only user authority, and workspace identity is minted
+server-side. File authorization is resolved-path containment under the
+returned `resolvedRoot` (symlinks and `..` are resolved and verified), never a
+textual path prefix.
+
+| Method | Params | Result |
+|---|---|---|
+| `workspace.open` | `{root, trust}` — `trust` is required and boolean | `{workspaceId, clientId, epoch, rootLabel, resolvedRoot, trusted, capabilities}` |
+| `workspace.list` | `{workspaceId, path?, cursor?, limit?, includeHidden?}` | `{entries, nextCursor, exclusions, truncated}` or `{refused}` |
+| `workspace.read` | `{workspaceId, uri}` | `{uri, text, revision, languageId, lineEnding, encoding, readOnly, sizeBytes}` or `{refused}` |
+| `workspace.save` | `{workspaceId, uri, text, expectedRevision?, uiVersion?}` | `{ok: true, revision, savedUiVersion?}` / `{ok: false, conflict: {diskRevision, baseRevision, reason}}` / `{ok: false, refused}` |
+| `workspace.documentOpen` | `{workspaceId, uri, languageId?, version, text?, epoch?}` | `{acceptedVersion, serverGeneration, state}` |
+| `workspace.documentChange` | `{workspaceId, uri, baseVersion, version, changes, epoch?}` | `{acceptedVersion, resync?}` |
+| `workspace.documentClose` | `{workspaceId, uri}` | `{closed, uri}` |
+| `workspace.intelligence` | `{workspaceId, operation, uri?, version?, position?, query?, epoch?}` | `{workspaceId, source, uri, documentVersion, serverGeneration, workspaceEpoch, operation, state, freshness, truncated, result}` |
+| `workspace.lspStatus` | `{workspaceId}` | `{servers: [{profile, languageId, state, generation, capabilities?, detail?}]}` |
+| `workspace.lspControl` | `{workspaceId, action, profile}` (`start\|stop\|restart`) | `{action, profile, state, detail?}` — state changes only, never installation |
+| `workspace.close` | `{workspaceId}` | `{closed: true}` |
+
+Revisions are `sha256-hex[0:32]:<size-bytes>`; the client echoes the revision
+it read as `expectedRevision`. Reads, lists and saves answer refusals as
+`{"refused": {"reason", "message"}}` with a reason in `binary`, `too-large`,
+`not-regular`, `unsupported-encoding`, `denied`, `missing` (save adds
+`"ok": false`). A save only commits when the current disk revision equals
+`expectedRevision` (`expectedRevision` absent means "expect the file to be
+missing"); mismatches return the structured conflict and never silently
+overwrite. `expectedRevision`-less saves against an existing file conflict.
+Cooperative writers share one per-path in-process coordinator; external
+writers that ignore the protocol can still race (the revision recheck
+immediately before the atomic same-directory temp+replace detects most of
+them, but universal compare-and-swap is not claimed).
+
+`workspace.intelligence` is a closed allowlist (`completion`, `hover`,
+`definition`, `references`, `symbols`, `diagnostics`) — never a raw LSP method
+tunnel. Without an injected language-server manager it answers truthfully with
+`state: "missing"`, `freshness: "unavailable"` and `result: null`; no result is
+ever fabricated. `workspace.fileChanged` is emitted with
+`{type, workspaceId, epoch, uri, revision, origin}` after a confirmed save
+(`origin: "save"`); workspace events are not automatically agent prompt
+content. Directory pages are bounded (default/max 200 entries; exclusions and
+truncation are disclosed), hidden entries are omitted unless `includeHidden`
+is set, and default exclusions (`.git`, `node_modules`, `__pycache__`,
+`.venv`, `dist`, `build`, `.cache`) are navigation policy — reported and
+flagged, not filesystem permissions.
+

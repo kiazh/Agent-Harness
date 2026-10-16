@@ -1,0 +1,343 @@
+"""Workspace feature handlers (plan §19) — thin, strict RPC surface.
+
+Validation rules:
+
+* All params are untrusted input. Types and lengths are validated here before
+  anything reaches :class:`~machina.workspace.service.WorkspaceService`.
+* Any ``actor``/``role``/``user`` field a caller sends is ignored: the
+  authenticated gateway token is the only user authority (plan §19) and the
+  workspace client binding is minted server-side. File authorization is
+  resolved-path containment, never a textual path prefix.
+* Read/list/save refusals are structured results (``{"refused": ...}`` /
+  ``{"ok": false, "refused": ...}``) per the frozen protocol, not crashes.
+  Unknown workspace ids are ``NOT_FOUND``; malformed params are
+  ``INVALID_PARAMS``.
+* The service is created once per gateway and stored on ``gw.workspace_service``
+  (lazy factory below). Workspace events are wrapped here in the JSON-RPC
+  ``event`` notification frame — they are a separate family from the chat
+  stream and never carry ``sessionId``/``turnId``.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError
+from machina.gateway.features._common import _bool, _int
+from machina.workspace.models import (
+    DEFAULT_LIST_LIMIT,
+    INTELLIGENCE_OPERATIONS,
+    MAX_CHANGE_TEXT_BYTES,
+    MAX_CHANGES_PER_REQUEST,
+    MAX_PATH_CHARS,
+    MAX_QUERY_CHARS,
+    MAX_REVISION_CHARS,
+    MAX_SAVE_PARAM_CHARS,
+    MAX_URI_CHARS,
+    WorkspaceError,
+)
+from machina.workspace.service import WorkspaceService
+
+if TYPE_CHECKING:
+    from machina.gateway.server import Gateway
+
+logger = logging.getLogger(__name__)
+
+_MAX_WORKSPACE_ID_CHARS = 128
+_MAX_PROFILE_CHARS = 128
+_MAX_LANGUAGE_ID_CHARS = 128
+_MAX_ACTION_CHARS = 32
+_MAX_INT32 = 2_147_483_647
+
+
+def _service(gw: Gateway) -> WorkspaceService:
+    """Lazy per-gateway factory (one service instance per Gateway)."""
+    service = getattr(gw, "workspace_service", None)
+    if not isinstance(service, WorkspaceService):
+        service = WorkspaceService(send_event=lambda event: _write_event(gw, event))
+        gw.workspace_service = service
+    return service
+
+
+def _write_event(gw: Gateway, event: dict[str, Any]) -> None:
+    try:
+        gw._write({"jsonrpc": "2.0", "method": "event", "params": event})
+    except Exception:  # a dead channel only drops the frame
+        logger.debug("workspace event write failed", exc_info=True)
+
+
+def _require(gw: Gateway, params: dict[str, Any]) -> WorkspaceService:
+    """Resolve the open workspace; wrong/absent ids fail closed as NOT_FOUND."""
+    service = _service(gw)
+    workspace_id = _raw_str(params, "workspaceId", max_len=_MAX_WORKSPACE_ID_CHARS)
+    if service.workspace_id is None or workspace_id != service.workspace_id:
+        raise RpcError(NOT_FOUND, "workspace is not open")
+    return service
+
+
+def _raw_str(
+    params: dict[str, Any],
+    key: str,
+    *,
+    required: bool = True,
+    max_len: int,
+    default: str = "",
+) -> str:
+    """Type/length-checked string without stripping.
+
+    Paths, URIs, text and revisions may contain significant leading/trailing
+    whitespace, so unlike ``_common._str`` this helper never strips; it only
+    enforces type, presence and a bound.
+    """
+    value = params.get(key, default)
+    if value is None:
+        if required:
+            raise RpcError(INVALID_PARAMS, f"{key} is required")
+        return default
+    if not isinstance(value, str):
+        raise RpcError(INVALID_PARAMS, f"{key} must be a string")
+    if len(value) > max_len:
+        raise RpcError(INVALID_PARAMS, f"{key} is too long (max {max_len} characters)")
+    if required and not value:
+        raise RpcError(INVALID_PARAMS, f"{key} is required")
+    return value
+
+
+def _required_int(params: dict[str, Any], key: str, lo: int, hi: int) -> int:
+    value = params.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= hi:
+        raise RpcError(INVALID_PARAMS, f"{key} must be an integer between {lo} and {hi}")
+    return value
+
+
+def _optional_int(params: dict[str, Any], key: str, lo: int, hi: int) -> int | None:
+    value = params.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= hi:
+        raise RpcError(INVALID_PARAMS, f"{key} must be an integer between {lo} and {hi}")
+    return value
+
+
+def _position(value: Any, label: str) -> dict[str, int]:
+    if not isinstance(value, dict):
+        raise RpcError(INVALID_PARAMS, f"{label} must be an object with line/character")
+    line = value.get("line")
+    character = value.get("character")
+    for key, number in (("line", line), ("character", character)):
+        if not isinstance(number, int) or isinstance(number, bool) or number < 0:
+            raise RpcError(INVALID_PARAMS, f"{label}.{key} must be a non-negative integer")
+    return {"line": line, "character": character}
+
+
+def _changes(params: dict[str, Any]) -> list[dict[str, Any]]:
+    changes = params.get("changes")
+    if not isinstance(changes, list):
+        raise RpcError(INVALID_PARAMS, "changes must be an array")
+    if len(changes) > MAX_CHANGES_PER_REQUEST:
+        raise RpcError(
+            INVALID_PARAMS, f"changes is too long (max {MAX_CHANGES_PER_REQUEST} entries)"
+        )
+    validated: list[dict[str, Any]] = []
+    total_bytes = 0
+    for index, change in enumerate(changes):
+        if not isinstance(change, dict):
+            raise RpcError(INVALID_PARAMS, f"changes[{index}] must be an object")
+        span = change.get("range")
+        if not isinstance(span, dict):
+            raise RpcError(INVALID_PARAMS, f"changes[{index}].range must be an object")
+        text = change.get("text")
+        if not isinstance(text, str):
+            raise RpcError(INVALID_PARAMS, f"changes[{index}].text must be a string")
+        try:
+            total_bytes += len(text.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise RpcError(
+                INVALID_PARAMS, f"changes[{index}].text is not encodable as UTF-8"
+            ) from error
+        validated.append(
+            {
+                "range": {
+                    "start": _position(span.get("start"), f"changes[{index}].range.start"),
+                    "end": _position(span.get("end"), f"changes[{index}].range.end"),
+                },
+                "text": text,
+            }
+        )
+    if total_bytes > MAX_CHANGE_TEXT_BYTES:
+        raise RpcError(INVALID_PARAMS, f"changes text exceeds {MAX_CHANGE_TEXT_BYTES} bytes")
+    return validated
+
+
+def _refusal(exc: WorkspaceError) -> dict[str, Any]:
+    return exc.as_refusal()
+
+
+# ─── methods ────────────────────────────────────────────────────────────────
+async def workspace_open(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Open a workspace root with an explicit trust decision.
+
+    ``params.actor``/``params.role`` (if sent) are intentionally ignored: the
+    gateway token authenticates the human UI, and the workspace identity is
+    minted server-side. Trust itself is the parameter the user must state.
+    """
+    root = _raw_str(params, "root", max_len=MAX_PATH_CHARS)
+    if "trust" not in params:
+        raise RpcError(INVALID_PARAMS, "trust is required (an explicit trust decision)")
+    trust = _bool(params, "trust")
+    service = _service(gw)
+    try:
+        identity = service.open(root, trust)
+    except WorkspaceError as exc:
+        raise RpcError(INVALID_PARAMS, exc.message) from exc
+    return identity.as_dict()
+
+
+async def workspace_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    path = _raw_str(params, "path", required=False, max_len=MAX_PATH_CHARS)
+    cursor = params.get("cursor")
+    if cursor is not None:
+        if (
+            not isinstance(cursor, str)
+            or not cursor.isascii()
+            or not cursor.isdigit()
+            or len(cursor) > 12
+        ):
+            raise RpcError(INVALID_PARAMS, "cursor must be a non-negative integer string")
+    limit = _int(params, "limit", DEFAULT_LIST_LIMIT, 1, 200)
+    include_hidden = _bool(params, "includeHidden")
+    try:
+        page = service.list(path, cursor=cursor, limit=limit, include_hidden=include_hidden)
+    except WorkspaceError as exc:
+        return _refusal(exc)
+    return page.as_dict()
+
+
+async def workspace_read(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    uri = _raw_str(params, "uri", max_len=MAX_URI_CHARS)
+    try:
+        result = service.read(uri)
+    except WorkspaceError as exc:
+        return _refusal(exc)
+    return result.as_dict()
+
+
+async def workspace_save(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    uri = _raw_str(params, "uri", max_len=MAX_URI_CHARS)
+    text = params.get("text")
+    if not isinstance(text, str):
+        raise RpcError(INVALID_PARAMS, "text must be a string")
+    if len(text) > MAX_SAVE_PARAM_CHARS:
+        raise RpcError(INVALID_PARAMS, f"text is too long (max {MAX_SAVE_PARAM_CHARS} characters)")
+    expected_revision = (
+        _raw_str(params, "expectedRevision", required=False, max_len=MAX_REVISION_CHARS) or None
+    )
+    ui_version = _optional_int(params, "uiVersion", 0, _MAX_INT32)
+    try:
+        result = await service.save(uri, text, expected_revision, ui_version=ui_version)
+    except WorkspaceError as exc:
+        return {"ok": False, **_refusal(exc)}
+    return result.as_dict()
+
+
+async def workspace_document_open(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    uri = _raw_str(params, "uri", max_len=MAX_URI_CHARS)
+    language_id = (
+        _raw_str(params, "languageId", required=False, max_len=_MAX_LANGUAGE_ID_CHARS)
+        or "plaintext"
+    )
+    version = _required_int(params, "version", 0, _MAX_INT32)
+    text = params.get("text", "")
+    if not isinstance(text, str):
+        raise RpcError(INVALID_PARAMS, "text must be a string")
+    if len(text) > MAX_SAVE_PARAM_CHARS:
+        raise RpcError(INVALID_PARAMS, f"text is too long (max {MAX_SAVE_PARAM_CHARS} characters)")
+    epoch = _optional_int(params, "epoch", 0, _MAX_INT32)
+    try:
+        result = service.document_open(uri, language_id, version, text, epoch=epoch)
+    except WorkspaceError as exc:
+        return _refusal(exc)
+    return result.as_dict()
+
+
+async def workspace_document_change(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    uri = _raw_str(params, "uri", max_len=MAX_URI_CHARS)
+    base_version = _required_int(params, "baseVersion", 0, _MAX_INT32)
+    version = _required_int(params, "version", 0, _MAX_INT32)
+    changes = _changes(params)
+    epoch = _optional_int(params, "epoch", 0, _MAX_INT32)
+    try:
+        result = service.document_change(uri, base_version, version, changes, epoch=epoch)
+    except WorkspaceError as exc:
+        return _refusal(exc)
+    return result.as_dict()
+
+
+async def workspace_document_close(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    uri = _raw_str(params, "uri", max_len=MAX_URI_CHARS)
+    epoch = _optional_int(params, "epoch", 0, _MAX_INT32)
+    try:
+        return service.document_close(uri, epoch=epoch)
+    except WorkspaceError as exc:
+        return _refusal(exc)
+
+
+async def workspace_intelligence(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    operation = _raw_str(params, "operation", max_len=64)
+    if operation not in INTELLIGENCE_OPERATIONS:
+        raise RpcError(
+            INVALID_PARAMS,
+            f"operation must be one of: {', '.join(INTELLIGENCE_OPERATIONS)}",
+        )
+    uri = _raw_str(params, "uri", required=False, max_len=MAX_URI_CHARS) or None
+    version = _optional_int(params, "version", 0, _MAX_INT32)
+    query = _raw_str(params, "query", required=False, max_len=MAX_QUERY_CHARS) or None
+    position = None
+    if params.get("position") is not None:
+        position = _position(params.get("position"), "position")
+    epoch = _optional_int(params, "epoch", 0, _MAX_INT32)
+    try:
+        result = await service.intelligence(
+            operation,
+            uri=uri,
+            version=version,
+            position=position,
+            query=query,
+            epoch=epoch,
+        )
+    except WorkspaceError as exc:
+        return _refusal(exc)
+    return result.as_dict()
+
+
+async def workspace_lsp_status(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    try:
+        return await service.lsp_status()
+    except WorkspaceError as exc:
+        return _refusal(exc)
+
+
+async def workspace_lsp_control(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    action = _raw_str(params, "action", max_len=_MAX_ACTION_CHARS)
+    if action not in ("start", "stop", "restart"):
+        raise RpcError(INVALID_PARAMS, "action must be start, stop or restart")
+    profile = _raw_str(params, "profile", max_len=_MAX_PROFILE_CHARS)
+    try:
+        return await service.lsp_control(action, profile)
+    except WorkspaceError as exc:
+        return _refusal(exc)
+
+
+async def workspace_close(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    service = _require(gw, params)
+    return service.close()

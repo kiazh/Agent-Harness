@@ -40,6 +40,8 @@ export interface WorkspaceListResult {
 	nextCursor: string | null;
 	exclusions: string[];
 	truncated: boolean;
+	/** Structured refusal for denied/unavailable listings (plan §11). */
+	refused?: { reason: string; message: string };
 }
 
 export interface WorkspaceReadResult {
@@ -72,6 +74,8 @@ export interface WorkspaceSaveResult {
 	/** UI document version captured at save time; the client clears dirty only if unchanged. */
 	savedUiVersion?: number;
 	conflict?: WorkspaceSaveConflict;
+	/** Structured refusal (denied/hardlinked/unsupported) — never a silent failure. */
+	refused?: { reason: string; message: string };
 }
 
 export interface WorkspaceDocumentOpenResult {

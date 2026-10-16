@@ -126,6 +126,19 @@ from machina.gateway.features.skills import (
     skills_list,
     skills_show,
 )
+from machina.gateway.features.workspace import (
+    workspace_close,
+    workspace_document_change,
+    workspace_document_close,
+    workspace_document_open,
+    workspace_intelligence,
+    workspace_list,
+    workspace_lsp_control,
+    workspace_lsp_status,
+    workspace_open,
+    workspace_read,
+    workspace_save,
+)
 
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
@@ -230,6 +243,17 @@ METHODS: dict[str, Handler] = {
     "mode.revoke": mode_revoke,
     "approvals.list": approvals_list,
     "approvals.resolve": approvals_resolve,
+    "workspace.open": workspace_open,
+    "workspace.list": workspace_list,
+    "workspace.read": workspace_read,
+    "workspace.save": workspace_save,
+    "workspace.documentOpen": workspace_document_open,
+    "workspace.documentChange": workspace_document_change,
+    "workspace.documentClose": workspace_document_close,
+    "workspace.intelligence": workspace_intelligence,
+    "workspace.lspStatus": workspace_lsp_status,
+    "workspace.lspControl": workspace_lsp_control,
+    "workspace.close": workspace_close,
 }
 
 
