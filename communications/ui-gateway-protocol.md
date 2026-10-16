@@ -204,6 +204,8 @@ textual path prefix.
 | `workspace.documentOpen` | `{workspaceId, uri, languageId?, version, text?, epoch?}` | `{acceptedVersion, serverGeneration, state}` |
 | `workspace.documentChange` | `{workspaceId, uri, baseVersion, version, changes, epoch?}` | `{acceptedVersion, resync?}` |
 | `workspace.documentClose` | `{workspaceId, uri}` | `{closed, uri}` |
+| `workspace.quickOpen` | `{workspaceId, query?, limit?, epoch?, rebuild?}` | `{entries: [{path, name, directory}], total, truncated, reasons, indexing, scanned, stale, workspaceEpoch, exclusions}` or `{refused}` |
+| `workspace.quickOpenCancel` | `{workspaceId}` | `{cancelled: boolean}` |
 | `workspace.intelligence` | `{workspaceId, operation, uri?, version?, position?, query?, epoch?}` | `{workspaceId, source, uri, documentVersion, serverGeneration, workspaceEpoch, operation, state, freshness, truncated, result}` |
 | `workspace.lspStatus` | `{workspaceId}` | `{servers: [{profile, languageId, state, generation, capabilities?, detail?}]}` |
 | `workspace.lspControl` | `{workspaceId, action, profile}` (`start\|stop\|restart`) | `{action, profile, state, detail?}` — state changes only, never installation |
@@ -234,4 +236,29 @@ truncation are disclosed), hidden entries are omitted unless `includeHidden`
 is set, and default exclusions (`.git`, `node_modules`, `__pycache__`,
 `.venv`, `dist`, `build`, `.cache`) are navigation policy — reported and
 flagged, not filesystem permissions.
+
+`workspace.quickOpen` searches a bounded recursive index built in the
+background (never a blocking full-tree scan). `query` is optional (empty lists
+what is indexed so far; max 200 characters) and `limit` is 1–200 (default 50);
+results are root-relative `{path, name, directory}` rows ranked by basename —
+exact, then prefix, then substring, then subsequence (case-insensitive) — with
+stable ties by path length then lexicographically. The index is single-flight
+per workspace, cached for 60 s, and rebuilt after expiry or with
+`rebuild: true`. Bounds are always disclosed, never silent: 20 000 indexed
+files stop the walk (`file-cap`), a 10 s deadline stops it (`deadline`), a
+per-directory 5 000-entry cap is named in `reasons` while the walk continues
+elsewhere (`directory-entry-cap`), and an unreadable directory marks the
+index `unreadable` rather than pretending it is complete; `total` is reported
+before the `limit` cut (`result-limit`). While a
+scan is still running the answer carries `indexing: true` with the `scanned`
+progress count and partial `entries` (the caller re-queries); if the workspace
+is reopened mid-scan the retired epoch's results are discarded and answered as
+`stale: true` with empty entries. `workspace.quickOpenCancel` cancels the
+in-flight scan (`{cancelled}` — false when none runs) and emits no completion
+event. Each completed walk also emits `workspace.indexProgress`
+`{workspaceId, epoch, scanned, total, done}` (intermediate frames carry
+`total: null`), so clients can disclose progress without polling.
+Default exclusions are returned in `exclusions`; symlinks are followed only
+when their target stays inside the authorized root, and directory cycles
+(symlink loops) are visited once.
 

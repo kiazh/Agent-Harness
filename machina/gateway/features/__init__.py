@@ -136,6 +136,8 @@ from machina.gateway.features.workspace import (
     workspace_lsp_control,
     workspace_lsp_status,
     workspace_open,
+    workspace_quick_open,
+    workspace_quick_open_cancel,
     workspace_read,
     workspace_save,
 )
@@ -250,6 +252,8 @@ METHODS: dict[str, Handler] = {
     "workspace.documentOpen": workspace_document_open,
     "workspace.documentChange": workspace_document_change,
     "workspace.documentClose": workspace_document_close,
+    "workspace.quickOpen": workspace_quick_open,
+    "workspace.quickOpenCancel": workspace_quick_open_cancel,
     "workspace.intelligence": workspace_intelligence,
     "workspace.lspStatus": workspace_lsp_status,
     "workspace.lspControl": workspace_lsp_control,

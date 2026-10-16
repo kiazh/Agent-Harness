@@ -27,11 +27,14 @@ from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError
 from machina.gateway.features._common import _bool, _int
 from machina.workspace.models import (
     DEFAULT_LIST_LIMIT,
+    DEFAULT_QUICK_OPEN_LIMIT,
     INTELLIGENCE_OPERATIONS,
     MAX_CHANGE_TEXT_BYTES,
     MAX_CHANGES_PER_REQUEST,
     MAX_PATH_CHARS,
     MAX_QUERY_CHARS,
+    MAX_QUICK_OPEN_LIMIT,
+    MAX_QUICK_OPEN_QUERY_CHARS,
     MAX_REVISION_CHARS,
     MAX_SAVE_PARAM_CHARS,
     MAX_URI_CHARS,
@@ -287,6 +290,33 @@ async def workspace_document_close(gw: Gateway, params: dict[str, Any]) -> dict[
         return service.document_close(uri, epoch=epoch)
     except WorkspaceError as exc:
         return _refusal(exc)
+
+
+async def workspace_quick_open(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Bounded ranked file search over the background Quick Open index.
+
+    ``query`` is optional (an empty query lists what is indexed so far),
+    ``limit`` bounds the returned rows (1..200, default 50), ``epoch`` lets a
+    stale client fail closed, and ``rebuild`` explicitly restarts the index
+    scan. Partial/truncated/stale answers are structured result fields, never
+    errors: the client must be able to disclose them.
+    """
+    service = _require(gw, params)
+    query = _raw_str(params, "query", required=False, max_len=MAX_QUICK_OPEN_QUERY_CHARS)
+    limit = _int(params, "limit", DEFAULT_QUICK_OPEN_LIMIT, 1, MAX_QUICK_OPEN_LIMIT)
+    epoch = _optional_int(params, "epoch", 0, _MAX_INT32)
+    rebuild = _bool(params, "rebuild")
+    try:
+        result = await service.quick_open(query, limit, epoch=epoch, rebuild=rebuild)
+    except WorkspaceError as exc:
+        return _refusal(exc)
+    return result.as_dict()
+
+
+async def workspace_quick_open_cancel(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Cancel an in-flight recursive index scan (a no-op when none runs)."""
+    service = _require(gw, params)
+    return service.quick_open_cancel()
 
 
 async def workspace_intelligence(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

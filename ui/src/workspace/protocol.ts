@@ -44,6 +44,41 @@ export interface WorkspaceListResult {
 	refused?: { reason: string; message: string };
 }
 
+/** One Quick Open hit (plan §12): root-relative path + display fields. */
+export interface WorkspaceQuickOpenEntry {
+	/** Root-relative POSIX path. */
+	path: string;
+	/** Basename of the path. */
+	name: string;
+	/** Parent directory (root-relative POSIX; "" for the workspace root). */
+	directory: string;
+}
+
+/**
+ * Bounded ranked Quick Open answer. Partial, truncated and stale states are
+ * disclosure fields — never errors — so the pane can render them honestly.
+ */
+export interface WorkspaceQuickOpenResult {
+	entries: WorkspaceQuickOpenEntry[];
+	/** Matches before the limit; index-relative while `indexing`. */
+	total: number;
+	/** The result page or the underlying index was cut (see `reasons`). */
+	truncated: boolean;
+	/** Disclosed bounds, e.g. "result-limit", "file-cap", "deadline", "directory-entry-cap", "stale-epoch". */
+	reasons: string[];
+	/** True while the recursive index is still building; entries are partial. */
+	indexing: boolean;
+	/** Files indexed so far (progress disclosure). */
+	scanned: number;
+	/** The workspace epoch changed mid-query; results were discarded. */
+	stale: boolean;
+	workspaceEpoch: number;
+	/** Declared exclusion policy (folder names never indexed). */
+	exclusions: string[];
+	/** Structured refusal for denied/unavailable queries. */
+	refused?: { reason: string; message: string };
+}
+
 export interface WorkspaceReadResult {
 	uri: string;
 	text: string;

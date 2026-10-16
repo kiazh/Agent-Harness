@@ -40,6 +40,27 @@ MAX_POSITION_VALUE = 1_000_000
 
 REVISION_HEX_LEN = 32
 
+# ─── Quick Open bounds (plan §12: a bounded recursive index, disclosed) ──────
+#: Result rows returned per query by default, and the hard bound a caller may
+#: request. Reaching either bound is disclosed through ``truncated``.
+DEFAULT_QUICK_OPEN_LIMIT = 50
+MAX_QUICK_OPEN_LIMIT = 200
+MAX_QUICK_OPEN_QUERY_CHARS = 200
+#: Hard cap on indexed files; reaching it stops the scan and sets
+#: ``truncated`` with reason ``file-cap``.
+QUICK_OPEN_INDEX_MAX_FILES = 20_000
+#: Raw entries examined per directory before the walk moves on; the capped
+#: directory is disclosed and the index is marked truncated.
+QUICK_OPEN_DIR_ENTRY_CAP = 5_000
+#: Wall-clock deadline for one index scan; reaching it stops the scan and sets
+#: ``truncated`` with reason ``deadline``.
+QUICK_OPEN_SCAN_DEADLINE = 10.0
+#: How long a completed index is reused before the next query rebuilds it.
+QUICK_OPEN_CACHE_TTL = 60.0
+#: How long a query waits for an in-flight scan before returning the partial
+#: index with ``indexing: true``.
+QUICK_OPEN_PARTIAL_WAIT = 3.0
+
 #: Navigation exclusions are policy disclosure, not filesystem permissions
 #: (plan §12): excluded names are still reported (flagged) and can be entered
 #: deliberately; nothing is refused because of them.
@@ -287,6 +308,52 @@ class ListPage:
 
 
 @dataclass(frozen=True)
+class QuickOpenEntry:
+    """One Quick Open hit (root-relative POSIX path + display fields)."""
+
+    path: str
+    name: str  # basename of the path
+    directory: str  # parent directory (root-relative; "" for the root)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"path": self.path, "name": self.name, "directory": self.directory}
+
+
+@dataclass(frozen=True)
+class QuickOpenResult:
+    """Bounded ranked Quick Open answer (plan §12).
+
+    ``indexing`` reports an in-flight scan whose entries are partial
+    (``scanned`` is the disclosed progress count); ``stale`` reports a query
+    discarded because the workspace epoch changed mid-scan; ``truncated`` +
+    ``reasons`` disclose every bound that cut the index or the result page.
+    """
+
+    entries: tuple[QuickOpenEntry, ...]
+    total: int  # matches before the limit (index-relative while indexing)
+    truncated: bool
+    indexing: bool
+    scanned: int
+    stale: bool
+    workspace_epoch: int
+    exclusions: tuple[str, ...]
+    reasons: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "entries": [entry.as_dict() for entry in self.entries],
+            "total": self.total,
+            "truncated": self.truncated,
+            "indexing": self.indexing,
+            "scanned": self.scanned,
+            "stale": self.stale,
+            "workspaceEpoch": self.workspace_epoch,
+            "exclusions": list(self.exclusions),
+            "reasons": list(self.reasons),
+        }
+
+
+@dataclass(frozen=True)
 class ReadResult:
     uri: str
     text: str
@@ -463,3 +530,27 @@ def lsp_state_event(
     if detail:
         data["detail"] = detail
     return data
+
+
+def index_progress_event(
+    workspace_id: str,
+    epoch: int,
+    scanned: int,
+    total: int | None,
+    done: bool,
+) -> dict[str, Any]:
+    """``workspace.indexProgress`` payload (protocol.ts; no chat envelope).
+
+    Emitted while the bounded Quick Open index walks the workspace
+    (``done: false``, ``total: null`` — the final size is unknown) and once
+    when it settles (``done: true``, ``total`` set). A cancelled scan emits
+    no terminal event: its results were discarded, never completed.
+    """
+    return {
+        "type": "workspace.indexProgress",
+        "workspaceId": workspace_id,
+        "epoch": epoch,
+        "scanned": scanned,
+        "total": total,
+        "done": done,
+    }

@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Any
 
 from machina.workspace import lsp as lsp_module
+from machina.workspace import quickopen as quickopen_module
 from machina.workspace.documents import DocumentMirrorStore, utf16_full_range
 from machina.workspace.files import WorkspaceFiles
 from machina.workspace.intelligence import (
@@ -81,21 +82,27 @@ from machina.workspace.lsp import (
 )
 from machina.workspace.models import (
     DEFAULT_LIST_LIMIT,
+    DEFAULT_QUICK_OPEN_LIMIT,
     INTELLIGENCE_OPERATIONS,
     LSP_PROFILE_LANGUAGES,
     MAX_POSITION_VALUE,
+    MAX_QUICK_OPEN_LIMIT,
+    MAX_QUICK_OPEN_QUERY_CHARS,
     MAX_READ_BYTES,
     MAX_URI_CHARS,
+    QUICK_OPEN_PARTIAL_WAIT,
     DocumentChangeResult,
     DocumentOpenResult,
     IntelligenceResult,
     ListPage,
+    QuickOpenResult,
     ReadResult,
     SaveResult,
     WorkspaceError,
     WorkspaceIdentity,
     diagnostics_event,
     file_changed_event,
+    index_progress_event,
     lsp_language_for,
     lsp_state_event,
 )
@@ -155,6 +162,11 @@ class _OpenRecord:
 
 class WorkspaceService:
     """Bounds and structured outcomes for one authorized workspace identity."""
+
+    #: Lazily created Quick Open scan owner for the live (root, epoch) binding.
+    #: Deliberately not created in ``__init__``: the quick-open seam is strictly
+    #: additive on this service.
+    _quick_indexer: quickopen_module.QuickOpenIndexer | None
 
     def __init__(
         self,
@@ -1585,3 +1597,121 @@ class WorkspaceService:
             "state": STATE_FAILED,
             "detail": sanitize_log_text(detail),
         }
+
+    # ─── quick open (plan §12) ──────────────────────────────────────────────
+    async def quick_open(
+        self,
+        query: str,
+        limit: int = DEFAULT_QUICK_OPEN_LIMIT,
+        *,
+        epoch: int | None = None,
+        rebuild: bool = False,
+        wait: float = QUICK_OPEN_PARTIAL_WAIT,
+    ) -> QuickOpenResult:
+        """Ranked, bounded file search over the background recursive index.
+
+        The index is built by a single-flight asyncio scan (never a blocking
+        recursive walk); concurrent queries share it. When the scan is still
+        running after ``wait`` seconds the partial index answers with
+        ``indexing: true`` and the ``scanned`` progress count, and the caller
+        re-queries for more. A workspace reopen during the scan retires the
+        index with it: the answer is empty and ``stale: true``, never a mix
+        of two epochs.
+        """
+        files = self._require_files()
+        workspace_epoch = self._check_epoch(epoch)
+        if not isinstance(query, str) or len(query) > MAX_QUICK_OPEN_QUERY_CHARS:
+            raise WorkspaceError(
+                "denied",
+                f"query must be a string of at most {MAX_QUICK_OPEN_QUERY_CHARS} characters",
+            )
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= MAX_QUICK_OPEN_LIMIT
+        ):
+            raise WorkspaceError("denied", f"limit must be between 1 and {MAX_QUICK_OPEN_LIMIT}")
+        indexer = self._quick_open_indexer(files, workspace_epoch)
+        index, indexing = await indexer.ensure(wait=wait, rebuild=rebuild)
+        if self._epoch != workspace_epoch:
+            # The workspace was reopened while the scan ran: the index and any
+            # answer built against it belong to a retired epoch. Retire them.
+            self._retire_quick_indexer(indexer)
+            return QuickOpenResult(
+                entries=(),
+                total=0,
+                truncated=False,
+                indexing=False,
+                scanned=0,
+                stale=True,
+                workspace_epoch=workspace_epoch,
+                exclusions=indexer.exclusions,
+                reasons=("stale-epoch",),
+            )
+        entries, total = quickopen_module.rank_entries(tuple(index.entries), query, limit)
+        reasons = list(index.reasons)
+        if total > len(entries):
+            reasons.append(quickopen_module.REASON_RESULT_LIMIT)
+        return QuickOpenResult(
+            entries=tuple(entries),
+            total=total,
+            truncated=index.truncated or total > len(entries),
+            indexing=indexing,
+            scanned=index.scanned,
+            stale=False,
+            workspace_epoch=workspace_epoch,
+            exclusions=indexer.exclusions,
+            reasons=tuple(reasons),
+        )
+
+    def quick_open_cancel(self) -> dict[str, Any]:
+        """Cancel the in-flight recursive index scan (no-op when none runs)."""
+        indexer: quickopen_module.QuickOpenIndexer | None = getattr(self, "_quick_indexer", None)
+        if indexer is None:
+            return {"cancelled": False}
+        return {"cancelled": indexer.cancel()}
+
+    def _quick_open_indexer(
+        self, files: WorkspaceFiles, epoch: int
+    ) -> quickopen_module.QuickOpenIndexer:
+        """Live single-flight indexer for the current (root, epoch) binding.
+
+        A root or epoch change retires the previous indexer and cancels its
+        in-flight scan so a stale walk never keeps running against a
+        workspace that no longer exists.
+        """
+        indexer: quickopen_module.QuickOpenIndexer | None = getattr(self, "_quick_indexer", None)
+        key = (str(files.root), epoch)
+        if indexer is not None and indexer.key == key:
+            return indexer
+        if indexer is not None:
+            indexer.cancel()
+        indexer = quickopen_module.QuickOpenIndexer(
+            files.root,
+            key=key,
+            exclusions=files.exclusions,
+            on_progress=lambda scanned, done, bound_epoch=epoch: self._emit_quick_open_progress(
+                bound_epoch, scanned, done
+            ),
+        )
+        self._quick_indexer = indexer
+        return indexer
+
+    def _retire_quick_indexer(self, indexer: quickopen_module.QuickOpenIndexer) -> None:
+        if getattr(self, "_quick_indexer", None) is indexer:
+            indexer.cancel()
+            self._quick_indexer = None
+
+    def _emit_quick_open_progress(self, epoch: int, scanned: int, done: bool) -> None:
+        """``workspace.indexProgress``; dropped when the epoch already moved on."""
+        if self._identity is None or epoch != self._epoch:
+            return
+        self._emit(
+            index_progress_event(
+                self._identity.workspace_id,
+                epoch,
+                scanned,
+                scanned if done else None,
+                done,
+            )
+        )
