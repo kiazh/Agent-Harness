@@ -51,6 +51,7 @@ from machina.core.prompt import (
     tool_message_limit,
 )
 from machina.core.provider import LLMProvider, audit_log, get_provider
+from machina.core.request_gate import evaluate_request
 from machina.core.session import Session, session_manager
 from machina.core.session_mode import turn_scope
 from machina.core.tool_views import artifact_source_version, bounded_tool_view, mark_turn_accepted
@@ -1840,33 +1841,25 @@ class ReActAgent(BaseReActAgent):
                     # Capacity applies to this request, never cumulative billed usage.
                     self._condense_history(messages)
                     tool_defs = self._tool_defs()
-                    effective_budget = _effective_turn_budget(session, self.provider)
-                    request_tokens = _request_context_tokens(messages, tool_defs, self.provider)
-                    if request_tokens > effective_budget:
-                        logger.warning(
-                            "Model context window exceeded (%d > %d)",
-                            request_tokens,
-                            effective_budget,
-                        )
-                        audit_log(
-                            "agent_request_context_exceeded",
-                            session_id=str(session_id),
-                            total_tokens=total_tokens,
-                            request_tokens=request_tokens,
-                            context_window=effective_budget,
-                        )
+                    gate = await evaluate_request(
+                        messages,
+                        session=session,
+                        provider=self.provider,
+                        tool_defs=tool_defs,
+                        session_id=session_id,
+                        agent_id=self.agent_id,
+                        user_message=user_message,
+                        total_tokens=total_tokens,
+                        iterations=iteration,
+                        tool_calls_made=tool_calls_made,
+                    )
+                    if gate.failure is not None:
                         await self._flush_pending_chunks(pending_chunks)
                         self._schedule_memory_consolidation(session_id)
-                        return AgentResponse(
-                            content="Current request exceeds the model context window. Compact the context or select a model with a larger window.",
-                            outcome="failed",
-                            tool_calls=tool_calls_made,
-                            tokens_used=total_tokens,
-                            iterations=iteration,
-                        )
+                        return gate.failure
                     try:
                         response = await self._call_llm_with_retry(
-                            messages=messages,
+                            messages=gate.messages,
                             tools=tool_defs,
                             session_id=session_id,
                         )
@@ -2057,35 +2050,24 @@ class ReActAgent(BaseReActAgent):
                     # Capacity applies to this request, never cumulative billed usage.
                     self._condense_history(messages)
                     tool_defs = self._tool_defs()
-                    effective_budget = _effective_turn_budget(session, self.provider)
-                    request_tokens = _request_context_tokens(messages, tool_defs, self.provider)
-                    if request_tokens > effective_budget:
-                        logger.warning(
-                            "Model context window exceeded (%d > %d)",
-                            request_tokens,
-                            effective_budget,
-                        )
-                        audit_log(
-                            "agent_request_context_exceeded",
-                            session_id=str(session_id),
-                            total_tokens=total_tokens,
-                            request_tokens=request_tokens,
-                            context_window=effective_budget,
-                        )
+                    gate = await evaluate_request(
+                        messages,
+                        session=session,
+                        provider=self.provider,
+                        tool_defs=tool_defs,
+                        session_id=session_id,
+                        agent_id=self.agent_id,
+                        user_message=user_message,
+                        total_tokens=total_tokens,
+                        iterations=iteration,
+                        tool_calls_made=tool_calls_made,
+                    )
+                    if gate.failure is not None:
                         await self._flush_pending_chunks(pending_chunks)
                         # M1 (final pass): mirror run()'s failed-path catch-up so a
                         # failed interactive turn consolidates like a failed job.
                         self._schedule_memory_consolidation(session_id)
-                        yield StreamEvent(
-                            type="done",
-                            response=AgentResponse(
-                                content="Current request exceeds the model context window. Compact the context or select a model with a larger window.",
-                                outcome="failed",
-                                tool_calls=tool_calls_made,
-                                tokens_used=total_tokens,
-                                iterations=iteration,
-                            ),
-                        )
+                        yield StreamEvent(type="done", response=gate.failure)
                         return
 
                     # Stream LLM call with retry
@@ -2094,7 +2076,7 @@ class ReActAgent(BaseReActAgent):
                         final_response = None
                         async with joined_teardown(
                             stream=self._stream_llm_with_retry(
-                                messages=messages,
+                                messages=gate.messages,
                                 tools=tool_defs,
                                 session_id=session_id,
                             )

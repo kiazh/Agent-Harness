@@ -64,7 +64,9 @@ async def artifact_read(artifact_id: str, offset: int = 0, limit: int = 4000) ->
     description=(
         "Search retained artifacts (one handle, or the session's recent "
         "artifacts) for a case-insensitive substring. Returns match positions "
-        "and excerpts for precise paging with artifact_read."
+        "and excerpts for precise paging with artifact_read, plus the scan "
+        "window (scanned/scan_limit/scan_truncated) and a continuation cursor "
+        "so an empty page never implies the query is absent."
     ),
     parameters={
         "type": "object",
@@ -75,37 +77,73 @@ async def artifact_read(artifact_id: str, offset: int = 0, limit: int = 4000) ->
                 "description": "Artifact UUID to search (empty = all session artifacts)",
             },
             "limit": {"type": "integer", "description": "Max matches (1-20)"},
+            "cursor": {
+                "type": "string",
+                "description": "Continuation cursor from a previous artifact_search result",
+            },
         },
         "required": ["query"],
     },
 )
-async def artifact_search(query: str, artifact_id: str = "", limit: int = 5) -> str:
-    """Return match positions and bounded excerpts."""
+async def artifact_search(
+    query: str, artifact_id: str = "", limit: int = 5, cursor: str = ""
+) -> str:
+    """Return match positions and bounded excerpts with scan disclosure.
+
+    The store scans a bounded window (default 50 newest readable artifacts);
+    ``scanned``/``scan_limit``/``scan_truncated`` state exactly what was
+    covered, and a non-empty ``next_cursor`` lets the caller continue instead
+    of reading an empty page as a definitive absence.
+    """
     agent_id, session_id = await active_agent_scope()
     try:
-        matches = await artifact_store.search(
+        page = await artifact_store.search_page(
             query,
             session_id=session_id,
             agent_id=agent_id,
             artifact_id=artifact_id or None,
             limit=limit,
+            cursor=cursor or None,
         )
     except ArtifactError as error:
         raise _fail(error) from None
+    disclosure = (
+        f"scanned={page['scanned']} scan_limit={page['scan_limit']} "
+        f"scan_truncated={str(bool(page['scan_truncated'])).lower()}"
+    )
+    if page.get("next_cursor"):
+        disclosure += f"\nnext_cursor={page['next_cursor']}"
+    matches = page["matches"]
     if not matches:
-        return "No artifact matches."
-    return "\n".join(
+        if page["scan_truncated"]:
+            return (
+                "No artifact matches in the scanned window; the window was cut short, "
+                "so an unscanned artifact may still match — resume with the cursor.\n"
+                f"{disclosure}"
+            )
+        if artifact_id:
+            # Single-artifact scope: scanned=1 and not truncated, so the
+            # bounded question has a definitive answer.
+            return "No artifact matches."
+        return (
+            "No artifact matches; every readable artifact in scope was scanned.\n"
+            f"{disclosure}"
+        )
+    lines = [
         f"artifact={m['artifact_id']} kind={m['kind']} chars={m['total_chars']} "
         f"pos={m['position']}: {m['excerpt']!r}"
         for m in matches
-    )
+    ]
+    lines.append(disclosure)
+    return "\n".join(lines)
 
 
 @registry.register(
     name="artifact_describe",
     description=(
-        "Show metadata for a retained artifact (kind, size, status, retention) "
-        "without reading its content."
+        "Show metadata for a retained artifact (kind, size, status, "
+        "completeness, source/revision binding, retention) without reading "
+        "its content."
     ),
     parameters={
         "type": "object",
@@ -114,7 +152,12 @@ async def artifact_search(query: str, artifact_id: str = "", limit: int = 5) -> 
     },
 )
 async def artifact_describe(artifact_id: str) -> str:
-    """Return artifact metadata as key=value lines."""
+    """Return artifact metadata as key=value lines.
+
+    Completeness fields are tri-state in the store: ``true``/``false`` are
+    claims, ``unknown`` means the producer's provenance was never recorded —
+    it never silently reads as complete (B0/C07).
+    """
     agent_id, session_id = await active_agent_scope()
     try:
         meta = await artifact_store.describe(artifact_id, session_id=session_id, agent_id=agent_id)
@@ -125,13 +168,29 @@ async def artifact_describe(artifact_id: str) -> str:
         "kind",
         "status",
         "source_version",
+        "content_revision",
+        "complete",
+        "upstream_truncated",
+        "stored_truncated",
+        "record_count",
         "content_bytes",
         "token_estimate",
         "created_at",
         "expires_at",
         "access_count",
     )
-    lines = [f"{field}={meta.get(field)}" for field in fields]
+    tri_state = {
+        "source_version",
+        "content_revision",
+        "complete",
+        "upstream_truncated",
+        "stored_truncated",
+        "record_count",
+    }
+    lines = [
+        f"{field}={'unknown' if field in tri_state and meta.get(field) is None else meta.get(field)}"
+        for field in fields
+    ]
     if meta.get("summary"):
         lines.append(f"summary={meta['summary']}")
     return "\n".join(lines)
