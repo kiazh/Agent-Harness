@@ -113,6 +113,45 @@ This document keeps current evidence separate from historical baseline logs. Nev
 - Honest states: `…`/`(empty)`/`(excluded)`/`(denied)`/`(error)` distinct; `+N more` (exact loaded-row budget) vs backend `load more` never confuse an invented count.
 - Deferred: Quick Open recursive backend service; tab auto-restore; controller wiring (all tracked for W3).
 
+### T4b — Editor view + pane (status: complete, commit b2bbfe7)
+
+- Files: `ui/src/editor/view.ts`, `ui/src/components/EditorPane.ts`; tests 40 (27 view + 13 pane).
+- Highlights: virtualized viewport, gutter/active-line/selection/caret with `CURSOR_MARKER` gated on focus, control-char display projection that never mutates stored bytes, grapheme-safe editing, bracketed paste verbatim, mouse press-capture drag/double-click/wheel, windowed tab strip with `+N` overflow + duplicate-basename disambiguation, status row with text markers.
+- Red evidence: two real bugs found by tests (caret rendered while unfocused; C1 control leak through the projection) plus test-expectation corrections recorded by the agent.
+- Keybindings: ctrl+pageUp/Down paging (bare page keys alt-screen-owned per T0 ADR §4); `ctrl+shift+k` delete-line is Kitty-only (legacy collapses to ctrl+k; remap note for the app task); ctrl+c/x consumed only with a live selection.
+- Deferred: tab-switch keybindings (app command task), workspace-root breadcrumb (one-line wiring later).
+
+### T8-backend — LSP service integration (status: complete, commit 6764c71; DevTools f2e568b)
+
+- Files: `machina/workspace/intelligence.py` (new), `service.py`/`models.py`/`documents.py` (edits); tests 30 through the fake subprocess.
+- Invariants encoded: mirror-first; didOpen exactly once per (doc, generation); didChange only against the live generation; flush barrier so requests never overtake sync; save order disk → flush → didSave → fileChanged; diagnostics per-producer replace/version rules/generation discard/1000 cap; crash → stale retained + unavailable results; restart → generation bump + sorted reopen with latest snapshots; bounded per-op deadlines; never-lie states.
+- Evidence: 30/30; combined batch 160 passed across 9 suites (orchestrator re-run).
+
+### T7 follow-up fix (status: complete, commit a672776; DevTools 057df89)
+
+- Findings from the real-server suite: (1) tsls suppresses ALL diagnostics unless the client declares `textDocument.publishDiagnostics` — capability added; (2) spurious `cleanup_pending` on stops where wrapper children reap just after the sweep — bounded `group_reap_grace` (2 s default) added while keeping the honest persistent-members path.
+- Evidence: 5 new regression tests; transport+lifecycle 47 still green; real-server suite 8/8 with the fix (TS diagnostics now flow without harness help).
+
+### T9-logic — Workspace-edit staging + jump history (status: complete, commit 1147844)
+
+- Files: `ui/src/editor/workspaceEdits.ts`, `ui/src/editor/navigation.ts`; tests 21.
+- Semantics pinned: synchronous all-or-nothing apply (no awaits → no partial multi-file mutation); one store transaction per document; same-position inserts preserve protocol array order (fixture-verified); duplicate URI groups merged; version/overlap/read-only refusals; `codeActionsFromPayload` never executes commands.
+- Red evidence: module-missing red; one behavior failure (fallback hunk summary) fixed.
+
+### §24-E — Real supported-server integration (status: complete, DevTools 2c0df50)
+
+- Files: `tests/test_lsp_integration_real.py` (8 tests) + `tests/support/lsp_real_workspace.py`.
+- Both profiles actually ran (pyright 1.1.414; tsls 6.0.2) via the repo-local pinned binaries; no skips when provisioned; content-level assertions (messages, ranges, URI slicing, severity, versions, generations).
+- Proven: unsaved diagnostics (py + ts), completion on unsaved text, definition into related file, references, rename capability (service-level rename pending — T9), save revision + fileChanged, stop/restart with unsaved-text replay, missing-server honesty, no leaked processes.
+- Orchestrator re-run after the T7 fix: 8/8 in 4.57 s.
+- Gaps reported and dispositioned: tsls capability (fixed a672776), reap grace (fixed a672776), service rename allowlist (pending T9 wiring), didSave not server-observable (harness records forwarding honesty).
+
+### Cross-wave verification (Wave 2, orchestrator)
+
+- Full UI gate with W2 integrated: **691 tests, 685 pass, 6 skip, 0 fail**; typecheck + eslint clean.
+- Python combined batch (9 suites incl. real servers): **160 passed** in 13.49 s.
+- Commits: main `a672776`, `6764c71`, `b2bbfe7`, `1147844`; DevTools `057df89`, `f2e568b`, `2c0df50`.
+
 ## Task record template (from plan §26)
 
 ```text
