@@ -128,7 +128,9 @@ def parse_openai_usage(raw: dict[str, Any] | None, *, estimated: bool = False) -
 
     ``prompt_tokens`` includes cached input, so the cache split is derived
     (``uncached = prompt - cached``). DeepSeek-style hit/miss fields take
-    precedence when present. Endpoints that never report cache details keep
+    precedence when present and reconcile to the provider's prompt total
+    (``uncached + cache_read == prompt_tokens``) even when the reported split
+    is internally inconsistent. Endpoints that never report cache details keep
     ``cache_reported`` False; their prompt counts as uncached input, which is
     the conservative upper bound for cost.
     """
@@ -145,18 +147,30 @@ def parse_openai_usage(raw: dict[str, Any] | None, *, estimated: bool = False) -
         # are checked before ``prompt_tokens_details`` so a payload carrying
         # both shapes keeps the provider's explicit split instead of recording
         # the details' (often zero) cached count as the cache read.
-        if hit is not None and miss is not None:
+        #
+        # Reconciliation rule when ``prompt_tokens`` is present: the partition
+        # always sums to the provider's total. A consistent split is copied
+        # verbatim; an inconsistent one caps the cache read at the headroom the
+        # reported miss leaves (``min(hit, max(prompt - miss, 0))``) and counts
+        # the remainder as uncached. Uncached is the conservatively priced
+        # residual bucket, so a shortfall lands there instead of being
+        # invented as cache reads, and an over-reported split sheds cache-read
+        # tokens first. A lone hit or miss derives the same way (``prompt -
+        # hit`` / ``prompt - miss``); the miss-only shape no longer discards
+        # the provider's prompt total (review finding). Without a prompt total
+        # the reported fields stay verbatim and the unknown side stays missing.
+        if prompt is None:
             uncached = miss
             cache_read = hit
-        elif hit is not None and prompt is not None:
-            uncached = max(prompt - hit, 0)
-            cache_read = hit
+        elif hit is not None and miss is not None:
+            cache_read = min(hit, max(prompt - miss, 0))
+            uncached = prompt - cache_read
         elif hit is not None:
-            uncached = None
-            cache_read = hit
+            cache_read = min(hit, prompt)
+            uncached = prompt - cache_read
         else:
-            uncached = miss
-            cache_read = None
+            uncached = min(miss, prompt)
+            cache_read = prompt - uncached
     elif cached is not None and prompt is not None:
         uncached = max(prompt - cached, 0)
         cache_read = cached
