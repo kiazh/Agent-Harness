@@ -6,9 +6,9 @@ import { join } from "node:path";
 
 async function writeClipboardFixture(directory: string, output: string): Promise<void> {
 	// A shell fixture boots in milliseconds — a Node fixture can outlive the
-	// 3 s copy timeout under parallel test load — while still proving the
-	// value arrives on stdin and is never shell-evaluated: cat reads stdin,
-	// argv is ignored.
+	// copy timeout (CLIPBOARD_COPY_TIMEOUT_MS) under parallel test load — while
+	// still proving the value arrives on stdin and is never shell-evaluated:
+	// cat reads stdin, argv is ignored.
 	const script = `#!/bin/sh\nexec /bin/cat > ${JSON.stringify(output)}\n`;
 	for (const command of ["pbcopy", "wl-copy", "xclip"]) {
 		await writeFile(join(directory, command), script, { mode: 0o700 });
@@ -31,6 +31,18 @@ test("clipboard transfer sends the complete value on stdin without shell evaluat
 		process.env.PATH = originalPath;
 		await rm(directory, { recursive: true, force: true });
 	}
+});
+
+test("the copy timeout leaves headroom for a loaded-machine clipboard", async () => {
+	// The product bound is the only thing between a slow-but-working pbcopy and
+	// a false "Copy failed". A deterministic slow-copy fixture is not feasible
+	// with the PATH shim: the child would have to block in real wall-clock time
+	// past the old bound, which reintroduces exactly the load-sensitive waiting
+	// this bound exists to absorb. Assert the bound itself instead of a literal.
+	const { CLIPBOARD_COPY_TIMEOUT_MS } = await import("../src/clipboard.ts");
+	assert.ok(Number.isFinite(CLIPBOARD_COPY_TIMEOUT_MS) && CLIPBOARD_COPY_TIMEOUT_MS > 0);
+	assert.ok(CLIPBOARD_COPY_TIMEOUT_MS >= 6000, "at least 2x the old 3 s cap that was breached at 3.0769 s under load");
+	assert.ok(CLIPBOARD_COPY_TIMEOUT_MS <= 30_000, "still fails fast for a stuck backend");
 });
 
 test("unavailable clipboard commands return a recoverable failure", async (t) => {

@@ -70,11 +70,19 @@ export async function readImageFile(path: string): Promise<ImageAttachment> {
 }
 
 export type ClipboardCommand = (command: string, args: string[]) => Promise<Buffer>;
+/**
+ * Clipboard read (pbpaste/xclip/…) kill bound. Matches the copy-path bound in
+ * clipboard.ts: the old 3000 ms cap was breached under full-suite load, and a
+ * slow-but-working paste would be reported to the user as an empty clipboard
+ * (the 3.0769 s flake in the copy path is the same failure class). 8s keeps a
+ * genuinely stuck backend fail-fast while clearing the observed worst case.
+ */
+export const CLIPBOARD_READ_TIMEOUT_MS = 8000;
 export const runClipboardCommand: ClipboardCommand = (command, args) => new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
     const chunks: Buffer[] = [];
     let size = 0, settled = false;
-    const timer = setTimeout(() => finish(new Error("Clipboard read timed out.")), 3000);
+    const timer = setTimeout(() => finish(new Error("Clipboard read timed out.")), CLIPBOARD_READ_TIMEOUT_MS);
     const finish = (error?: Error) => {
         if (settled) return;
         settled = true;

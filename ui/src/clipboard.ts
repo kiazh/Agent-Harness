@@ -1,5 +1,18 @@
 import { spawn } from "node:child_process";
 
+/**
+ * Upper bound on a single clipboard copy child (pbcopy/wl-copy/xclip/Set-Clipboard).
+ *
+ * On timeout the child is killed and the copy reports failure, so this is the
+ * only product bound between a slow-but-working backend and a user-visible
+ * "Copy failed". The previous 3 s bound had ~2x headroom over the success path
+ * and was breached: the clipboard transfer test measured 3.0769 s under
+ * full-suite parallel load (vs ~0.78 s isolated), so a loaded machine could
+ * kill a pbcopy that was still making progress. 8 s clears that worst observed
+ * case by ~2.6x while staying fail-fast for a genuinely stuck backend.
+ */
+export const CLIPBOARD_COPY_TIMEOUT_MS = 8000;
+
 /** Constructor options for the pi-tui fullscreen clipboard hook (no hard dep). */
 export type TuiClipboardOptions = {
 	copySelection: (text: string) => Promise<boolean | string>;
@@ -40,7 +53,7 @@ export async function copyText(text: string): Promise<boolean> {
 				child.once("error", () => finish(false));
 				child.once("close", (code) => finish(code === 0));
 				child.stdin.on("error", () => { child.kill(); finish(false); });
-				timer = setTimeout(() => { child.kill(); finish(false); }, 3000);
+				timer = setTimeout(() => { child.kill(); finish(false); }, CLIPBOARD_COPY_TIMEOUT_MS);
 				child.stdin.end(text, "utf8");
 			} catch {
 				finish(false);
