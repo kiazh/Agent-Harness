@@ -452,8 +452,10 @@ export class WorkspaceController {
 		this.currentIdentity = identity;
 		this.rootKeyValue = identity.resolvedRoot;
 		this.phaseValue = "ready";
-		// Persist the requested mode/ratio under the resolved root immediately.
-		await this.persist();
+		// Persist the requested mode/ratio under the resolved root immediately,
+		// MERGING with any stored document: a default write here must never
+		// clobber the previous session's open files before restore() reads them.
+		await this.persistLayoutIntent();
 		const trustNote = identity.trusted ? "" : " (untrusted: intelligence disabled)";
 		this.notifySafe("info", `workspace open: ${identity.rootLabel}${trustNote}`);
 		this.requestRenderSafe();
@@ -1025,6 +1027,33 @@ export class WorkspaceController {
 			}
 		}
 		return state;
+	}
+
+	/**
+	 * Persist only the layout intent, preserving any stored document list and
+	 * cursors for this root. Used on open, before `restore()` reads the stored
+	 * state: a full `persist()` here would replace the previous session's
+	 * open-file metadata with the current (empty) tab set.
+	 */
+	private async persistLayoutIntent(): Promise<void> {
+		const rootKey = this.rootKeyValue;
+		if (!rootKey) return;
+		try {
+			const existing = await this.persistence.load(rootKey);
+			const base = existing ?? this.buildPersistedState();
+			await this.persistence.save(rootKey, {
+				...base,
+				requestedMode: this.requestedMode,
+				splitRatio: clampSplitRatio(this.splitRatioValue),
+				explorerRequested: this.explorerRequested,
+			});
+			this.persistFailureNotified = false;
+		} catch (error) {
+			if (!this.persistFailureNotified) {
+				this.persistFailureNotified = true;
+				this.notifySafe("warning", `workspace state could not be saved: ${messageOf(error)}`);
+			}
+		}
 	}
 
 	/** Load the stored state for a root; undefined when absent or unreadable. */

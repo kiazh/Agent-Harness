@@ -2,6 +2,8 @@
 
 import type { AutocompleteItem, SelectItem, SlashCommand } from "@earendil-works/pi-tui";
 import type { ConfigResult, GatewayEvent, HistoryEntry, SessionInfo } from "../protocol.ts";
+import type { WorkspaceController } from "../workspace/controller.ts";
+import type { WorkspaceMode } from "../workspace/state.ts";
 
 export type NoticeKind = "info" | "plain" | "success" | "warning" | "error";
 
@@ -102,6 +104,11 @@ export interface FeatureHost {
 	/** Re-resolve theme colors without clearing the transcript (skin change). */
 	restyle(): void;
 	exit(): Promise<void>;
+	/**
+	 * Integrated workspace surface (T3/T6/T12). Optional: hosts without the
+	 * feature omit it and the workspace commands no-op with one notice.
+	 */
+	workspace?(): WorkspaceHost | undefined;
 }
 
 export interface Command extends SlashCommand {
@@ -147,6 +154,35 @@ export interface OAuthProgressHandle {
 export function requireArgs(args: string, usage: string): string {
 	if (!args.trim()) throw new Error(`Usage: ${usage}`);
 	return args.trim();
+}
+
+// ─── integrated workspace (T3/T6/T12) ───────────────────────────────────────
+
+/**
+ * Integrated-workspace surface the app exposes to the workspace commands
+ * (plan §8). Layout mutations go through the host so the shell geometry and
+ * focus router stay in sync with the controller; reads use the controller's
+ * public API directly.
+ */
+export interface WorkspaceHost {
+	/** Orchestration hub (documents, layout intent, LSP, persistence). */
+	controller: WorkspaceController;
+	/** True while the feature flag is on and the backend serves workspace.*. */
+	controllerAvailable(): boolean;
+	setMode(mode: WorkspaceMode): void;
+	toggleChatMaximize(): void;
+	toggleEditorMaximize(): void;
+	restoreSplit(): void;
+	/** Toggle/open/close the explorer column (loads the listing on open). */
+	setExplorer(open: boolean): void;
+	/** Re-sync shell geometry after a direct controller layout call (setRatio). */
+	layoutChanged(): void;
+	/** Open (or focus) the Problems pane; app-owned layout and focus. */
+	openProblems(): void;
+	/** Open the Quick Open overlay; app-owned overlay and focus. */
+	openQuickOpen(): void;
+	/** Dirty local buffers for the close confirmation (bounded basenames). */
+	dirtyBuffers(): { count: number; names: string[] };
 }
 
 export async function confirm(host: FeatureHost, question: string, action: string): Promise<boolean> {

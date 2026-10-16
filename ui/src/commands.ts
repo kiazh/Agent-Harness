@@ -49,6 +49,7 @@ export function splitSub(args: string): [string, string] {
 const HELP_GROUPS: Array<[group: string, names: string[]]> = [
 	["Session", ["new", "resume", "sessions", "search", "recall", "rename", "fork", "delete", "export", "clear"]],
 	["Task", ["goal", "review", "init", "delegate", "agents"]],
+	["Workspace", ["workspace", "editor", "explorer", "lsp", "problems", "quickopen"]],
 	["Memory", ["memory", "growth", "persona", "skills"]],
 	["Context", ["context", "compress"]],
 	["Automation", ["jobs"]],

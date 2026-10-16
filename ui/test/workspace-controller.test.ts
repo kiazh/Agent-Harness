@@ -45,6 +45,7 @@ import {
 	type WorkspacePersistenceLike,
 } from "../src/workspace/controller.ts";
 import type { FocusRegion, WorkspacePersistedState } from "../src/workspace/state.ts";
+import { WORKSPACE_STATE_VERSION } from "../src/workspace/state.ts";
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
@@ -397,6 +398,30 @@ test("openWorkspace mints the identity, persists intent and restore round-trips"
 	assert.equal(persisted.explorerRequested, true);
 	assert.deepEqual(await h.controller.restore("/ws"), persisted);
 	assert.equal(await h.controller.restore("/other"), undefined);
+	await h.controller.dispose();
+});
+
+test("openWorkspace merges layout intent without clobbering stored open files", async () => {
+	const h = build();
+	const stored: WorkspacePersistedState = {
+		version: WORKSPACE_STATE_VERSION,
+		requestedMode: "editor",
+		splitRatio: 0.4,
+		explorerRequested: true,
+		openUris: ["file:///ws/main.ts", "file:///ws/util.ts"],
+		activeUri: "file:///ws/main.ts",
+		cursorByUri: { "file:///ws/main.ts": { offset: 33 } },
+	};
+	await h.persistence.save("/ws", stored);
+	await openWorkspace(h);
+	const written = h.persistence.saves.at(-1)?.state;
+	assert.ok(written);
+	assert.deepEqual(written.openUris, stored.openUris, "stored open files survive the open-time persist");
+	assert.equal(written.activeUri, stored.activeUri);
+	assert.deepEqual(written.cursorByUri, stored.cursorByUri);
+	const restored = await h.controller.restore("/ws");
+	assert.ok(restored);
+	assert.deepEqual(restored.openUris, stored.openUris, "restore still reads the previous session");
 	await h.controller.dispose();
 });
 

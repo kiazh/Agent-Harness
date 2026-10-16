@@ -254,6 +254,11 @@ interface FrameCache {
  */
 export class EditorView implements Component, Focusable {
 	focused = false;
+	/**
+	 * App focus-router seam: invoked whenever a mouse event claims focus, so
+	 * the host can track the active region (plan §8 focus priority v1).
+	 */
+	onFocusRequested?: () => void;
 
 	private readonly store: EditorStore;
 	private readonly onChangeCallback: ((documentId: string) => void) | undefined;
@@ -555,7 +560,10 @@ export class EditorView implements Component, Focusable {
 		const x = Math.floor(event.x);
 		if (x < gutterCells) {
 			// Gutter: claim focus but never move the caret (plan §2 chrome).
-			if (event.type === "press" && event.button === "left") return { focus: true, handled: true };
+			if (event.type === "press" && event.button === "left") {
+				this.onFocusRequested?.();
+				return { focus: true, handled: true };
+			}
 			return undefined;
 		}
 		const rows = this.viewportRows;
@@ -566,11 +574,13 @@ export class EditorView implements Component, Focusable {
 		const offset = this.offsetForCell(record, starts, contentCells, state, clampedY, x - gutterCells);
 		if (event.type === "press") {
 			this.dragging = true;
+			this.onFocusRequested?.();
 			this.moveCaret(documentId, offset, false);
 			return { capture: true, focus: true, handled: true };
 		}
 		if (event.type === "drag") {
 			if (!this.dragging) return undefined;
+			this.onFocusRequested?.();
 			this.moveCaret(documentId, offset, true);
 			return { capture: true, focus: true, handled: true };
 		}
@@ -584,6 +594,7 @@ export class EditorView implements Component, Focusable {
 					this.moveCaret(documentId, offset, false);
 				}
 			}
+			this.onFocusRequested?.();
 			return { handled: true, focus: true };
 		}
 		return undefined;

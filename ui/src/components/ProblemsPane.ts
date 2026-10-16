@@ -77,6 +77,8 @@ export interface ProblemsPaneOptions {
  */
 export class ProblemsPane implements Component, Focusable {
 	focused = false;
+	/** App focus-router seam: invoked when a mouse event claims focus. */
+	onFocusRequested?: () => void;
 
 	private readonly model: ProblemsModel;
 	private readonly requestRenderCallback: (() => void) | undefined;
@@ -177,6 +179,7 @@ export class ProblemsPane implements Component, Focusable {
 		const index = this.lastStart + (y - 1);
 		const row = this.model.rows()[index];
 		if (!row) return undefined;
+		this.onFocusRequested?.();
 		if (event.type === "press") {
 			this.selectionValue = index;
 			this.requestRenderCallback?.();

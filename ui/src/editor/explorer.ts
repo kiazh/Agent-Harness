@@ -495,6 +495,8 @@ export class ExplorerPane implements Component {
 	focused = false;
 	onOpenFile: ((entry: WorkspaceListEntry) => void) | undefined;
 	onPreviewFile: ((entry: WorkspaceListEntry) => void) | undefined;
+	/** App focus-router seam: invoked when a mouse event claims focus. */
+	onFocusRequested?: () => void;
 
 	private readonly model: ExplorerModel;
 	private readonly onChange: (() => void) | undefined;
@@ -562,6 +564,7 @@ export class ExplorerPane implements Component {
 		const rows = this.layoutRows();
 		const row = rows[event.y];
 		if (!row) return undefined;
+		this.onFocusRequested?.();
 		if (row.type === "header") {
 			if (event.type === "click" && event.x >= row.toggleStart && event.x < row.toggleEnd) {
 				void this.model.toggleHidden();

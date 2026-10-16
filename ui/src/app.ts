@@ -3,7 +3,8 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { userInfo } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
 	Container,
 	type Component,
@@ -22,9 +23,15 @@ import { Menu } from "./components/Menu.ts";
 import { OAuthProgress } from "./components/OAuthProgress.ts";
 import { ApprovalCard, type ApprovalDecision } from "./components/ApprovalCard.ts";
 import { AppShell } from "./components/AppShell.ts";
+import { EditorPane, uriDisplayPath } from "./components/EditorPane.ts";
 import { OutputStore, OutputViewer, type OutputRecord } from "./components/OutputViewer.ts";
+import { ProblemsPane } from "./components/ProblemsPane.ts";
+import {
+	CompletionPopup,
+	completionPopupModelFrom,
+} from "./components/IntelligencePopups.ts";
 import { AnimationCoordinator } from "./design/motion.ts";
-import { type FamilySession, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
+import { type FamilySession, type FeatureHost, formatLspStatusLine, type NoticeKind, runCommand, SLASH_COMMANDS, type WorkspaceHost } from "./features/index.ts";
 import { guardSubmit } from "./commandDispatch.ts";
 import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions } from "./features/types.ts";
 import { FamilyStore, listFamilySessions } from "./family.ts";
@@ -42,9 +49,47 @@ import type {
 	SessionInfo,
 	SessionResult,
 } from "./protocol.ts";
+import { RpcError } from "./protocol.ts";
+import { EditorStore, type DocumentRecord } from "./editor/model.ts";
+import { TabModel } from "./editor/tabs.ts";
+import { EditorView } from "./editor/view.ts";
+import { ExplorerModel, ExplorerPane } from "./editor/explorer.ts";
+import { QuickOpenPane } from "./editor/quickOpen.ts";
+import {
+	CompletionSession,
+	LocationPicker,
+	narrowLocationsPayload,
+	ProblemsModel,
+	RenameSession,
+	type IntelligenceRequest,
+	type LocationChoice,
+	type ProblemRow,
+} from "./editor/intelligence.ts";
+import { offsetToPosition, positionToOffset } from "./editor/positions.ts";
 import { SessionTailStore, tailEntries, trimSupersededHistory, type SessionTail, type TailBlock } from "./tail.ts";
 import { editorTheme, getSkin, setSkin, SKIN_NAMES, skinDescription } from "./theme.ts";
 import { Transcript } from "./transcript.ts";
+import {
+	WorkspaceController,
+	type DirtyCloseChoice,
+	type IntelligenceOutcome,
+	type SaveConflictDescriptor,
+	type WorkspacePersistenceLike,
+} from "./workspace/controller.ts";
+import { WorkspaceGatewayAdapter, type WorkspaceRequestFn } from "./workspace/gateway.ts";
+import { WorkspacePersistence } from "./workspace/persistence.ts";
+import { computeLayout } from "./workspace/layout.ts";
+import type {
+	FocusRegion,
+	LayoutInput,
+	LayoutResult,
+	WorkspacePersistedState,
+} from "./workspace/state.ts";
+import type {
+	LspPosition,
+	WorkspaceEvent,
+	WorkspaceQuickOpenResult,
+} from "./workspace/protocol.ts";
 
 export interface AppOptions {
 	model?: string;
@@ -78,6 +123,94 @@ interface SessionTurn {
 	usageLatest: number;
 	/** Bounded retired turn IDs; late duplicates are inert. */
 	retired: string[];
+}
+
+/**
+ * Integrated workspace wiring (T3/T6/T12): the controller plus the retained
+ * views/panes it drives. Constructed once at start() when the feature is
+ * enabled; absent forever otherwise (chat-only behavior stays identical).
+ */
+interface WorkspaceIntegration {
+	gateway: WorkspaceGatewayAdapter;
+	controller: WorkspaceController;
+	store: EditorStore;
+	tabs: TabModel;
+	view: EditorView;
+	pane: EditorPane;
+	explorerModel: ExplorerModel;
+	explorerPane: ExplorerPane;
+	problemsModel: ProblemsModel;
+	problemsPane: ProblemsPane;
+}
+
+/** Layout-intent + terminal identity for shell re-sync (cheap change key). */
+function workspaceShellKey(input: LayoutInput, columns: number, rows: number): string {
+	return [
+		input.requestedMode,
+		input.splitRatio,
+		input.explorerRequested ? 1 : 0,
+		input.preferredPane,
+		columns,
+		rows,
+	].join("|");
+}
+
+/**
+ * Legacy xterm sequences pi-tui 1.0.0 cannot express through `matchesKey`:
+ * its f-key matcher requires modifier 0, so shift+F# never matches. The app
+ * decodes these two explicitly for Shift+F6 (focus cycle) and Shift+F12
+ * (references); `matchesKey` forms are kept alongside for a future toolkit.
+ */
+const SHIFT_F6_SEQUENCE = "\x1b[17;2~";
+const SHIFT_F12_SEQUENCE = "\x1b[24;2~";
+
+/** Basename for notices (scheme-stripped, percent-decoded; never the raw URI). */
+function displayUriName(uri: string): string {
+	const path = uriDisplayPath(uri);
+	const parts = path.split("/").filter((segment) => segment.length > 0);
+	return parts[parts.length - 1] ?? path;
+}
+
+/** True when an untrusted `workspace.open` payload carries a usable binding. */
+function isWorkspaceIdentity(value: unknown): boolean {
+	if (typeof value !== "object" || value === null) return false;
+	const identity = value as { workspaceId?: unknown; epoch?: unknown; resolvedRoot?: unknown };
+	return (
+		typeof identity.workspaceId === "string" &&
+		identity.workspaceId.length > 0 &&
+		typeof identity.epoch === "number" &&
+		Number.isFinite(identity.epoch) &&
+		typeof identity.resolvedRoot === "string" &&
+		identity.resolvedRoot.length > 0
+	);
+}
+
+/**
+ * Typed failure for the IntelligenceRequest adapter: sessions catch it and
+ * record an honest failure (including `superseded`, whose result is gone).
+ */
+class WorkspaceIntelligenceFailure extends Error {
+	readonly reason: "refused" | "failed" | "no-workspace" | "superseded";
+
+	constructor(reason: "refused" | "failed" | "no-workspace" | "superseded", message: string) {
+		super(message);
+		this.name = "WorkspaceIntelligenceFailure";
+		this.reason = reason;
+	}
+}
+
+function intelligenceOutcomeMessage(outcome: IntelligenceOutcome): string {
+	switch (outcome.status) {
+		case "refused":
+		case "failed":
+			return outcome.message;
+		case "no-workspace":
+			return "no workspace is open";
+		case "superseded":
+			return "superseded by a newer request";
+		default:
+			return "unavailable";
+	}
 }
 
 export class App implements FeatureHost {
@@ -191,6 +324,30 @@ export class App implements FeatureHost {
     private lastPromptImages: ImageAttachment[] = [];
     private lastPromptSessionId: string | undefined;
 
+	// ─── integrated workspace (T3/T6/T12) ───────────────────────────────────
+	/** MACHINA_WORKSPACE gate; captured at start() so tests can set it late. */
+	private workspaceFlagOn = true;
+	/** The backend answered METHOD_NOT_FOUND for workspace.* exactly once. */
+	private workspaceUnsupported = false;
+	private integration: WorkspaceIntegration | undefined;
+	private workspaceHostSurface: WorkspaceHost | undefined;
+	/** True once a successful open pushed geometry to the shell. */
+	private workspaceLayoutActive = false;
+	/** Latest computed workspace geometry (drives focus regions + pane rows). */
+	private workspaceLayout: LayoutResult | undefined;
+	private lastWorkspaceShellKey = "";
+	/** v1 focus router state (plan §8): the last meaningfully focused region. */
+	private activeRegion: FocusRegion = "chat-composer";
+	private problemsOpen = false;
+	private completionSession: CompletionSession | undefined;
+	private quickOpenPane: QuickOpenPane | undefined;
+	private quickOpenHandle: OverlayHandle | undefined;
+	/** Re-entrancy guard for the dirty-exit review. */
+	private dirtyExitInProgress = false;
+	/** Stored workspace_ui_state captured BEFORE open (open overwrites it). */
+	private workspacePreOpenRaw: string | undefined;
+	private workspacePreOpenCaptured = false;
+
 	// Match the server turn timeout (turn_timeout=300s) so the UI does not
 	// time out and unlock while the server is still running the turn (which
 	// would surface as a confusing TURN_IN_PROGRESS on the next submit).
@@ -254,6 +411,7 @@ export class App implements FeatureHost {
 		// turns). Without this, filled rows linger as ghost bands behind
 		// newer output.
 		this.tui.setClearOnShrink(true);
+		this.workspaceFlagOn = !/^(0|false|off)$/i.test((process.env.MACHINA_WORKSPACE ?? "").trim());
 		this.shell.sync();
 		if (isViewportTUI(this.tui)) {
 			this.tui.setLayoutRoot(this.shell.root);
@@ -275,12 +433,14 @@ export class App implements FeatureHost {
 		this.client.onExit = (code, stderr) => this.onGatewayExit(code, stderr);
 		this.client.start();
 
+		let initializedCwd: string | undefined;
 		try {
 			const init = await this.client.request<InitializeResult>(
 				"initialize",
 				{ protocolVersion: 2, model: this.options.model, provider: this.options.provider, mode: this.options.mode },
 				60_000,
 			);
+			initializedCwd = init.cwd;
 			this.version = init.version;
 			Object.assign(this.footer, { cwd: init.cwd, branch: init.branch, model: init.model, status: "ready" });
 			try {
@@ -335,6 +495,12 @@ export class App implements FeatureHost {
 			const tail = this.client.stderr().slice(-8);
 			if (tail.length) this.transcript.addNotice(tail.join("\n"));
 			this.transcript.addNotice("Run `machina doctor` to check your setup. Press Ctrl+C to exit.");
+		}
+		// Integrated workspace: only after initialize + session setup, only when
+		// the flag allows it, and never blocking chat. The open runs in the
+		// background; failures notify once and leave the chat tree untouched.
+		if (initializedCwd !== undefined && this.workspaceFlagOn) {
+			this.startWorkspace(initializedCwd);
 		}
 		this.tui.requestRender();
 	}
@@ -408,6 +574,15 @@ export class App implements FeatureHost {
 		return () => {
 			this.featureEventHandlers.delete(handler);
 		};
+	}
+
+	/**
+	 * FeatureHost: the integrated-workspace surface. Present only when the
+	 * feature was constructed at start(); commands check controllerAvailable()
+	 * so a METHOD_NOT_FOUND backend disables them with one notice.
+	 */
+	workspace(): WorkspaceHost | undefined {
+		return this.workspaceHostSurface;
 	}
 
 	printMarkdown(text: string): void {
@@ -891,6 +1066,17 @@ export class App implements FeatureHost {
 
 	async exit(): Promise<void> {
 		if (this.exiting) return;
+		// Plan §9 dirty-quit review: one dialog before any teardown. The review
+		// runs while the app is still alive (dialogs stay usable); a cancel or
+		// a failed save leaves everything untouched.
+		if (this.dirtyExitInProgress) return;
+		this.dirtyExitInProgress = true;
+		try {
+			if (!(await this.reviewDirtyExit())) return;
+		} finally {
+			this.dirtyExitInProgress = false;
+		}
+		if (this.exiting) return;
 		this.exiting = true;
 		this.footer.dispose();
 		for (const timer of this.inFlightTimers.values()) clearTimeout(timer);
@@ -901,8 +1087,44 @@ export class App implements FeatureHost {
 		for (const dialog of [...this.dialogs].reverse()) dialog.cancel();
 		this.inputListenerDisposer?.();
 		this.tui.stop();
+		await this.integration?.controller.dispose();
 		await this.client.stop();
 		this.resolveExit();
+	}
+
+	/**
+	 * Dirty-quit review (plan §9): lists the dirty basenames (bounded to 8 plus
+	 * a count) and offers Save all & exit / Discard & exit / Cancel. Save-all
+	 * drives sequential controller saves; the first failure (conflict,
+	 * refusal, transport) keeps the app open with a notice naming the file.
+	 */
+	private async reviewDirtyExit(): Promise<boolean> {
+		const integration = this.integration;
+		if (!integration || this.exiting) return true;
+		const dirty = integration.store.documents().filter((document) => document.dirty);
+		if (dirty.length === 0) return true;
+		const names = dirty.slice(0, 8).map((document) => displayUriName(document.uri));
+		const more = dirty.length > names.length ? ` (+${dirty.length - names.length} more)` : "";
+		const choice = await this.pick(`Unsaved changes: ${names.join(", ")}${more}`, [
+			{ value: "save", label: "Save all & exit" },
+			{ value: "discard", label: "Discard & exit" },
+			{ value: "cancel", label: "Cancel" },
+		]);
+		if (!choice || choice.value === "cancel") return false;
+		if (choice.value === "discard") return true;
+		for (const document of dirty) {
+			const outcome = await integration.controller.save(document.id);
+			if (outcome.status === "conflict") {
+				await this.resolveSaveConflict(outcome.conflict);
+				this.print(`Exit cancelled: ${displayUriName(document.uri)} was not saved.`, "warning");
+				return false;
+			}
+			if (outcome.status !== "saved") {
+				this.print(`Exit cancelled: could not save ${displayUriName(document.uri)}.`, "error");
+				return false;
+			}
+		}
+		return true;
 	}
 
 	// ─── input ────────────────────────────────────────────────────────────
@@ -944,7 +1166,39 @@ export class App implements FeatureHost {
 
 	private onKey(data: string): { consume: boolean } | undefined {
 		this.shell.sync();
+		this.syncWorkspaceShellIfChanged();
 		if (this.dialogs.length || this.approvalDialogs.size) return undefined; // focused dialogs own their keys
+
+		// ── integrated workspace (plan §8 focus priority) ────────────────────
+		// The Quick Open overlay owns every key except Esc/Ctrl+C (which would
+		// otherwise reach the stop/exit branches below): returning early lets
+		// the focused overlay component receive everything else.
+		if (this.quickOpenPane) {
+			if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+				this.quickOpenPane.dismiss();
+				return { consume: true };
+			}
+			return undefined;
+		}
+		const integration = this.integration;
+		if (integration && !this.workspaceUnsupported) {
+			// An editor intelligence popup (completion) owns Enter/Tab/Esc and
+			// arrows while it is open. This runs BEFORE the running-turn Esc
+			// branch: Esc dismisses the top popup and must not cancel a chat turn.
+			if (integration.pane.handleIntelligenceKey(data) === "consumed") {
+				this.tui.requestRender();
+				return { consume: true };
+			}
+			// The Problems pane owns Esc while focused: it closes the section
+			// instead of falling into the double-Esc prompt refill or stopping
+			// the running turn.
+			if (this.problemsOpen && this.activeRegion === "problems" && matchesKey(data, Key.escape)) {
+				this.closeProblems();
+				return { consume: true };
+			}
+			const workspaceKey = this.handleWorkspaceKey(data);
+			if (workspaceKey) return workspaceKey;
+		}
 
         if (matchesKey(data, Key.ctrl("v")) || matchesKey(data, Key.super("v"))) {
             const epoch = this.imageEpoch;
@@ -975,6 +1229,10 @@ export class App implements FeatureHost {
 				{ value: "complete", label: "Tab — complete", description: "Commands and arguments" },
 				{ value: "subagents", label: "↓ — subagent menu", description: "On empty input: switch between the main session and its subagents" },
 				{ value: "tabs", label: "Ctrl+Shift+←/→ — switch agents", description: "Cycle the main session and its subagents" },
+				{ value: "quickopen", label: "Ctrl+P — quick open", description: "Fuzzy file search in the workspace" },
+				{ value: "save", label: "Ctrl+S — save file", description: "Save the active editor buffer" },
+				{ value: "focus", label: "F6 / Shift+F6 — cycle focus", description: "Composer → editor → explorer → problems" },
+				{ value: "chatmax", label: "Ctrl+←/→ — toggle chat maximize", description: "Editor word motion stays alt+arrows" },
 				{ value: "help", label: "? / F1 — shortcuts", description: "? on empty input, F1 with a draft" },
 				{ value: "commands", label: "/help — all commands", description: "/growth shows learning details" },
 				{ value: "learning", label: "□ / ▪ — activity and learning", description: "Pulses while working and briefly when learning is saved" },
@@ -1042,6 +1300,928 @@ export class App implements FeatureHost {
 			return { consume: true };
 		}
 		return undefined;
+	}
+
+	// ─── integrated workspace (T3/T6/T12) ───────────────────────────────────
+
+	/**
+	 * Construct the integration and open the workspace in the background.
+	 * Called once from start() after initialize + session setup. Nothing here
+	 * touches the shell until the open succeeds, so a failure leaves chat-only
+	 * behavior byte-identical.
+	 */
+	private startWorkspace(root: string): void {
+		const request: WorkspaceRequestFn = <T>(method: string, params: Record<string, unknown>) => {
+			if (this.workspaceUnsupported) {
+				return Promise.reject(new Error("workspace is unavailable on this backend"));
+			}
+			return this.client.request<T>(method, params, 120_000).then((result) => {
+				// Fail closed on a malformed open identity (a backend that does
+				// not really serve workspace.* answers `{}`): binding a bogus
+				// workspace would half-open the shell. One quiet disable notice.
+				if (method === "workspace.open" && !isWorkspaceIdentity(result)) {
+					this.noteWorkspaceUnsupported();
+					throw new Error("workspace.open returned an invalid identity");
+				}
+				return result;
+			}).catch((error: unknown) => {
+				// A backend without workspace.* fails every call closed with
+				// METHOD_NOT_FOUND: disable the feature once, quietly, and let
+				// the error surface normally for this call.
+				if (error instanceof RpcError && error.code === -32601) this.noteWorkspaceUnsupported();
+				throw error;
+			});
+		};
+		const gateway = new WorkspaceGatewayAdapter(request);
+		const store = new EditorStore();
+		const tabs = new TabModel({ isDirty: (documentId) => store.getDocument(documentId)?.dirty ?? false });
+		const view = new EditorView({
+			store,
+			view: { documentId: "", cursorOffset: 0, scrollLine: 0, horizontalCellOffset: 0 },
+			onChange: (documentId) => {
+				this.integration?.controller.noteEdit(documentId);
+				this.tui.requestRender();
+			},
+			requestRender: () => this.tui.requestRender(),
+			// The view's clipboard seam: copy through the real system clipboard
+			// (clipboard.ts), paste through the text reader (images.ts, "" when
+			// empty or unavailable → null so the view never inserts "").
+			clipboard: {
+				copy: (text) => copyClipboardText(text),
+				paste: async () => {
+					try {
+						const text = await clipboardText(process.platform);
+						return text.length > 0 ? text : null;
+					} catch {
+						return null;
+					}
+				},
+			},
+		});
+		view.onFocusRequested = () => this.noteRegionFocus("editor");
+		const pane = new EditorPane({
+			store,
+			tabModel: tabs,
+			view,
+			requestRender: () => this.tui.requestRender(),
+			onSelectTab: () => {
+				// Tab focus refreshes the Problems projection for the new active file.
+				void this.refreshProblemsForActiveDocument();
+				this.tui.requestRender();
+			},
+			onCloseTab: (documentId) => void this.closeWorkspaceTab(documentId),
+			// Fallback when the pane owns the key directly; the app's Ctrl+S
+			// handler runs first while the editor region is active.
+			onSave: () => void this.saveActiveDocument(),
+		});
+		const controller = new WorkspaceController({
+			gateway,
+			persistence: this.workspacePersistence(),
+			store,
+			tabs,
+			requestRender: () => this.tui.requestRender(),
+			notify: (kind, text) => {
+				// One quiet disable notice: the controller's own error for the
+				// METHOD_NOT_FOUND open is suppressed (the info notice covers it),
+				// and after that all controller errors stem from the same cause.
+				if (this.workspaceUnsupported && kind === "error") return;
+				this.transcript.addNotice(text, kind);
+				this.tui.requestRender();
+			},
+			focus: (region) => this.setFocusForRegion(region),
+		});
+		const explorerModel = new ExplorerModel((path, cursor, listOptions) =>
+			gateway.list(path, cursor, listOptions),
+		);
+		const explorerPane = new ExplorerPane(explorerModel, { onChange: () => this.tui.requestRender() });
+		explorerPane.onFocusRequested = () => this.noteRegionFocus("explorer");
+		explorerPane.onOpenFile = (entry) => {
+			if (entry.kind === "file") void this.openWorkspacePath(entry.path, { preview: false });
+		};
+		explorerPane.onPreviewFile = (entry) => {
+			if (entry.kind === "file") void this.openWorkspacePath(entry.path, { preview: true });
+		};
+		const problemsModel = new ProblemsModel({ request: this.intelligenceRequest() });
+		const problemsPane = new ProblemsPane({
+			model: problemsModel,
+			requestRender: () => this.tui.requestRender(),
+			onOpen: (row) => void this.openProblem(row),
+			onClose: () => this.closeProblems(),
+		});
+		problemsPane.onFocusRequested = () => this.noteRegionFocus("problems");
+
+		this.integration = {
+			gateway,
+			controller,
+			store,
+			tabs,
+			view,
+			pane,
+			explorerModel,
+			explorerPane,
+			problemsModel,
+			problemsPane,
+		};
+		this.workspaceHostSurface = {
+			controller,
+			controllerAvailable: () =>
+				this.workspaceFlagOn && !this.workspaceUnsupported && this.integration !== undefined,
+			setMode: (mode) => {
+				controller.setMode(mode);
+				this.syncWorkspaceShell();
+			},
+			toggleChatMaximize: () => {
+				controller.toggleChatMaximize();
+				this.syncWorkspaceShell();
+			},
+			toggleEditorMaximize: () => {
+				controller.toggleEditorMaximize();
+				this.syncWorkspaceShell();
+			},
+			restoreSplit: () => {
+				controller.restoreSplit();
+				this.syncWorkspaceShell();
+			},
+			setExplorer: (open) => this.setExplorerRequested(open),
+			layoutChanged: () => this.syncWorkspaceShell(),
+			openProblems: () => this.openProblems(),
+			openQuickOpen: () => void this.openQuickOpen(),
+			dirtyBuffers: () => {
+				const dirty = store.documents().filter((document) => document.dirty);
+				return {
+					count: dirty.length,
+					names: dirty.slice(0, 8).map((document) => displayUriName(document.uri)),
+				};
+			},
+		};
+		this.shell.setWorkspaceEditor(pane);
+		this.shell.setWorkspaceExplorer(explorerPane);
+		this.shell.onWorkspaceRatioChange = (ratio) => {
+			controller.setRatio(ratio);
+			this.syncWorkspaceShell();
+		};
+		this.client.onWorkspaceEvent = (event) => this.onWorkspaceEvent(event);
+		void this.openWorkspaceBackground(root);
+	}
+
+	/**
+	 * Background open. Failures notify once via the controller and leave the
+	 * shell chat-only. On success the restored layout (or the default split)
+	 * reaches the shell, remembered files reopen only when a stored state
+	 * existed, cursors are re-applied, and the LSP/Problems feeds start.
+	 */
+	private async openWorkspaceBackground(root: string): Promise<void> {
+		const integration = this.integration;
+		if (!integration) return;
+		// Capture the stored document BEFORE openWorkspace persists its own
+		// intent over it (see workspacePersistence).
+		try {
+			this.workspacePreOpenRaw = await this.readWorkspaceStateRaw();
+		} catch {
+			this.workspacePreOpenRaw = undefined;
+		}
+		this.workspacePreOpenCaptured = false;
+		const identity = await integration.controller.openWorkspace(root);
+		if (!identity || this.integration !== integration || this.exiting) return;
+		this.workspaceLayoutActive = true;
+		const restored = await integration.controller.restore(identity.resolvedRoot);
+		// The controller's default intent is already the split; only a stored
+		// state overrides it (and an explicit command issued during the open
+		// window is never clobbered).
+		if (restored) integration.controller.applyRestoredLayout(restored);
+		this.syncWorkspaceShell();
+		if (restored) {
+			await integration.controller.reopenRecent(restored);
+			if (this.integration !== integration || this.exiting) return;
+			this.restoreCursorState(restored);
+			const active = integration.tabs.activeDocumentId();
+			if (active) integration.view.setDocument(active);
+		}
+		if (integration.controller.getLayoutInput().explorerRequested) {
+			void integration.explorerModel.load();
+		}
+		integration.controller.setLspStatusListener((snapshot) => {
+			integration.pane.setLspStatus(formatLspStatusLine(snapshot));
+		});
+		void integration.controller.lspStatus();
+		void this.refreshProblemsForActiveDocument();
+		this.syncWorkspaceShell();
+	}
+
+	/**
+	 * Persistence bridge over `config.get`/`config.set("workspace_ui_state")`
+	 * (plan §21). A one-shot snapshot captured before open serves the FIRST
+	 * load: the controller persists its default intent during openWorkspace,
+	 * which would otherwise overwrite the stored entry before `restore` reads
+	 * it (verified by a first-run probe). The snapshot is parsed through
+	 * WorkspacePersistence, so sanitization stays single-sourced.
+	 */
+	private workspacePersistence(): WorkspacePersistenceLike {
+		const live = new WorkspacePersistence({
+			get: () => this.readWorkspaceStateRaw(),
+			set: async (value) => {
+				await this.client.request("config.set", { key: "workspace_ui_state", value, persist: true }, 30_000);
+			},
+		});
+		return {
+			load: async (rootKey) => {
+				if (!this.workspacePreOpenCaptured) {
+					this.workspacePreOpenCaptured = true;
+					const raw = this.workspacePreOpenRaw;
+					if (raw !== undefined) {
+						const snapshot = new WorkspacePersistence({ get: async () => raw, set: async () => {} });
+						const parsed = await snapshot.load(rootKey);
+						if (parsed) return parsed.state;
+					}
+				}
+				return (await live.load(rootKey))?.state;
+			},
+			save: (rootKey, state) => live.save(rootKey, state),
+		};
+	}
+
+	/** Read the stored workspace document ("" and failures mean "nothing"). */
+	private async readWorkspaceStateRaw(): Promise<string | undefined> {
+		const { config } = await this.client.request<ConfigGetResult>("config.get", {}, 30_000);
+		const raw = config["workspace_ui_state"];
+		return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+	}
+
+	/** Apply remembered cursor/scroll positions after a successful reopen. */
+	private restoreCursorState(state: WorkspacePersistedState): void {
+		const integration = this.integration;
+		if (!integration || !state.cursorByUri) return;
+		for (const [uri, cursor] of Object.entries(state.cursorByUri)) {
+			const document = integration.store.documents().find((candidate) => candidate.uri === uri);
+			if (!document) continue;
+			const offset = Math.max(0, Math.min(cursor.offset, document.text.length));
+			const anchor =
+				cursor.anchorOffset === undefined
+					? undefined
+					: Math.max(0, Math.min(cursor.anchorOffset, document.text.length));
+			integration.store.setSelection(document.id, {
+				cursorOffset: offset,
+				...(anchor !== undefined ? { anchorOffset: anchor } : {}),
+			});
+			if (document.id === integration.tabs.activeDocumentId()) {
+				integration.view.setView({
+					documentId: document.id,
+					cursorOffset: offset,
+					...(anchor !== undefined ? { selectionAnchorOffset: anchor } : {}),
+					scrollLine: cursor.scrollLine ?? 0,
+					horizontalCellOffset: 0,
+				});
+			}
+		}
+	}
+
+	/**
+	 * Push current layout intent to the shell and size the editor pane. The
+	 * split geometry itself always comes from computeLayout (single source);
+	 * only the shell's footer (+ possible density gap) is subtracted before
+	 * handing rows to the pane, so over-allocation can never clip its status
+	 * row.
+	 */
+	private syncWorkspaceShell(): void {
+		const integration = this.integration;
+		if (!integration || !this.workspaceLayoutActive) return;
+		const input = integration.controller.getLayoutInput();
+		const columns = Math.max(0, this.tui.terminal.columns);
+		const rows = Math.max(0, this.tui.terminal.rows);
+		this.lastWorkspaceShellKey = workspaceShellKey(input, columns, rows);
+		this.shell.setWorkspaceState(input);
+		const layout = computeLayout({ ...input, columns, rows });
+		this.workspaceLayout = layout;
+		const chrome = this.footer.render(columns).length + (this.shell.currentDensity === "full" ? 1 : 0);
+		if (layout.editor) integration.pane.layout(Math.max(1, layout.editor.rows - chrome));
+		if (layout.explorer) {
+			// The docked tree owns its own windowing: keep the selection visible
+			// inside the same visible column height as the editor pane.
+			integration.explorerPane.setRowBudget(Math.max(3, layout.explorer.rows - chrome - 2));
+		}
+		this.tui.requestRender();
+	}
+
+	/** Cheap re-sync: only when the intent or terminal dimensions changed. */
+	private syncWorkspaceShellIfChanged(): void {
+		const integration = this.integration;
+		if (!integration || !this.workspaceLayoutActive) return;
+		const input = integration.controller.getLayoutInput();
+		const key = workspaceShellKey(input, Math.max(0, this.tui.terminal.columns), Math.max(0, this.tui.terminal.rows));
+		if (key === this.lastWorkspaceShellKey) return;
+		this.syncWorkspaceShell();
+	}
+
+	// ─── workspace focus router (plan §8, v1) ───────────────────────────────
+
+	/**
+	 * Regions the current geometry makes visible, in cycle order. The editor
+	 * is skipped while chat is maximized and the explorer while it is not
+	 * docked; the Problems region exists only while its section is open.
+	 */
+	private focusRegions(): FocusRegion[] {
+		const regions: FocusRegion[] = ["chat-composer"];
+		const layout = this.workspaceLayout;
+		if (layout?.editor) regions.push("editor");
+		if (layout?.explorer) regions.push("explorer");
+		if (this.problemsOpen && layout?.editor) regions.push("problems");
+		return regions;
+	}
+
+	private cycleFocus(direction: 1 | -1): void {
+		const regions = this.focusRegions();
+		if (regions.length <= 1) return;
+		const index = regions.indexOf(this.activeRegion);
+		const next = regions[(index + direction + regions.length) % regions.length] ?? "chat-composer";
+		this.setFocusForRegion(next);
+	}
+
+	/** Focus one region: retarget the TUI, record it, and re-sync narrow fallback. */
+	private setFocusForRegion(region: FocusRegion): void {
+		const integration = this.integration;
+		// Only a region the current geometry actually composes may take TUI
+		// focus (typing must never land in a hidden editor). The region intent
+		// still reaches the controller so `preferredPane`/restore stay honest.
+		const visible =
+			region === "chat-composer" ||
+			(region === "editor" && this.workspaceLayout?.editor !== undefined) ||
+			(region === "explorer" && this.workspaceLayout?.explorer !== undefined) ||
+			(region === "problems" && this.problemsOpen && this.workspaceLayout?.editor !== undefined);
+		this.activeRegion = visible ? region : "chat-composer";
+		if (!integration || !visible) {
+			this.tui.setFocus(this.editor);
+		} else {
+			switch (region) {
+				case "editor":
+					this.tui.setFocus(integration.pane);
+					break;
+				case "explorer":
+					this.tui.setFocus(integration.explorerPane);
+					break;
+				case "problems":
+					this.tui.setFocus(integration.problemsPane);
+					break;
+				default:
+					this.tui.setFocus(this.editor);
+			}
+		}
+		integration?.controller.noteFocus(region);
+		this.syncWorkspaceShellIfChanged();
+		this.tui.requestRender();
+	}
+
+	/** Mouse-driven region tracking (component onFocusRequested seam). */
+	private noteRegionFocus(region: FocusRegion): void {
+		if (this.activeRegion === region) return;
+		this.activeRegion = region;
+		this.integration?.controller.noteFocus(region);
+		this.syncWorkspaceShellIfChanged();
+	}
+
+	// ─── workspace keys (plan §8) ───────────────────────────────────────────
+
+	/**
+	 * Global workspace key routing. Keys are consumed only while the workspace
+	 * is live and the feature was not disabled; editor-scoped keys additionally
+	 * require the editor region so they can never fire while the composer (or a
+	 * dialog, handled earlier) owns focus. Ctrl+W is deliberately unbound
+	 * (terminal close risk; close via the tab strip or palette).
+	 */
+	private handleWorkspaceKey(data: string): { consume: boolean } | undefined {
+		const integration = this.integration;
+		if (!integration) return undefined;
+		const ready = integration.controller.phase === "ready";
+		// Ctrl+P — Quick Open overlay (fallback: /quickopen; palette-safe).
+		if (matchesKey(data, Key.ctrl("p")) && ready) {
+			void this.openQuickOpen();
+			return { consume: true };
+		}
+		if (!this.workspaceLayoutActive) return undefined;
+		// Ctrl+T — explorer toggle (terminal new-tab risk documented; /explorer
+		// and the palette remain the fallback).
+		if (matchesKey(data, Key.ctrl("t"))) {
+			this.setExplorerRequested(!integration.controller.getLayoutInput().explorerRequested);
+			return { consume: true };
+		}
+		// Ctrl+Right / Ctrl+Left — chat-maximize toggle. When delivered, the
+		// global binding wins; editor word motion stays alt+arrows (help text).
+		if (matchesKey(data, Key.ctrl("right")) || matchesKey(data, Key.ctrl("left"))) {
+			this.workspaceHostSurface?.toggleChatMaximize();
+			return { consume: true };
+		}
+		// F6 / Shift+F6 — cycle focus. pi-tui 1.0.0's matchesKey cannot express
+		// shift+F-keys (the f-key branch requires modifier 0), so the legacy
+		// xterm sequence is decoded explicitly; the matchesKey form is kept for
+		// a future toolkit that supports it.
+		const shiftedCycle = data === SHIFT_F6_SEQUENCE;
+		if (matchesKey(data, Key.f6) || shiftedCycle) {
+			this.cycleFocus(shiftedCycle ? -1 : 1);
+			return { consume: true };
+		}
+		if (!ready || this.activeRegion !== "editor") return undefined;
+		// Ctrl+Space — completion at the cursor (explicit-only in v1; the
+		// legacy NUL byte is accepted when the Kitty protocol is inactive).
+		if (matchesKey(data, Key.ctrl("space")) || data === "\x00") {
+			void this.startCompletion();
+			return { consume: true };
+		}
+		// F12 / Shift+F12 — go to definition / find references.
+		const shiftedReferences = data === SHIFT_F12_SEQUENCE;
+		if (matchesKey(data, Key.shift("f12")) || shiftedReferences) {
+			void this.runDefinitionOrReferences("references");
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.f12)) {
+			void this.runDefinitionOrReferences("definition");
+			return { consume: true };
+		}
+		// F2 — rename preview (honest "unavailable" until the service offers it).
+		if (matchesKey(data, Key.f2)) {
+			void this.runRenamePreview();
+			return { consume: true };
+		}
+		// Ctrl+S — compare-and-swap save of the active buffer.
+		if (matchesKey(data, Key.ctrl("s"))) {
+			void this.saveActiveDocument();
+			return { consume: true };
+		}
+		return undefined;
+	}
+
+	// ─── workspace documents ────────────────────────────────────────────────
+
+	/** Editor context for intelligence: active record + LSP cursor position. */
+	private activeEditorContext(): { document: DocumentRecord; position: LspPosition } | undefined {
+		const integration = this.integration;
+		if (!integration || integration.controller.phase !== "ready") return undefined;
+		const documentId = integration.tabs.activeDocumentId();
+		if (!documentId) return undefined;
+		const document = integration.store.getDocument(documentId);
+		if (!document) return undefined;
+		const state = integration.store.getViewState(documentId);
+		return { document, position: offsetToPosition(document.text, state?.cursorOffset ?? 0) };
+	}
+
+	/**
+	 * Adapt the controller's IntelligenceOutcome union to the frozen
+	 * IntelligenceRequest seam: ok → result; refused/failed/no-workspace (and
+	 * superseded, whose result is gone) throw a typed error so sessions record
+	 * an honest failure and never render a fabricated result.
+	 */
+	private intelligenceRequest(): IntelligenceRequest {
+		return async (operation, uri, version, position) => {
+			const integration = this.integration;
+			if (!integration) {
+				throw new WorkspaceIntelligenceFailure("no-workspace", "workspace is not available");
+			}
+			const outcome = await integration.controller.request(operation, uri, version, position);
+			switch (outcome.status) {
+				case "ok":
+					return outcome.result;
+				case "superseded":
+					throw new WorkspaceIntelligenceFailure("superseded", "superseded by a newer request");
+				case "refused":
+					throw new WorkspaceIntelligenceFailure("refused", outcome.message);
+				case "failed":
+					throw new WorkspaceIntelligenceFailure("failed", outcome.message);
+				case "no-workspace":
+					throw new WorkspaceIntelligenceFailure("no-workspace", "no workspace is open");
+			}
+		};
+	}
+
+	/** Ctrl+Space: one explicit completion session mounted under the viewport. */
+	private async startCompletion(): Promise<void> {
+		const integration = this.integration;
+		const context = this.activeEditorContext();
+		if (!integration || !context) return; // no open file: do not fire (v1)
+		this.completionSession?.close("superseded");
+		const session = new CompletionSession({
+			store: integration.store,
+			request: this.intelligenceRequest(),
+			uri: context.document.uri,
+			documentId: context.document.id,
+			position: context.position,
+		});
+		this.completionSession = session;
+		const popup = new CompletionPopup({});
+		popup.onAction = (action) => {
+			if (action.kind === "accept") this.acceptCompletion();
+		};
+		const state = await session.start();
+		if (this.completionSession !== session || this.exiting) return;
+		if (state === "visible") {
+			popup.setModel(completionPopupModelFrom(session));
+			integration.pane.setIntelligence(popup, {
+				accept: () => this.acceptCompletion(),
+				dismiss: () => this.dismissCompletion(),
+				move: (direction) => {
+					session.moveSelection(direction);
+					popup.setModel(completionPopupModelFrom(session));
+					this.tui.requestRender();
+				},
+			});
+			this.tui.requestRender();
+			return;
+		}
+		// Nothing to show: one quiet honest notice per explicit invocation.
+		if (session.lastDropReason === "unavailable") this.print("Completion is unavailable here.", "info");
+		else if (session.lastDropReason === "error") this.print("Completion request failed.", "info");
+		this.clearCompletion();
+	}
+
+	private acceptCompletion(): void {
+		const session = this.completionSession;
+		if (!session) return;
+		const result = session.accept();
+		this.clearCompletion();
+		if (result.ok) {
+			for (const application of result.applied) {
+				this.integration?.controller.noteEdit(application.documentId);
+			}
+			this.refreshEditorView();
+		} else if (result.reason !== "not-open") {
+			this.print(`Completion not applied: ${result.message}`, "info");
+		}
+		this.tui.requestRender();
+	}
+
+	private dismissCompletion(): void {
+		this.clearCompletion();
+	}
+
+	private clearCompletion(): void {
+		this.completionSession?.close("dismissed");
+		this.completionSession = undefined;
+		this.integration?.pane.setIntelligence(undefined);
+		this.tui.requestRender();
+	}
+
+	/** F12 / Shift+F12: request, pick among multiple targets, then jump. */
+	private async runDefinitionOrReferences(operation: "definition" | "references"): Promise<void> {
+		const integration = this.integration;
+		const context = this.activeEditorContext();
+		if (!integration || !context) return;
+		const outcome = await integration.controller.request(
+			operation,
+			context.document.uri,
+			context.document.version,
+			context.position,
+		);
+		if (this.exiting || this.integration !== integration) return;
+		if (outcome.status !== "ok") {
+			this.print(`${operation} unavailable: ${intelligenceOutcomeMessage(outcome)}`, "info");
+			return;
+		}
+		const payload = narrowLocationsPayload(outcome.result.result);
+		const picker = new LocationPicker(payload.locations, { omitted: payload.omitted });
+		if (picker.size === 0) {
+			this.print(`No ${operation} found.`, "info");
+			return;
+		}
+		if (picker.size === 1) {
+			const only = picker.current();
+			if (only) await this.openLocation(only);
+			return;
+		}
+		const targets = picker.targets();
+		const choice = await this.pick(
+			`${operation === "definition" ? "Definitions" : "References"} (${targets.length})`,
+			targets.map((target, index) => ({
+				value: String(index),
+				label: `${uriDisplayPath(target.uri)}:${target.lineLabel}`,
+			})),
+		);
+		if (!choice) return;
+		const target = targets[Number(choice.value)];
+		if (target) await this.openLocation(target);
+	}
+
+	/** Open one jump target and place the caret (definition-style navigation). */
+	private async openLocation(target: LocationChoice): Promise<void> {
+		const integration = this.integration;
+		if (!integration) return;
+		const outcome = await integration.controller.openUri(target.uri);
+		if (outcome.status !== "opened" && outcome.status !== "focused") return;
+		const record = integration.store.getDocument(outcome.documentId);
+		if (record) {
+			const offset = positionToOffset(record.text, { line: target.line, character: target.character });
+			integration.store.setSelection(outcome.documentId, { cursorOffset: offset });
+			integration.view.setView({
+				documentId: outcome.documentId,
+				cursorOffset: offset,
+				scrollLine: Math.max(0, target.line - 2),
+				horizontalCellOffset: 0,
+			});
+		}
+		this.tui.requestRender();
+	}
+
+	/** F2: prepare a rename preview; the honest v1 answer is "unavailable". */
+	private async runRenamePreview(): Promise<void> {
+		const integration = this.integration;
+		const context = this.activeEditorContext();
+		if (!integration || !context) return;
+		const session = new RenameSession({
+			store: integration.store,
+			uri: context.document.uri,
+			documentId: context.document.id,
+			position: context.position,
+		});
+		const result = await session.start();
+		if (!result.ok) {
+			// Unavailable is the honest state until the service offers rename
+			// (the operation is not in the frozen intelligence allowlist).
+			this.print(result.reason, "info");
+			return;
+		}
+		const choice = await this.pick(
+			`Rename: ${result.preview.fileCount} file(s), ${result.preview.totalEdits} edit(s)`,
+			[
+				{ value: "cancel", label: "Cancel" },
+				{ value: "apply", label: "Apply rename" },
+			],
+		);
+		if (choice?.value !== "apply") return;
+		const applied = session.apply(true);
+		if (!applied.ok) {
+			this.print(`Rename not applied: ${applied.message}`, "error");
+			return;
+		}
+		for (const application of applied.applied) {
+			integration.controller.noteEdit(application.documentId);
+			this.refreshEditorView(application.documentId);
+		}
+		this.print("Rename applied.", "info");
+	}
+
+	/** Ctrl+S: save the active buffer; conflicts open the explicit dialog. */
+	private async saveActiveDocument(): Promise<void> {
+		const integration = this.integration;
+		if (!integration) return;
+		const documentId = integration.tabs.activeDocumentId();
+		// No open file: do not fire (consistent with completion/definition/rename).
+		if (!documentId) return;
+		await this.saveDocument(documentId);
+	}
+
+	private async saveDocument(documentId: string): Promise<boolean> {
+		const integration = this.integration;
+		if (!integration) return false;
+		const outcome = await integration.controller.save(documentId);
+		switch (outcome.status) {
+			case "saved":
+				this.tui.requestRender(); // status row: dirty marker cleared
+				return true;
+			case "conflict":
+				await this.resolveSaveConflict(outcome.conflict);
+				return false;
+			case "not-found":
+				this.print("No file open to save.", "info");
+				return false;
+			default:
+				// refused/failed were notified by the controller with the reason.
+				return false;
+		}
+	}
+
+	/** Reload disk / Overwrite (explicit) / Keep editing, per plan §9. */
+	private async resolveSaveConflict(conflict: SaveConflictDescriptor): Promise<void> {
+		const integration = this.integration;
+		if (!integration) return;
+		const choice = await this.pick(`Save conflict: ${displayUriName(conflict.uri)}`, [
+			{ value: "reload", label: "Reload disk", description: "Discard buffer edits and adopt the file on disk" },
+			{ value: "overwrite-explicit", label: "Overwrite (explicit)", description: "Write this buffer over the file on disk" },
+			{ value: "keep", label: "Keep editing", description: "Nothing is written; the buffer stays dirty" },
+		]);
+		const resolution = await integration.controller.resolveConflict(
+			conflict.documentId,
+			(choice?.value as "keep" | "reload" | "overwrite-explicit" | undefined) ?? "keep",
+		);
+		if (resolution.status === "reloaded" || resolution.status === "saved" || resolution.status === "kept") {
+			this.refreshEditorView(conflict.documentId);
+		}
+		this.tui.requestRender();
+	}
+
+	/** Tab-strip close (middle-click / onCloseTab): decision dialog when dirty. */
+	private async closeWorkspaceTab(documentId: string): Promise<void> {
+		const integration = this.integration;
+		if (!integration) return;
+		const outcome = await integration.controller.closeTab(documentId);
+		if (outcome.status === "needs-decision") {
+			const record = integration.store.getDocument(documentId);
+			const choice = await this.pick(`Close ${record ? displayUriName(record.uri) : "file"}?`, [
+				{ value: "save", label: "Save and close" },
+				{ value: "discard", label: "Discard changes" },
+				{ value: "cancel", label: "Cancel" },
+			]);
+			if (!choice) return;
+			const resolved = await integration.controller.resolveClose(documentId, choice.value as DirtyCloseChoice);
+			if (resolved.status === "closed") this.afterTabClosed(documentId);
+			else if (resolved.status === "save-conflict") await this.resolveSaveConflict(resolved.conflict);
+			else if (resolved.status === "needs-decision") {
+				this.print("The file changed while saving; save again or discard.", "warning");
+			}
+			return;
+		}
+		if (outcome.status === "closed") this.afterTabClosed(documentId);
+	}
+
+	private afterTabClosed(documentId: string): void {
+		const integration = this.integration;
+		if (!integration) return;
+		integration.view.releaseDocument(documentId);
+		const active = integration.tabs.activeDocumentId();
+		if (active) integration.view.setDocument(active);
+		this.tui.requestRender();
+	}
+
+	/** Open a root-relative workspace path (explorer/quick open) as a file URI. */
+	private async openWorkspacePath(path: string, options: { preview?: boolean } = {}): Promise<void> {
+		const integration = this.integration;
+		if (!integration) return;
+		const identity = integration.controller.identity;
+		if (!identity) {
+			this.print("Workspace is not available.", "warning");
+			return;
+		}
+		const uri = pathToFileURL(isAbsolute(path) ? path : join(identity.resolvedRoot, path)).href;
+		const outcome = await integration.controller.openUri(uri, options);
+		if (outcome.status === "opened" || outcome.status === "focused") {
+			integration.view.setDocument(outcome.documentId);
+			void this.refreshProblemsForActiveDocument();
+			this.tui.requestRender();
+		}
+	}
+
+	/** Problems Enter/click: open the file and place the caret at the row. */
+	private async openProblem(row: ProblemRow): Promise<void> {
+		const integration = this.integration;
+		if (!integration) return;
+		const outcome = await integration.controller.openUri(row.uri);
+		if (outcome.status !== "opened" && outcome.status !== "focused") return;
+		const record = integration.store.getDocument(outcome.documentId);
+		if (record) {
+			const offset = positionToOffset(record.text, { line: row.line, character: row.character });
+			integration.store.setSelection(outcome.documentId, { cursorOffset: offset });
+			integration.view.setView({
+				documentId: outcome.documentId,
+				cursorOffset: offset,
+				scrollLine: Math.max(0, row.line - 2),
+				horizontalCellOffset: 0,
+			});
+		}
+		this.tui.requestRender();
+	}
+
+	/** Pull cursor/selection from the store after an external store mutation. */
+	private refreshEditorView(documentId?: string): void {
+		const integration = this.integration;
+		if (!integration) return;
+		const id = documentId ?? integration.tabs.activeDocumentId();
+		if (!id) return;
+		const state = integration.store.getViewState(id);
+		if (state) integration.view.setView(state);
+		this.tui.requestRender();
+	}
+
+	// ─── workspace problems + LSP ───────────────────────────────────────────
+
+	/** Feed the Problems pane: mounted on demand, refocused on request. */
+	private openProblems(): void {
+		const integration = this.integration;
+		if (!integration || this.workspaceUnsupported) {
+			this.print("Workspace is not available.", "warning");
+			return;
+		}
+		if (!this.problemsOpen) {
+			this.problemsOpen = true;
+			integration.pane.setProblems(integration.problemsPane);
+		}
+		if (!this.workspaceLayout?.editor) {
+			// The section lives inside the editor pane: bring the split back
+			// when the geometry allows it, then focus; otherwise say so.
+			this.workspaceHostSurface?.restoreSplit();
+		}
+		if (this.workspaceLayout?.editor) this.setFocusForRegion("problems");
+		else this.print("The editor pane is not visible at this terminal size.", "warning");
+		void this.refreshProblemsForActiveDocument();
+	}
+
+	/** Esc/Problems dismissal: unmount the section and return focus to the editor. */
+	private closeProblems(): void {
+		const integration = this.integration;
+		if (!integration || !this.problemsOpen) return;
+		this.problemsOpen = false;
+		integration.pane.setProblems(undefined);
+		if (this.activeRegion === "problems") this.setFocusForRegion("editor");
+		else this.tui.requestRender();
+	}
+
+	/** Diagnostics pull for the active document (tab focus / after open). */
+	private async refreshProblemsForActiveDocument(): Promise<void> {
+		const integration = this.integration;
+		if (!integration || integration.controller.phase !== "ready") return;
+		const documentId = integration.tabs.activeDocumentId();
+		const record = documentId ? integration.store.getDocument(documentId) : undefined;
+		if (!record) return;
+		await integration.problemsModel.refresh(record.uri, record.version);
+		this.tui.requestRender();
+	}
+
+	// ─── workspace quick open ───────────────────────────────────────────────
+
+	/** Ctrl+P /quickopen: bounded overlay picker over `workspace.quickOpen`. */
+	private async openQuickOpen(): Promise<void> {
+		const integration = this.integration;
+		if (!integration || this.workspaceUnsupported || integration.controller.phase !== "ready") {
+			this.print("Open a workspace first (/workspace).", "warning");
+			return;
+		}
+		if (this.quickOpenPane) return;
+		const pane = new QuickOpenPane((query) => this.workspaceQuickOpen(query), {
+			onChange: () => this.tui.requestRender(),
+		});
+		pane.onOpen = (entry) => {
+			this.closeQuickOpen();
+			void this.openWorkspacePath(entry.path, { preview: true });
+		};
+		pane.onClose = () => this.closeQuickOpen();
+		this.quickOpenPane = pane;
+		this.quickOpenHandle = this.tui.showOverlay(pane, {
+			width: "100%",
+			maxHeight: "100%",
+			anchor: "bottom-center",
+		});
+		pane.activate();
+		this.tui.setFocus(pane);
+		this.tui.requestRender();
+	}
+
+	private closeQuickOpen(): void {
+		const pane = this.quickOpenPane;
+		if (!pane) return;
+		this.quickOpenPane = undefined;
+		this.quickOpenHandle?.hide();
+		this.quickOpenHandle = undefined;
+		pane.focused = false;
+		if (!this.exiting) this.tui.setFocus(this.editor);
+		this.tui.requestRender();
+	}
+
+	/** Ranking call for Quick Open, bound to the open workspace identity. */
+	private workspaceQuickOpen(query: string): Promise<WorkspaceQuickOpenResult> {
+		const integration = this.integration;
+		const identity = integration?.controller.identity;
+		if (!integration || !identity) return Promise.reject(new Error("workspace is not open"));
+		return this.client.request<WorkspaceQuickOpenResult>(
+			"workspace.quickOpen",
+			{ workspaceId: identity.workspaceId, epoch: identity.epoch, query, limit: 50 },
+			120_000,
+		);
+	}
+
+	// ─── workspace events + toggles ─────────────────────────────────────────
+
+	/**
+	 * Workspace notifications (plan §19): a family separate from chat, never
+	 * entering turn bookkeeping. The controller identity/epoch-gates them;
+	 * diagnostics additionally feed the Problems projection.
+	 */
+	private onWorkspaceEvent(event: WorkspaceEvent): void {
+		if (this.exiting) return;
+		const integration = this.integration;
+		if (!integration) return;
+		integration.controller.handleEvent(event);
+		if (event.type === "workspace.diagnostics") {
+			integration.problemsModel.push({
+				uri: event.uri,
+				version: event.version,
+				source: event.source,
+				diagnostics: event.diagnostics,
+			});
+		}
+		this.syncWorkspaceShellIfChanged();
+		this.tui.requestRender();
+	}
+
+	/** Toggle/open/close the explorer column; loads the listing on open. */
+	private setExplorerRequested(open: boolean): void {
+		const integration = this.integration;
+		if (!integration) return;
+		if (integration.controller.getLayoutInput().explorerRequested !== open) {
+			integration.controller.toggleExplorer();
+		}
+		if (open) void integration.explorerModel.load();
+		this.syncWorkspaceShell();
+	}
+
+	/** METHOD_NOT_FOUND once: quiet disable, one info notice, no retry spam. */
+	private noteWorkspaceUnsupported(): void {
+		if (this.workspaceUnsupported) return;
+		this.workspaceUnsupported = true;
+		this.print("workspace commands unavailable on this backend", "info");
 	}
 
 	private async submit(raw: string): Promise<void> {
@@ -1661,6 +2841,9 @@ export class App implements FeatureHost {
 		if (this.exiting) return;
 		this.footer.dispose();
 		this.transcript.suspend();
+		// The gateway is gone: clear workspace timers/mirrors without RPC
+		// expectations (every teardown call is bounded and fails fast).
+		void this.integration?.controller.dispose();
 		// Retire local approval prompts without resolving: navigation and
 		// disconnect invalidation never issues surprise resolve RPCs.
 		this.invalidateApprovals();

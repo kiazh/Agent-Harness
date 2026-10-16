@@ -21,9 +21,12 @@ import { outputCommand } from "./output.ts";
 import { settingsCommands } from "./settings.ts";
 import { themeCommand } from "./theme.ts";
 import { contextCommands } from "./context.ts";
+import { workspaceCommands } from "./workspace.ts";
 import type { AskTextOptions, AskTextResult, Command, FamilySession, FeatureHost, NoticeKind } from "./types.ts";
 
 export type { AskTextOptions, AskTextResult, Command, FamilySession, FeatureHost, NoticeKind };
+export { formatLspStatusLine, workspaceCommands } from "./workspace.ts";
+export type { WorkspaceHost } from "./types.ts";
 
 const appCommands: Command[] = [
 	{
@@ -53,7 +56,7 @@ const helpCommand: Command = {
 	description: "Show available commands",
 	async run(_args, host) {
 		host.print(
-			`${helpText(COMMANDS)}\n\nKeys: Enter send · Shift+Enter newline · Esc stop reply · Tab complete · ↓ on empty input picks a subagent · Ctrl+C exit · Ctrl+Shift+←/→ switch agents`,
+			`${helpText(COMMANDS)}\n\nKeys: Enter send · Shift+Enter newline · Esc stop reply · Tab complete · ↓ on empty input picks a subagent · Ctrl+C exit · Ctrl+Shift+←/→ switch agents\nWorkspace: Ctrl+P quick open · Ctrl+S save · Ctrl+Space completion · F12 definition · Shift+F12 references · F2 rename · F6/Shift+F6 cycle focus · Ctrl+←/→ toggle chat maximize (editor word motion: alt+arrows) · Ctrl+T explorer · Ctrl+W unbound`,
 			"plain",
 		);
 	},
@@ -81,6 +84,7 @@ const COMMANDS: Command[] = [
 	interopCommand,
 	harnessesCommand,
 	...settingsCommands,
+	...workspaceCommands,
 	...appCommands,
 ];
 
