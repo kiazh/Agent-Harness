@@ -1,9 +1,10 @@
 """Workspace package — file service, document mirrors and gateway surface.
 
-``machina/workspace/lsp.py`` (language-server process infrastructure) is owned
-by a separate task and is intentionally NOT imported here: the package must
-import cleanly before that module exists, and ``WorkspaceService`` only ever
-touches an injected manager.
+``machina/workspace/lsp.py`` (language-server process infrastructure) exists
+and is imported by ``WorkspaceService`` internals, but is deliberately NOT
+re-exported here: callers reach language servers through the injected
+``LspManager`` (or the service's ``lsp_*`` methods), never by importing the
+transport module themselves.
 """
 
 from __future__ import annotations

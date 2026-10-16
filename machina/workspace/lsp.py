@@ -33,6 +33,7 @@ import re
 import shutil
 import signal
 import subprocess
+import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -446,6 +447,7 @@ class LspConnection:
         terminate_timeout: float = 5.0,
         term_timeout: float = 2.0,
         kill_timeout: float = 2.0,
+        group_reap_grace: float = 2.0,
         env_passthrough_var: str | None = None,
         client_name: str = "machina-workspace",
     ) -> None:
@@ -464,6 +466,7 @@ class LspConnection:
         self._terminate_timeout = terminate_timeout
         self._term_timeout = term_timeout
         self._kill_timeout = kill_timeout
+        self._group_reap_grace = group_reap_grace
         self._env_passthrough_var = env_passthrough_var
         self._client_name = client_name
 
@@ -692,10 +695,18 @@ class LspConnection:
         if process is not None:
             self.last_returncode = process.returncode
         # A leader that exited can still leave group descendants (wrapper
-        # scripts, node helpers). Sweep the retained group before claiming a
-        # clean stop; when members remain despite SIGKILL, stay honest.
+        # scripts, node helpers). Sweep the retained group, then give it a
+        # bounded grace window to reap: launchers like
+        # typescript-language-server exit before their tsserver child, so an
+        # immediate membership check would report cleanup_pending on every
+        # ordinary stop. Claiming a clean stop still requires observed
+        # emptiness within the window; beyond it, stay honest.
         if self._group_has_members():
             kill_tree(self._process_handle(), self._pgid)
+            if self._group_reap_grace > 0:
+                deadline = time.monotonic() + self._group_reap_grace
+                while self._group_has_members() and time.monotonic() < deadline:
+                    await asyncio.sleep(0.05)
             if self._group_has_members():
                 self.cleanup_pending = True
                 self._set_state(STATE_STOPPING, "process group still has members after SIGKILL")
@@ -1301,6 +1312,10 @@ def _client_capabilities() -> dict[str, Any]:
             "signatureHelp": {},
             "formatting": {},
             "codeAction": {},
+            # typescript-language-server gates diagnostics delivery on this
+            # capability being present (its diagnosticsSupport flag); omitting
+            # it silently suppressed every diagnostic for the TS profile.
+            "publishDiagnostics": {"relatedInformation": True},
         },
     }
 
