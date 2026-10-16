@@ -152,6 +152,30 @@ This document keeps current evidence separate from historical baseline logs. Nev
 - Python combined batch (9 suites incl. real servers): **160 passed** in 13.49 s.
 - Commits: main `a672776`, `6764c71`, `b2bbfe7`, `1147844`; DevTools `057df89`, `f2e568b`, `2c0df50`.
 
+### T3-core — Workspace controller + gateway adapter (status: complete, commit cf31830)
+
+- Files: `ui/src/workspace/gateway.ts`, `controller.ts`; 26 tests.
+- Highlights: adapter binds workspaceId+epoch per request; controller owns lifecycle, layout intents (mode toggles preserve previous non-chat mode), edit debounce with strictly increasing versions + resync, save handshake, conflict flows, epoch-gated event routing, supersede per (document, method), bounded persistence + reopenRecent ≤8.
+- Red evidence: one real bug (editor-maximize toggle no-op) caught by test before fix.
+- Full gate at agent run: 770 tests / 764 pass / 6 skip / 0 fail; orchestrator re-ran 26/26.
+
+### T6b — Quick Open (status: complete, commit c2395cb; DevTools 8a0b57a)
+
+- Backend `quickopen.py` (single-flight bounded walk; 20k cap, 10 s deadline, per-dir 5k disclosure, TTL cache, epoch-stale discard) + service methods + handlers (validated) + `workspace.indexProgress` events; UI `quickOpen.ts` overlay (debounced, request-seq stale-drop, honest indexing/truncated states).
+- Evidence (orchestrator re-run): 115 combined backend pass; 14/14 UI; ruff clean.
+
+### T9 UI — Editor intelligence (status: complete, commit 2d28a4d)
+
+- Files: `ui/src/editor/intelligence.ts`, `ui/src/components/{IntelligencePopups,ProblemsPane}.ts`, `EditorPane.ts` extension; 39 tests.
+- Highlights: CompletionSession (supersede/stale-drop/filter/one-transaction accept/snippet rejection), HoverSession (sanitized 100-line cap), LocationPicker, RenameSession (honest unavailable), ProblemsModel (per-producer latest-wins, 1000 cap with per-entry omission accounting, severity ordering), bounded popups, EditorPane `handleIntelligenceKey` (Enter/Tab consume only with popup; Esc closes popup first).
+- Red evidence: per-entry cap-omission counter bug found and pinned.
+- Orchestrator re-run: 79/79 across intelligence+problems+pane+view suites.
+
+### Wave-3 in-flight note
+
+- `W3-A2` (app.ts integration: startup + flag, commands, key routing, dirty-quit review, event subscription) is running; consumed controller API and the IntelligenceRequest adapter bridging `IntelligenceOutcome` → `WorkspaceIntelligenceResult` are documented in its task brief.
+- `T10` (agent awareness + selection attachment) queued behind A2 (self-knowledge token pins require the TUI commands to exist).
+
 ## Task record template (from plan §26)
 
 ```text
