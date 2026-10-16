@@ -16,6 +16,12 @@ provider request, so the two loops cannot drift (C10):
   with no provider call. The legacy hard guard is still applied to the exact
   outgoing payload as the final enforcement.
 
+Both modes also emit exactly one bounded ``request_projection_decision`` audit
+event per evaluation (§14.7): mode, would_fit/refusal, token estimates, budget
+and pass count — labels and counts only, never message bodies. A wiring
+failure that degrades to the legacy path emits the same event marked
+``degraded`` instead of silently disappearing.
+
 The gate is pure with respect to the agent: ``messages`` is never mutated
 (copy-on-write in the projector), no effects are replayed, and the only I/O is
 read-only verified-view prefetching through ``artifact_store.lookup`` before
@@ -282,7 +288,7 @@ async def evaluate_request(
         # Degraded wiring: keep the legacy request; the hard guard below
         # still enforces capacity (never a silent lossy send).
     else:
-        await _shadow_note(
+        report = await _shadow_note(
             messages,
             session=session,
             provider=provider,
@@ -290,6 +296,20 @@ async def evaluate_request(
             session_id=session_id,
             agent_id=agent_id,
             user_message=user_message,
+        )
+        _audit_decision(
+            mode="shadow",
+            degraded=report is None,
+            would_fit=bool(report["would_fit"]) if report is not None else None,
+            refusal=(
+                (report.get("refusal") or {}).get("code") if report is not None else None
+            ),
+            estimated_tokens=report["estimated_tokens"] if report is not None else None,
+            effective_budget=effective_budget,
+            request_tokens=None,
+            passes=report["passes"] if report is not None else None,
+            projected=False,
+            session_id=session_id,
         )
 
     request_tokens = counter(messages)
@@ -320,8 +340,12 @@ async def _shadow_note(
     session_id: Any,
     agent_id: str,
     user_message: str,
-) -> None:
-    """Best-effort shadow projection: bounded log only, payload never sent."""
+) -> dict[str, Any] | None:
+    """Best-effort shadow projection: bounded log only, payload never sent.
+
+    Returns the redacted report for the caller's audit event, or ``None`` when
+    the shadow projection itself failed (the caller degrades honestly).
+    """
     try:
         inp = await _build_input(
             messages,
@@ -335,7 +359,7 @@ async def _shadow_note(
         report = shadow_report(inp, baseline=messages)
     except Exception as error:
         record_failure("request_gate.shadow", error)
-        return
+        return None
     refusal = report.get("refusal") or {}
     baseline = report.get("baseline") or {}
     _SHADOW_LOGGER.info(
@@ -358,6 +382,7 @@ async def _shadow_note(
         report["basis"],
         report["input_revision"],
     )
+    return report
 
 
 async def _wired_gate(
@@ -389,6 +414,18 @@ async def _wired_gate(
         result = project_request(inp)
     except Exception as error:
         record_failure("request_gate.wired", error)
+        _audit_decision(
+            mode="wired",
+            degraded=True,
+            would_fit=None,
+            refusal=None,
+            estimated_tokens=None,
+            effective_budget=effective_budget,
+            request_tokens=None,
+            passes=None,
+            projected=False,
+            session_id=session_id,
+        )
         return None
     _log_wired(result, baseline_count=len(messages), effective_budget=effective_budget)
 
@@ -400,13 +437,26 @@ async def _wired_gate(
             iterations=iterations,
             tool_calls_made=tool_calls_made,
         )
-        return RequestGate(
+        gate = RequestGate(
             messages=messages,
             effective_budget=effective_budget,
             request_tokens=result.refusal.required_tokens,
             failure=failure,
             refusal=result.refusal,
         )
+        _audit_decision(
+            mode="wired",
+            degraded=False,
+            would_fit=False,
+            refusal=result.refusal.code,
+            estimated_tokens=result.estimated_tokens,
+            effective_budget=effective_budget,
+            request_tokens=gate.request_tokens,
+            passes=result.passes,
+            projected=False,
+            session_id=session_id,
+        )
+        return gate
 
     planned = list(result.planned_messages)
     request_tokens = counter(planned)
@@ -422,13 +472,63 @@ async def _wired_gate(
             iterations=iterations,
             tool_calls_made=tool_calls_made,
         )
-    return RequestGate(
+    gate = RequestGate(
         messages=planned,
         effective_budget=effective_budget,
         request_tokens=request_tokens,
         failure=failure,
         projected=True,
     )
+    _audit_decision(
+        mode="wired",
+        degraded=False,
+        would_fit=gate.failure is None,
+        refusal=None,
+        estimated_tokens=result.estimated_tokens,
+        effective_budget=effective_budget,
+        request_tokens=gate.request_tokens,
+        passes=result.passes,
+        projected=True,
+        session_id=session_id,
+    )
+    return gate
+
+
+def _audit_decision(
+    *,
+    mode: str,
+    degraded: bool,
+    would_fit: bool | None,
+    refusal: str | None,
+    estimated_tokens: int | None,
+    effective_budget: int,
+    request_tokens: int | None,
+    passes: int | None,
+    projected: bool,
+    session_id: Any,
+) -> None:
+    """One bounded decision record per gate evaluation (§14.7).
+
+    Labels, booleans and token counts only — never message bodies, pins, or
+    refusal text. Emission is best-effort: a failed audit call must never
+    change the gate's decision or the outgoing payload.
+    """
+    try:
+        audit_log(
+            "request_projection_decision",
+            session_id=str(session_id),
+            mode=mode,
+            degraded=bool(degraded),
+            would_fit=would_fit,
+            refusal=refusal,
+            estimated_tokens=estimated_tokens,
+            effective_budget_tokens=effective_budget,
+            request_tokens=request_tokens,
+            passes=passes,
+            projected=bool(projected),
+        )
+    except Exception as error:
+        record_failure("request_gate.audit", error)
 
 
 def _log_wired(result: ProjectionResult, *, baseline_count: int, effective_budget: int) -> None:

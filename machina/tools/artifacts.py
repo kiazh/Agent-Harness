@@ -24,7 +24,9 @@ def _fail(error: ArtifactError) -> ToolError:
     description=(
         "Read a retained tool-result artifact by its handle (character paging). "
         "Use for exact originals of oversized results referenced by an earlier "
-        "artifact id."
+        "artifact id. Resume a truncated page with its next_cursor; a cursor "
+        "whose bound revision no longer matches the artifact is rejected "
+        "explicitly, never silently paged against a different evidence basis."
     ),
     parameters={
         "type": "object",
@@ -32,12 +34,24 @@ def _fail(error: ArtifactError) -> ToolError:
             "artifact_id": {"type": "string", "description": "Artifact UUID from a tool result"},
             "offset": {"type": "integer", "description": "Start character (0-based)"},
             "limit": {"type": "integer", "description": "Max characters to return (1-20000)"},
+            "cursor": {
+                "type": "string",
+                "description": "Continuation cursor from a previous artifact_read result",
+            },
         },
         "required": ["artifact_id"],
     },
 )
-async def artifact_read(artifact_id: str, offset: int = 0, limit: int = 4000) -> str:
-    """Return a bounded page of the exact original text."""
+async def artifact_read(
+    artifact_id: str, offset: int = 0, limit: int = 4000, cursor: str = ""
+) -> str:
+    """Return a bounded page of the exact original text.
+
+    The header cites the stored ``content_revision``; a truncated page carries
+    a bound ``next_cursor`` (revision/source-version/retention) so a resume
+    that no longer matches is answered with a stale-cursor error, never with
+    data from a different evidence basis (C09/C14).
+    """
     agent_id, session_id = await active_agent_scope()
     try:
         page = await artifact_store.read(
@@ -46,17 +60,22 @@ async def artifact_read(artifact_id: str, offset: int = 0, limit: int = 4000) ->
             agent_id=agent_id,
             offset=offset,
             limit=limit,
+            cursor=cursor or None,
         )
     except ArtifactError as error:
         raise _fail(error) from None
     start = page["offset"]
     end = start + page["returned_chars"]
+    revision = page.get("content_revision") or "unknown"
     header = (
         f"[artifact {page['artifact_id']} kind={page['kind']} "
-        f"chars {start}-{end} of {page['total_chars']}"
+        f"chars {start}-{end} of {page['total_chars']} revision={revision}"
         f"{'; more remains — raise offset' if page['truncated'] else ''}]"
     )
-    return f"{header}\n{page['content']}"
+    text = f"{header}\n{page['content']}"
+    if page.get("next_cursor"):
+        text += f"\nnext_cursor={page['next_cursor']}"
+    return text
 
 
 @registry.register(

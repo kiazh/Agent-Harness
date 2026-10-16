@@ -110,3 +110,7 @@ Unexecuted checks and environment blockers: §6 (DB-gated runtime tests; no DB D
 Rollback path: disable artifacts_enabled/reducers_enabled → legacy blind cap; DB columns/table additive and inert if unused
 Next task and first action: B1 prerequisites — add completeness/upstream flags (machina/core/artifacts.py + tool_views.py) and mark the store-failure fallback before wiring any projector
 ```
+
+## 9. See also
+
+- `DETERMINISTIC_SKILLS_B3_EVIDENCE.md` — B3 coexistence/status/release evidence (spec §17-B3, §14.7): runtime tests for the DB-gated recovery gaps listed in §6 above (cross-session denial, stale cursors, fresh-process revision citations), ownership coexistence proofs, and the honest Track B release statement.
