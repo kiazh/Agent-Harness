@@ -174,3 +174,24 @@ test("a wide window over a long file stays correct after typing at the top", () 
 	assert.ok(!rows[1]?.includes(theme.success("inside")), `line 2 left the string state: ${rows[1]}`);
 	assert.ok(rows[2]?.includes(theme.success("'''")), "line 3 opens a fresh (unterminated) string");
 });
+
+test("editing the LAST scanned line rescans it (through==line stale-span case)", () => {
+	// Pass-2 off-by-one: with `>`-only rewind, a line whose index equals the
+	// highest scanned line kept its pre-edit spans. The empty final line
+	// (index 3, scanned as through==3 with no spans) turned into a comment
+	// must render comment ink — the stale cache painted it plain instead.
+	const store = new EditorStore();
+	const doc = openDoc(store, "x = 1\ny = 2\nz = \"abc\n", "python", "file:///w/last.py");
+	const view = makeView(store, doc.id);
+	view.setSyntaxEnabled(true);
+	view.setViewportRows(5);
+	let styled = view.render(60);
+	assert.ok(styled[2]?.includes(theme.success('"abc')), "string ink before the edit");
+
+	// Caret to the end (the empty last line) through view keys; type a comment.
+	view.handleInput("\x1b[1;5F");
+	view.handleInput("# c");
+	styled = view.render(60);
+	assert.ok(styled[3]?.includes(theme.dim("# c")), `comment ink after the edit: ${styled[3]}`);
+	assert.equal(stripTerminalSequences(styled[3] ?? "").trimEnd(), "4  # c");
+});

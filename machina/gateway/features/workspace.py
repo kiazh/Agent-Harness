@@ -20,6 +20,7 @@ Validation rules:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
@@ -42,7 +43,7 @@ from machina.workspace.models import (
     MAX_URI_CHARS,
     WorkspaceError,
 )
-from machina.workspace.service import WorkspaceService
+from machina.workspace.service import MANAGER_STOP_TIMEOUT, WorkspaceService
 
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
@@ -77,8 +78,11 @@ async def _attach_lsp_manager(gw: Gateway, service: WorkspaceService, identity: 
     """
     previous = getattr(gw, "_workspace_lsp_manager", None)
     if previous is not None:
+        # Bound the retirement: a hanging stop_all must never block a reopen
+        # indefinitely. The old manager's shutdown continues in its own task;
+        # the new generation attaches regardless (status stays truthful).
         with contextlib.suppress(Exception):
-            await previous.stop_all()
+            await asyncio.wait_for(previous.stop_all(), timeout=MANAGER_STOP_TIMEOUT)
         gw._workspace_lsp_manager = None
     if not identity.trusted:
         service.set_lsp_manager(None)

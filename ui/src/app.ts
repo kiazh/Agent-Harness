@@ -1960,7 +1960,10 @@ export class App implements FeatureHost {
 			return { consume: true };
 		}
 		// Ctrl+W — close the active editor tab (dirty → Save/Discard/Cancel).
-		if (matchesKey(data, Key.ctrl("w"))) {
+		// NOT in the chat composer: the composer's Editor owns Ctrl+W as
+		// delete-word-backward, and stealing it there would break typing
+		// (CodeRabbit pass-2 major; composer scoping per the ADR matrix).
+		if (matchesKey(data, Key.ctrl("w")) && this.activeRegion !== "chat-composer") {
 			this.closeActiveWorkspaceTab();
 			return { consume: true };
 		}

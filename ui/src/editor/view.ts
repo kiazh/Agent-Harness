@@ -800,7 +800,11 @@ export class EditorView implements Component, Focusable {
 		return cache;
 	}
 
-	/** Drop cached states at/after `line` (the line itself is re-scanned last). */
+	/**
+	 * Drop cached states at/after `line` (the edited line must be re-scanned:
+	 * its spans were computed from the pre-edit text, and when it is the
+	 * highest scanned line a bare `>` check would keep them stale).
+	 */
 	private syntaxInvalidateFrom(documentId: string, line: number, version: number): void {
 		const cache = this.syntaxCache.get(documentId);
 		if (!cache) return;
@@ -809,9 +813,9 @@ export class EditorView implements Component, Focusable {
 			if (key > line) cache.entering.delete(key);
 		}
 		for (const key of [...cache.spans.keys()]) {
-			if (key > line) cache.spans.delete(key);
+			if (key >= line) cache.spans.delete(key);
 		}
-		if (cache.through > line) cache.through = line - 1;
+		if (cache.through >= line) cache.through = line - 1;
 	}
 
 	private wrapRows(record: DocumentRecord, starts: number[], contentCells: number): VisualRow[] {
