@@ -125,6 +125,9 @@ from machina.gateway.features.skills import (
     skills_delete,
     skills_learn,
     skills_list,
+    skills_preview_route,
+    skills_search,
+    skills_section,
     skills_show,
 )
 from machina.gateway.features.workspace import (
@@ -214,6 +217,9 @@ METHODS: dict[str, Handler] = {
     "skills.learn": skills_learn,
     "skills.delete": skills_delete,
     "skills.curator": skills_curator,
+    "skills.search": skills_search,
+    "skills.preview_route": skills_preview_route,
+    "skills.section": skills_section,
     "learning.list": learning_list,
     "learning.approve": learning_approve,
     "learning.reject": learning_reject,

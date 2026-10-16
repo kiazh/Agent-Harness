@@ -67,7 +67,7 @@ def skill_list(query: str = "", offset: int = 0) -> str:
 
 @registry.register(
     name="skill_read",
-    description="Read skill instructions. query jumps to a relevant heading or passage; offset continues an excerpt. limit defaults to 800, up to 8000 characters. Read relevant workflow steps before using them.",
+    description="Read skill instructions. query jumps to a relevant heading or passage; offset continues an excerpt; section reads one exact versioned section (revision from a previous section read detects edits). limit defaults to 800, up to 8000 characters. Read relevant workflow steps before using them.",
     parameters={
         "type": "object",
         "properties": {
@@ -96,16 +96,41 @@ def skill_list(query: str = "", offset: int = 0) -> str:
                     "instead of the offset"
                 ),
             },
+            "section": {
+                "type": "string",
+                "default": "",
+                "description": (
+                    "Optional section anchor/heading; reads that exact version-bound section. "
+                    "Continuation responses say how to resume with section, revision, and offset"
+                ),
+            },
+            "revision": {
+                "type": "string",
+                "default": "",
+                "description": (
+                    "Optional content revision from a previous section read; a mismatch "
+                    "returns a stale notice instead of different text at the same address"
+                ),
+            },
         },
         "required": ["skill_name"],
     },
 )
-def skill_read(skill_name: str, offset: int = 0, limit: int = 800, query: str = "") -> str:
+def skill_read(
+    skill_name: str,
+    offset: int = 0,
+    limit: int = 800,
+    query: str = "",
+    section: str = "",
+    revision: str = "",
+) -> str:
     skills = skills_module.skill_registry
     skills.load_all()
     content = skills.get_skill_content(skill_name)
     if content is None:
         return "Error: skill not found or disabled"
+    if section:
+        return _skill_read_section(skill_name, skills, content, section, revision, offset, limit)
     if query:
         # Jump to a matching heading or passage instead of paging the entire manual.
         match = re.search(re.escape(query), content[offset:], re.I)
@@ -128,6 +153,60 @@ def skill_read(skill_name: str, offset: int = 0, limit: int = 800, query: str = 
     return (
         f"Skill {skill_name[:80]} [{offset}:{end}/{len(content)}]:\n{content[offset:end]}{suffix}"
     )
+
+
+def _skill_read_section(
+    skill_name: str,
+    skills,
+    content: str,
+    section: str,
+    revision: str,
+    offset: int,
+    limit: int,
+) -> str:
+    """Version-bound section read (A3 ``sections.read_skill_section``).
+
+    A stale ``revision`` never serves a different passage: the caller is told
+    to re-read. Legacy char-offset reads above are untouched.
+    """
+    from machina.skills.sections import read_skill_section
+
+    if limit < 1 or limit > 8000:
+        return "Error: limit must be between 1 and 8000"
+    if offset < 0:
+        return "Error: offset must be non-negative"
+    skill = skills.get(skill_name)
+    result = read_skill_section(
+        skill,
+        section,
+        content=content,
+        expected_revision=revision or None,
+        offset=offset,
+        limit=limit,
+    )
+    if result.stale:
+        return (
+            f"Error: skill {skill_name!r} section {section!r} was read against revision "
+            f"{revision!r}, but the current content revision is {result.content_revision}. "
+            "Re-read the section without a revision to continue."
+        )
+    if not result.text:
+        detail = result.diagnostics[0].message if result.diagnostics else "no matching section"
+        return f"Error: {detail}"
+    skills.record_use(skill_name)
+    served_end = offset + len(result.text)
+    body = (
+        f"Skill {skill_name[:80]} section {result.section_id} "
+        f"[{offset}:{served_end}/{result.section_total}] revision {result.content_revision}:\n"
+        f"{result.text}"
+    )
+    if result.continuation is not None:
+        body += (
+            "\n[Section continues; continue skill_read with "
+            f"section={result.section_id!r}, revision={result.content_revision!r}, "
+            f"offset={result.continuation}.]"
+        )
+    return body
 
 
 @registry.register(

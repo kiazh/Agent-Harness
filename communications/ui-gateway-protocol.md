@@ -262,3 +262,74 @@ Default exclusions are returned in `exclusions`; symlinks are followed only
 when their target stays inside the authorized root, and directory cycles
 (symlink loops) are visited once.
 
+## Deterministic skills catalog (2026-10-16)
+
+Bounded, deterministic catalog reads over the loaded skill registry
+(spec §12.1/§12.2). No model call, embedding, provider, tool execution,
+install, or approval mutation is involved. The pre-existing
+`skills.list`/`skills.show`/`skills.learn`/`skills.delete`/`skills.curator`
+response shapes are unchanged — new fields never leak into them.
+
+| Method | Params | Result |
+|---|---|---|
+| `skills.search` | `{query?, filters?, limit?, cursor?}` | `{query, filters, limit, browse, candidates, catalogRevision, queryDescriptorRevision, policyRevision, nextCursor, diagnostics}` |
+| `skills.preview_route` | `{request, context?}` | `{descriptor, reasons, selection, disclosure, budget, tokenBasis}` |
+| `skills.section` | `{skillId, contentRevision?, section?, offset?, budget?}` | `{skillId, contentRevision, sectionId, heading, text, start, end, total, sectionTotal, line, continuation, stale, bound, anchorId, budget, diagnostics}` |
+
+`skills.search` runs the deterministic §9 pipeline over the effective catalog:
+`query` is optional (an empty query answers `no_lexical_evidence`, it never
+enumerates the catalog); `limit` is 1–50 (default 10); `cursor` is the opaque
+`nextCursor` from the previous page. `filters` is a closed object:
+`task_family` (a canonical family or a declared schema-v2 value such as
+`backend-api`/`deployment`, canonicalized through the search aliases),
+`capability` (declared capability), `source` (one provenance string or a list
+of at most 8: `builtin-ecc|local|hub|url|learned`), `enabled` (strict boolean)
+and `include_excluded` (strict boolean). Disabled skills are never candidates
+on the automatic path; they appear — flagged `applicability: "excluded"` with
+a `disabled: ...` reason — only when the caller explicitly browses
+(`include_excluded: true` or `enabled: false`), which also sets
+`browse: true`. Each candidate carries `skillId` (casefolded registry id),
+`name`, `contentRevision`, `score` plus named `scoreComponents` (ranking
+signals, never calibrated probabilities), `matchedPhrases`,
+`matchedCapabilities`, `applicability`, `reasons`, `workflowStages`,
+`explanation`, `sourceType`, display-only `trust`
+(`bundled|local|external`, never an authorization input), and `enabled`.
+Unknown filter keys/values, wrong types, out-of-range limits and malformed
+cursors are invalid params (-32602).
+
+`skills.preview_route` is call-free: it builds the TaskDescriptor
+(`descriptor`/`reasons`), the deterministic selection plan (`selection.kind`,
+`selection.skills`, `selection.steps` — the authoritative planned steps with
+stable ids, `catalogRevision`, `taskRevision`) and the §10.3 disclosure plan
+(`disclosure` is `DisclosurePlan.to_dict()`: chosen sections with exact
+`content_revision` identities, whole-body units, required prerequisites,
+omitted sections with continuation locators, unresolved prerequisites,
+`missing_context`, `included_tokens`, `token_basis: "char/4"` and bounded
+`diagnostics`). `context` is task state only — closed keys `active_class`,
+`active_families`, `stack`, `constraints`, `capabilities`, `revision`, `stage`,
+`stage_source`, `stage_revision`; the `stage*` facts preview stage-aware
+disclosure exactly like the automatic path, and `revision` is reported
+pre-incremented as the revision this request would occupy. A preview creates
+no turn, calls no provider or embedding, executes no tool, installs nothing,
+mutates no approval state and records no operational success.
+
+`skills.section` reads one exact versioned passage. `section` addresses a
+declared section id or a parsed heading/anchor; a declared id wins and binds
+to its heading anchor (`anchorId`), while an undeclared parsed anchor is
+served with a `section-undeclared` diagnostic. `offset` is a character offset
+within the section (a raw content offset when no section is given) used for
+continuations; `budget` is 1–8000 characters (default 800). Omit
+`contentRevision` on the first read; pass the returned `contentRevision` (a
+sections content fingerprint — the same revision vocabulary as
+disclosure-plan locators) to bind continuations. A stale revision returns
+`stale: true` with empty `text` and a `section-stale-content` diagnostic —
+never a different passage at the same address. `diagnostics` uses the closed
+vocabulary `section-unknown`, `section-undeclared`, `section-stale-content`,
+`section-continuation-range`. Unknown skills are `1002`; malformed params are
+invalid params (-32602).
+
+The native agent tool `skill_read` gained optional `section` and `revision`
+parameters with the same semantics; its legacy character-offset reads
+(including the printed `[offset:end/total]` continuation format) are
+byte-identical.
+
