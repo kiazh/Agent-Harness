@@ -43,6 +43,66 @@ This document keeps current evidence separate from historical baseline logs. Nev
 - W3: T9 references/symbols/workspace edits; T10 agent awareness + sharing.
 - W4: T11 sweep, T12 docs (or recorded as blocked with exact reasons).
 
+## Task records
+
+### T1 — Adaptive response layout (status: complete, commit 064a81d)
+
+- Baseline commit / dirty paths: dd6e681 → work landed on top of d4ebfab; files below.
+- Requirement and invariant: content-aware width, natural height, monotonic stream growth, full usable chat width in chat mode, never overwide rows (plan §6).
+- Exact files changed: `ui/src/components/AssistantTurn.ts`, `ui/src/components/ToolPanel.ts`, `ui/src/design/responseLayout.ts`, `ui/test/response-layout.test.ts`.
+- Public interfaces: `AssistantTurn.responseGeometry(paneWidth)`; `contentPrefersWide(source)`; `assistantPanelContentWidth` retained as a delegating legacy seam (no fixed cap).
+- Why reused/extended: policy lives at the shared design seam the plan names; the pi-tui Markdown renderer is the only measurement source; tool/approval frame budgets untouched.
+- Tests added and what they assert: 13 tests — compact content-fit, full-width long replies, width sweep 0..240 + near-threshold widths, streaming monotonicity + exact final text, pinned-class guard, fence/table preference, 240-pane no stale cap, 160↔80 resize, cache identity, rows-not-bytes, legacy seam, re-skin, hostile ANSI.
+- Red evidence: first run 1 pass / 9 fail (contract violations: missing responseGeometry; oscillation case).
+- Green: `npm run check` exit 0 — 536 tests, 530 pass, 6 skipped, 0 fail (isolated worktree at d4ebfab + T1 files); shared-tree failures at that moment were other in-flight tasks' unfinished files.
+- Counterexamples probed: OSC-8 hyperlink + `ESC[2J` inert; 220-char unbroken token wraps, not clamped; empty content at frameless width emits only the block gap.
+- Unverified: policy defaults (56/0.72/4/12) untuned by captures — tuning remains a config concern.
+- Security/privacy: no change to sanitization order (assembled-content sanitize retained for measurement and render).
+- Next: T4/T2 integration (pane width now flows from computed geometry).
+
+### T2 — Pure workspace geometry + shell composition (status: complete, commit a7e23a5)
+
+- Baseline/dirty: on top of 064a81d; files below.
+- Requirement/invariant: single geometry source (`computeLayout`); split ≈50/50 at 160 cols; narrow fallback preserves request and restores; retained component identity; footer shared; divider drag clamps; no conflicting independent split (plan §7, §2).
+- Files: `ui/src/components/WorkspaceShell.ts` (new: shell + divider + geometry compare), `ui/src/components/AppShell.ts` (+114/−5), `ui/test/workspace-shell.test.ts` (new).
+- Interfaces: `AppShell.setWorkspaceState/setWorkspaceEditor/setWorkspaceExplorer`, `onWorkspaceRatioChange`; `WorkspaceShell.entries(result)` fixed-basis columns; `sameLayoutGeometry`.
+- Reuse rationale: existing `viewportRoot` `[LAYOUT_NODE]` wrapper + rebuild flow retained; chat-only tree byte-identical when unconfigured; ScrollView/composer/dock instances move, never recreate.
+- Tests: 12 new — 160×48 split geometry, 88→160 restore with editor identity counter, ScrollView identity across modes/densities, divider drag mapping + clamps, docked explorer allocation, degenerate terminals.
+- Green: isolated worktree at 064a81d + T2 files → `npm run check` exit 0, 548 tests / 542 pass / 6 skip / 0 fail; combined shell+layout+geometry suites 37/37.
+- Counterexamples: drag x=5000 clamps to 0.75 and minima hold (chat 111/editor 48); drag x=0 → chat 40; drag without press/right-button ignored; 0×0..20×6 terminals no throw; no render per move (coalesced).
+- Known nuance: frozen geometry rounds `0.5×159 → 80` chat columns (editor 79); tests derive positions from computeLayout rather than hardcoding 79/80. Divider ratio formula uses `screenX/(total−1)` and relies on geometry minima when an explorer is docked (acceptable; revisit if drag feels off with docked explorer).
+- Unverified: no PTY capture yet (deferred to T11 native sweep); keyboard divider resize explicitly deferred to T3/T4.
+- Security/privacy: none new; divider claims only left-press with capture; no focus steal.
+
+### T4a — Editor document model (status: complete, commit 021d671)
+
+- Files: `ui/src/editor/{model,positions,tabs}.ts`; tests `ui/test/editor-{model,positions,tabs}.test.ts` (54 tests).
+- Interfaces: frozen `DocumentRecord`/`EditorViewState`; `beginSave`/`acknowledgeSave` (dirty clears only on version+hash match; out-of-order acks guarded); global undo budget with oldest-whole-group trim; total open-text budget at open only; `serializeForSave` byte-exact.
+- Red evidence: module-missing red for all three suites; then 7 behavior failures caught (URI dedup, byte accounting, newline label bug) before fixes.
+- Green: 54/54; full UI gate at that point 602 tests (596/6/0).
+- Ambiguities resolved and documented in code: undo budget global across docs (UTF-16 units), overlap rules at range boundaries, `positionToOffset` CRLF clamping, dedup key = exact URI (canonicalization delegated to T5).
+- Unverified: no view-layer integration yet (T4b).
+
+### T5 — Workspace file service (status: complete, commit 00763f3; DevTools e02f686)
+
+- Files: `machina/workspace/{__init__,models,files,documents,service}.py`, `machina/gateway/features/workspace.py`, additive `features/__init__.py`, `communications/ui-gateway-protocol.md`, TS refusal fields in `ui/src/workspace/protocol.ts`.
+- Security evidence: actor spoofing ignored; server-minted ids/epochs; traversal + symlink escape (file and parent) refused; TOCTOU conflict under per-path lock; hardlink/read-only refusals; atomic writes preserve original on failure; fallback path for no-`dir_fd` platforms explicitly weaker (documented).
+- Green: 54 DevTools tests (38 service + 16 gateway) + supporting suites; ruff clean. Independently re-run by orchestrator: 109 total with LSP suites.
+- Unverified: Windows behavior (monkeypatched seams only); cursor stability under concurrent directory mutation documented.
+
+### T7 — LSP process infrastructure (status: complete, commit 9427928; DevTools e02f686)
+
+- Files: `machina/workspace/lsp.py`; `tests/support/fake_lsp_server.py`, `tests/test_lsp_transport.py` (22), `tests/test_lsp_lifecycle.py` (24).
+- Guarantees: ready only after successful initialize + flushed initialized; ordered write queue (requests cannot overtake document sync); cancelled-request late responses dropped without leaks; server-initiated requests always answered structurally; bounded header/body/pending/stderr; process-group teardown with honest `cleanup_pending`.
+- Real smoke (manual, recorded): repo-local `pyright-langserver` handshake → ready (`textDocumentSync: 2`, `hoverProvider`), stop rc 0. Full real-server matrix remains W2-E (§24E).
+- Unverified: Windows kill path; `setsid`-escaping descendants are outside group-kill scope (disclosed).
+
+### Cross-wave verification (orchestrator, independent of agent claims)
+
+- UI committed state @ 9427928 re-run in an isolated worktree (`/private/tmp/opencode/machina-verify`, node_modules symlinked): `npm run check` exit 0 → 602 tests, 596 pass, 6 skip, 0 fail; eslint clean.
+- Python committed state: `run-tests.sh tests/test_workspace_service.py tests/test_workspace_gateway.py tests/test_lsp_transport.py tests/test_lsp_lifecycle.py tests/test_features_split.py` → 109 passed in 5.03s (includes pre-existing `test_gateway.py` DB-dependent failures reproduced at baseline and excluded here).
+- Note: DevTools' `machina` symlink shadows `PYTHONPATH`, so Python runs always exercise the live checkout — mid-wave runs are only meaningful when the relevant agents are idle.
+
 ## Task record template (from plan §26)
 
 ```text
