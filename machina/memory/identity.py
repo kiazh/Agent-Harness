@@ -19,6 +19,8 @@ import hmac
 import importlib as _importlib
 import json
 import logging
+import math
+import re
 import sys as _sys
 import uuid
 from dataclasses import dataclass, field
@@ -91,6 +93,72 @@ _NEGATIVE_WORDS = {
     "ugly",
     "disgusting",
 }
+
+#: Tokens that invert the sentiment of a nearby sentiment word ("not good",
+#: "never useful", "don't like"). Kept deliberately small and local.
+_NEGATORS = frozenset(
+    {
+        "not",
+        "no",
+        "never",
+        "none",
+        "cannot",
+        "without",
+        "neither",
+        "nor",
+        "hardly",
+        "barely",
+    }
+)
+_NEGATION_WINDOW = 3
+
+
+def _content_tokens(text: str) -> list[str]:
+    """Lowercase word tokens with punctuation removed and contractions split.
+
+    ``split()`` alone leaves ``"good."`` / ``"bad,"`` unmatched against the
+    sentiment sets and hides ``"isn't"`` from the negator check.
+    """
+    lowered = text.lower().replace("\u2019", "'")
+    lowered = re.sub(r"n't\b", " not", lowered)
+    lowered = lowered.replace("cannot", "can not")
+    return re.findall(r"[^\W_]+", lowered, flags=re.UNICODE)
+
+
+def _fact_pattern(fact: str) -> re.Pattern[str] | None:
+    """Whole-word (or whole-phrase) matcher for a known fact."""
+    words = [re.escape(part) for part in str(fact).strip().lower().split()]
+    if not words:
+        return None
+    return re.compile(r"(?<!\w)" + r"\s+".join(words) + r"(?!\w)", re.UNICODE)
+
+
+def _fact_mentioned(fact: str, content_lower: str) -> bool:
+    """Whether *fact* occurs as a word/phrase, never as a substring.
+
+    Prevents short keys ("cat") matching unrelated words ("concatenate") and
+    is shared by relevance and consistency so both agree on evidence.
+    """
+    pattern = _fact_pattern(fact)
+    return bool(pattern and pattern.search(content_lower))
+
+
+def _sentiment_polarity(tokens: list[str]) -> tuple[bool, bool]:
+    """Return ``(has_positive, has_negative)`` with local negation applied."""
+    positive = False
+    negative = False
+    for index, word in enumerate(tokens):
+        polarity = 1 if word in _POSITIVE_WORDS else -1 if word in _NEGATIVE_WORDS else 0
+        if polarity == 0:
+            continue
+        window = tokens[max(0, index - _NEGATION_WINDOW) : index]
+        if any(negator in _NEGATORS for negator in window):
+            polarity = -polarity
+        if polarity > 0:
+            positive = True
+        else:
+            negative = True
+    return positive, negative
 
 
 @dataclass
@@ -516,14 +584,17 @@ class IdentityGate:
         if not belief.known_facts:
             return 0.5  # No facts to compare against
 
-        # Check how many known facts appear in the content
+        # Check how many known facts appear in the content. Match whole
+        # words/phrases (not substrings) and cap the denominator at the count
+        # where one match meets RELEVANCE_THRESHOLD: otherwise 11+ known facts
+        # make every single-topic memory irrelevant (1/11 < 0.1).
         matching_facts = 0
         for fact in belief.known_facts:
-            fact_lower = fact.lower()
-            if fact_lower in content_lower:
+            if _fact_mentioned(fact, content_lower):
                 matching_facts += 1
 
-        return matching_facts / len(belief.known_facts)
+        denominator_cap = max(1, math.ceil(1 / self.RELEVANCE_THRESHOLD))
+        return matching_facts / min(len(belief.known_facts), denominator_cap)
 
     def _compute_consistency(self, content: str, belief: AgentBelief) -> float:
         """Compute consistency between memory content and agent beliefs.
@@ -532,23 +603,24 @@ class IdentityGate:
         about a known fact, it should align with the fact's confidence.
         """
         content_lower = content.lower()
-        content_words = set(content_lower.split())
+        content_words = _content_tokens(content)
 
         if not belief.known_facts:
             return 0.5  # No facts to compare against
 
-        # Find facts mentioned in content
+        # Find facts mentioned in content (whole words/phrases, never
+        # arbitrary substrings).
         mentioned_facts = []
         for fact, confidence in belief.known_facts.items():
-            if fact.lower() in content_lower:
+            if _fact_mentioned(fact, content_lower):
                 mentioned_facts.append((fact, confidence))
 
         if not mentioned_facts:
             return 0.5  # No mentioned facts, neutral consistency
 
-        # Check sentiment of content
-        has_positive = any(w in content_words for w in _POSITIVE_WORDS)
-        has_negative = any(w in content_words for w in _NEGATIVE_WORDS)
+        # Check sentiment of content, with punctuation stripped and local
+        # negation ("not good", "isn't useful") respected.
+        has_positive, has_negative = _sentiment_polarity(content_words)
 
         if not has_positive and not has_negative:
             return 0.5  # Neutral sentiment
