@@ -799,9 +799,14 @@ def _write_anchored_inside(file_path: Path, content: str, display: str) -> str:
             existed_before = True
             if stat.S_ISLNK(st_before.st_mode):
                 raise ValueError(f"Path '{display}' is not accessible (symlink?)")
+            if not stat.S_ISREG(st_before.st_mode):
+                raise ValueError(f"Path '{display}' is not a regular file")
         # Open WITHOUT O_TRUNC: the descriptor is validated before any
-        # content changes (same contract as the legacy probe).
-        flags = os.O_WRONLY | os.O_CREAT | nofollow
+        # content changes (same contract as the legacy probe). O_NONBLOCK
+        # keeps a FIFO swapped in after the stat from blocking the open;
+        # the descriptor is re-checked for S_ISREG below.
+        nonblock = getattr(os, "O_NONBLOCK", 0)
+        flags = os.O_WRONLY | os.O_CREAT | nonblock | nofollow
         try:
             fd = _os_open(leaf, flags, 0o600, dir_fd=dir_fd)
         except OSError as e:
@@ -814,6 +819,8 @@ def _write_anchored_inside(file_path: Path, content: str, display: str) -> str:
             mode = None
             try:
                 target_info = os.fstat(fd)
+                if not stat.S_ISREG(target_info.st_mode):
+                    raise ValueError(f"Path '{display}' is not a regular file")
                 if target_info.st_nlink > 1:
                     raise ValueError(f"Path '{display}' has multiple hard links; refusing write")
                 if existed_before:
@@ -898,8 +905,10 @@ async def write_file(path: str, content: str) -> str:
             # any content changes, and the content itself is written to a
             # same-directory temp file that only replaces the target once it
             # is complete and fsynced (5.2 — rejected actions have no effects;
-            # ENOSPC mid-write cannot destroy the original).
-            flags = os.O_WRONLY | os.O_CREAT
+            # ENOSPC mid-write cannot destroy the original). O_NONBLOCK
+            # prevents a regular-to-FIFO swap from blocking the probe.
+            nonblock = getattr(os, "O_NONBLOCK", 0)
+            flags = os.O_WRONLY | os.O_CREAT | nonblock
             if nofollow:
                 # If the target exists as a symlink, fail closed instead of
                 # following the link (AH-003 truncating-write race).
@@ -908,10 +917,15 @@ async def write_file(path: str, content: str) -> str:
             # open, a newly created empty file is removed so rejection has no
             # residual effects (best effort; content is never written first).
             try:
-                os.lstat(file_path)
+                st_before = os.lstat(file_path)
                 existed_before = True
             except OSError:
                 existed_before = False
+            if existed_before:
+                if stat.S_ISLNK(st_before.st_mode):
+                    raise ValueError(f"Path '{path}' is not accessible (symlink?)")
+                if not stat.S_ISREG(st_before.st_mode):
+                    raise ValueError(f"Path '{path}' is not a regular file")
             try:
                 fd = _os_open(file_path, flags, 0o600)
             except OSError as e:
@@ -924,6 +938,8 @@ async def write_file(path: str, content: str) -> str:
                 mode = None
                 try:
                     target_info = os.fstat(fd)
+                    if not stat.S_ISREG(target_info.st_mode):
+                        raise ValueError(f"Path '{path}' is not a regular file")
                     if target_info.st_nlink > 1:
                         raise ValueError(f"Path '{path}' has multiple hard links; refusing write")
                     if existed_before:
