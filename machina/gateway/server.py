@@ -617,11 +617,13 @@ class Gateway:
         self.require_db()
         title = str(params.get("title") or "").strip()[:80] or "New session"
         agent_id = str(params.get("agent") or "harness").strip()[:100] or "harness"
+        from machina.core.agent_def import agent_registry
+        from machina.core.agent_factory import resolve_provider_model
+
+        definition = None
         if agent_id != "harness":
             # Fail fast on unknown agents (including profile scopes without
             # a profile); the turn factory would otherwise fail closed later.
-            from machina.core.agent_def import agent_registry
-
             try:
                 definition = await agent_registry.get(agent_id)
             except Exception as exc:
@@ -630,6 +632,14 @@ class Gateway:
                 raise RpcError(INVALID_PARAMS, f"unknown agent: {agent_id}")
         async with self._config_lock:
             model, provider = self.model, self.provider
+        if agent_id == "harness":
+            try:
+                definition = await agent_registry.get(agent_id)
+            except Exception:
+                definition = None
+        provider, model = resolve_provider_model(
+            definition=definition, default_provider=provider, default_model=model
+        )
         session = await session_manager.create(
             title=title,
             agent_id=agent_id,

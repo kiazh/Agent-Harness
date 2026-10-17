@@ -70,6 +70,41 @@ class AgentDefinitionError(ValueError):
     """
 
 
+def resolve_provider_model(
+    session=None,
+    definition=None,
+    *,
+    provider_override: str | None = None,
+    model_override: str | None = None,
+    default_provider: str | None = None,
+    default_model: str | None = None,
+) -> tuple[str, str | None]:
+    """Resolve overrides, session pins, definition, then global defaults as pairs.
+
+    A model-only choice inherits the provider of its own layer or lower;
+    models from a different provider never cross a higher provider override.
+    """
+    from machina.core.config import config
+
+    global_provider = config.get("provider")
+    if default_model is None and (default_provider is None or default_provider == global_provider):
+        default_model = config.get("model")
+    layers = [
+        (provider_override, model_override),
+        (getattr(session, "provider", None), getattr(session, "model", None)),
+        (getattr(definition, "provider", None), getattr(definition, "model", None)),
+        (default_provider or global_provider, default_model),
+    ]
+    provider = next((name for name, _ in layers if name), "openrouter")
+    inherited_provider = "openrouter"
+    model = None
+    for name, candidate in reversed(layers):
+        inherited_provider = name or inherited_provider
+        if candidate and inherited_provider == provider:
+            model = candidate
+    return provider, model
+
+
 async def build_agent_for_session(
     session: Session,
     *,
@@ -92,7 +127,6 @@ async def build_agent_for_session(
     """
     from machina.core.agent import ReActAgent
     from machina.core.agent_def import agent_registry
-    from machina.core.config import config
     from machina.core.provider import get_provider
 
     # A resumed/forked child keeps the restrictions stamped at delegation.
@@ -116,20 +150,15 @@ async def build_agent_for_session(
             raise AgentDefinitionError(f"unknown agent {requested!r}")
         definition = builtin
 
+    provider_name, model = resolve_provider_model(
+        session, definition, provider_override=provider_override, model_override=model_override
+    )
     if definition is not None:
-        provider_name = (
-            provider_override or session.provider or definition.provider or config.get("provider")
-        )
-        model = model_override or session.model or definition.model or config.get("model")
         system_prompt = definition.system_prompt or None
         # Explicit AgentDef -> authority translation; see definition_tool_cap.
         allowed_tools = definition_tool_cap(definition)
         agent_id = definition.name
     else:
-        from machina.core.config import config as _cfg
-
-        provider_name = provider_override or session.provider or _cfg.get("provider")
-        model = model_override or session.model or _cfg.get("model")
         system_prompt = None
         allowed_tools = None
         agent_id = session.agent_id

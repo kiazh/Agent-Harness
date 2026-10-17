@@ -276,11 +276,14 @@ class Orchestrator:
                     )
                     break
 
+        from machina.core.agent_factory import resolve_provider_model
+
+        child_provider, child_model = resolve_provider_model(definition=definition)
         child = await session_manager.create(
             title=f"{agent_name}: {task[:50]}",
             agent_id=agent_name,
-            model=definition.model or config.get("model"),
-            provider=definition.provider or config.get("provider"),
+            model=child_model,
+            provider=child_provider,
             context_budget=config.get("context_budget"),
             execution_mode=parent_mode,
             parent_session_id=parent_session_id,

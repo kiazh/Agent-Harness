@@ -83,6 +83,8 @@ async def delete_session(session_id: uuid.UUID) -> dict[str, bool]:
 @router.post("/sessions", dependencies=[Depends(require_api_key)])
 async def create_session(req: CreateSessionRequest) -> dict[str, Any]:
     """Create a new session."""
+    from machina.core.agent_def import agent_registry
+    from machina.core.agent_factory import resolve_provider_model
     from machina.memory.persona import EmotionTopology
 
     if req.emotion and req.emotion not in EmotionTopology.EMOTION_PROFILES:
@@ -91,10 +93,18 @@ async def create_session(req: CreateSessionRequest) -> dict[str, Any]:
         raise HTTPException(400, f"unknown provider: {req.provider}")
     if req.model is not None and not req.model.strip():
         raise HTTPException(400, "model must be a non-empty string")
+    try:
+        definition = await agent_registry.get("harness")
+    except Exception:
+        # The default agent shares the factory's permitted registry fallback.
+        definition = None
+    provider, model = resolve_provider_model(
+        definition=definition, provider_override=req.provider, model_override=req.model
+    )
     session = await session_manager.create(
         title=req.title,
-        model=req.model or config.get("model"),
-        provider=req.provider or config.get("provider"),
+        model=model,
+        provider=provider,
         goal=req.goal,
         context_budget=config.get("context_budget"),
         state={"emotion": req.emotion} if req.emotion else None,

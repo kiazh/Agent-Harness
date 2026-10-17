@@ -142,20 +142,17 @@ async def _effective_session_route(
     global route rather than failing the operation (compression is auxiliary).
     """
     definition = None
-    provider_name = provider or getattr(session, "provider", None)
-    model_name = model or getattr(session, "model", None)
-    if not provider_name or not model_name:
+    if not provider or not model:
         try:
             from machina.core.agent_def import agent_registry
 
             definition = await agent_registry.get(session.agent_id or "harness")
         except Exception:
             definition = None
-        provider_name = provider_name or getattr(definition, "provider", None)
-        model_name = model_name or getattr(definition, "model", None)
-    return (
-        provider_name or config.get("provider"),
-        model_name or config.get("model"),
+    from machina.core.agent_factory import resolve_provider_model
+
+    return resolve_provider_model(
+        session, definition, provider_override=provider, model_override=model
     )
 
 
