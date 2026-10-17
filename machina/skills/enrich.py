@@ -268,9 +268,7 @@ def ensure_skill_metadata_sync(
     return False
 
 
-def default_agent_seam(
-    *, provider: str | None = None, model: str | None = None
-) -> MetadataSeam:
+def default_agent_seam(*, provider: str | None = None, model: str | None = None) -> MetadataSeam:
     """Production seam: one small provider call through the usage store.
 
     The provider is resolved lazily from configuration (or the explicit

@@ -143,9 +143,7 @@ def plan_workflow(
     # with the human browse path. ``automatic_skills`` applies the automatic
     # *scope* (disabled and hard-excluded skills are gone) and returns the
     # non-excluded candidates in canonical relevance order.
-    matches = automatic_skills(
-        skills, routing_query, weights=skill_weights, expansion=expansion
-    )
+    matches = automatic_skills(skills, routing_query, weights=skill_weights, expansion=expansion)
     # Weak single-word overlap never activates a specialist: without clear
     # evidence the agent stays a generalist (see _strong_match). An explicit
     # coding/research task still gets the generic pipeline below.

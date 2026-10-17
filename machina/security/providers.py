@@ -417,7 +417,13 @@ def _normalize_models(models: Any) -> list[dict[str, Any]]:
         max_context: int | None = None
         if isinstance(item, dict):
             identifier = str(item.get("id") or item.get("model") or "").strip()
-            for key in ("contextWindow", "contextLength", "context_length", "context_window", "max_model_len"):
+            for key in (
+                "contextWindow",
+                "contextLength",
+                "context_length",
+                "context_window",
+                "max_model_len",
+            ):
                 value = item.get(key)
                 if type(value) is int and 0 < value < 2**31:
                     context = value

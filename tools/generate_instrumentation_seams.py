@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import sys
 from pathlib import Path
 
@@ -56,8 +57,7 @@ class _SeamScanner(ast.NodeVisitor):
             if isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                 operation = node.args[0].value
         elif len(node.args) >= 2 and all(
-            isinstance(arg, ast.Constant) and isinstance(arg.value, str)
-            for arg in node.args[:2]
+            isinstance(arg, ast.Constant) and isinstance(arg.value, str) for arg in node.args[:2]
         ):
             component = node.args[0].value
             operation = node.args[1].value
@@ -154,13 +154,10 @@ def render(seams: list[tuple[str, str, str, str, str]]) -> str:
     ]
     if not seams:
         lines.append("    # No instrumented seams found.")
-    for component, operation, module, qualname, kind in seams:
+    for seam in seams:
         lines.append("    (")
-        lines.append(f"        {component!r},")
-        lines.append(f"        {operation!r},")
-        lines.append(f"        {module!r},")
-        lines.append(f"        {qualname!r},")
-        lines.append(f"        {kind!r},")
+        # Emit double-quoted literals so regeneration matches Ruff's formatting.
+        lines.extend(f"        {json.dumps(value, ensure_ascii=False)}," for value in seam)
         lines.append("    ),")
     lines.append(")")
     lines.append("")

@@ -666,7 +666,8 @@ async def claim_execution(
                 and not rec.get("consumed")
                 and rec.get("digest") == digest
                 and rec.get("session_id") == str(session_id)
-                and agent_id is not None and rec.get("agent_id") == agent_id
+                and agent_id is not None
+                and rec.get("agent_id") == agent_id
             )
             if mem_ok:
                 rec["status"] = "claimed"
@@ -844,7 +845,8 @@ async def find_pending(session_id: str, digest: str, *, agent_id: str | None = N
             if (
                 rec.get("session_id") == str(session_id)
                 and rec.get("digest") == digest
-                and agent_id is not None and rec.get("agent_id") == agent_id
+                and agent_id is not None
+                and rec.get("agent_id") == agent_id
                 and rec.get("status") == "pending"
                 and not rec.get("consumed")
             ):
@@ -852,7 +854,9 @@ async def find_pending(session_id: str, digest: str, *, agent_id: str | None = N
     return None
 
 
-async def find_approved_unclaimed(session_id: str, digest: str, *, agent_id: str | None = None) -> dict | None:
+async def find_approved_unclaimed(
+    session_id: str, digest: str, *, agent_id: str | None = None
+) -> dict | None:
     """Approved-but-never-executed action for headless resume (no new card).
 
     Legacy rows without a reviewable proposal never resume: a digest alone
@@ -890,7 +894,8 @@ async def find_approved_unclaimed(session_id: str, digest: str, *, agent_id: str
             if (
                 rec.get("session_id") == str(session_id)
                 and rec.get("digest") == digest
-                and agent_id is not None and rec.get("agent_id") == agent_id
+                and agent_id is not None
+                and rec.get("agent_id") == agent_id
                 and rec.get("status") == "approved"
                 and not rec.get("consumed")
                 # Durable-origin approvals are DB-authoritative only; without

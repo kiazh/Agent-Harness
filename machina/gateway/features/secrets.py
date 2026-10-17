@@ -95,22 +95,34 @@ def _effective_state(key: str, *, expected: str | None = None) -> dict[str, Any]
     else:
         source = next((name for name in names if os.environ.get(name, "").strip()), "")
         if not source:
-            source = next((f"{name}_FILE" for name in names
-                           if os.environ.get(f"{name}_FILE", "").strip()), "")
+            source = next(
+                (f"{name}_FILE" for name in names if os.environ.get(f"{name}_FILE", "").strip()), ""
+            )
         if not source:
-            source = "external backend" if os.environ.get("MACHINA_SECRET_BACKEND") else "configuration"
+            source = (
+                "external backend" if os.environ.get("MACHINA_SECRET_BACKEND") else "configuration"
+            )
     try:
-        effective = cfg.get(setting) if setting in SECRET_KEYS else (
-            get_secret(key) if key.endswith("_API_KEY") else os.environ.get(key)
+        effective = (
+            cfg.get(setting)
+            if setting in SECRET_KEYS
+            else (get_secret(key) if key.endswith("_API_KEY") else os.environ.get(key))
         )
     except Exception:
         # Invalid mounted/backend credentials are not a successful effective change.
-        return {"effectiveSet": None, "effectiveSource": source,
-                "effectiveUpdated": False, "message": "Effective credential could not be resolved"}
+        return {
+            "effectiveSet": None,
+            "effectiveSource": source,
+            "effectiveUpdated": False,
+            "message": "Effective credential could not be resolved",
+        }
     active = bool(effective)
     updated = (effective or "") == expected if expected is not None else True
-    result: dict[str, Any] = {"effectiveSet": active, "effectiveSource": source,
-                              "effectiveUpdated": updated}
+    result: dict[str, Any] = {
+        "effectiveSet": active,
+        "effectiveSource": source,
+        "effectiveUpdated": updated,
+    }
     if not updated:
         result["message"] = f"Saved setting; effective credential is still selected from {source}"
     return result

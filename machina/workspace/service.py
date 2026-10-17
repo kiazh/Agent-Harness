@@ -445,9 +445,7 @@ class WorkspaceService:
         """
         if epoch is None:
             if required:
-                raise WorkspaceError(
-                    "denied", "workspace epoch is required for this operation"
-                )
+                raise WorkspaceError("denied", "workspace epoch is required for this operation")
             effective = self._epoch
         else:
             effective = epoch

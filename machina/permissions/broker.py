@@ -242,10 +242,15 @@ class PermissionBroker:
             raise NeedsApproval(existing)
         # LP-02 resume: an approved-but-unclaimed action is claimed for this
         # fresh execution (revalidated). No new card, no permanent grant.
-        approved = await _store.find_approved_unclaimed(req.session_id, req.digest, agent_id=req.agent_id)
+        approved = await _store.find_approved_unclaimed(
+            req.session_id, req.digest, agent_id=req.agent_id
+        )
         if approved is not None:
             if await _store.claim_execution(
-                approved["request_id"], digest=req.digest, session_id=req.session_id, agent_id=req.agent_id
+                approved["request_id"],
+                digest=req.digest,
+                session_id=req.session_id,
+                agent_id=req.agent_id,
             ):
                 req.approval_id = approved["request_id"]
                 _stamp_execution(req)
@@ -283,7 +288,10 @@ class PermissionBroker:
                         "legacy approval lacks a reviewable proposal; re-approval required"
                     ) from None
                 if await _store.claim_execution(
-                    req.request_id, digest=req.digest, session_id=req.session_id, agent_id=req.agent_id
+                    req.request_id,
+                    digest=req.digest,
+                    session_id=req.session_id,
+                    agent_id=req.agent_id,
                 ):
                     req.approval_id = req.request_id
                     _stamp_execution(req)
@@ -405,9 +413,7 @@ class PermissionBroker:
         """Mark a claimed execution completed/failed/cancelled (best effort)."""
         if not request_id:
             return False
-        with instrument(
-            "permissions", "resolve", approval_id=request_id, outcome=outcome
-        ) as span:
+        with instrument("permissions", "resolve", approval_id=request_id, outcome=outcome) as span:
             try:
                 recorded = await _store.complete_execution(request_id, outcome)
                 span.note(recorded=bool(recorded))

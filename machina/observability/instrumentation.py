@@ -569,7 +569,7 @@ _PROVIDER_HOSTS = (
     ("ollama", "ollama"),
     ("localhost", "local"),
     ("127.0.0.1", "local"),
-    ("0.0.0.0", "local"),
+    ("0.0.0.0", "local"),  # nosec B104 # Provider hostname classification, not a bind address.
 )
 
 

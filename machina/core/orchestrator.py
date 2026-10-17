@@ -44,6 +44,8 @@ def _redacted(text: str) -> str:
         return redact_diagnostic(text)
     except Exception:
         return "[redaction unavailable]"
+
+
 delegation_depth: ContextVar[int] = ContextVar("delegation_depth", default=0)
 delegation_deadline: ContextVar[float | None] = ContextVar("delegation_deadline", default=None)
 

@@ -242,7 +242,10 @@ class MemoryStore:
                     """INSERT INTO memory_provenance
                        (memory_id, source_agent, signature, parent_memory_id)
                        VALUES ($1, $2, $3, $4)""",
-                    memory_id, source, provenance.signature, parent_memory_id,
+                    memory_id,
+                    source,
+                    provenance.signature,
+                    parent_memory_id,
                 )
             return row
 

@@ -608,9 +608,7 @@ class IdentityGate:
                 matching_facts += 1
 
         denominator_cap = max(1, math.ceil(1 / self.RELEVANCE_THRESHOLD))
-        return min(
-            1.0, matching_facts / min(len(belief.known_facts), denominator_cap)
-        )
+        return min(1.0, matching_facts / min(len(belief.known_facts), denominator_cap))
 
     def _compute_consistency(self, content: str, belief: AgentBelief) -> float:
         """Compute consistency between memory content and agent beliefs.

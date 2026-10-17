@@ -218,8 +218,7 @@ def _generate_installed_metadata(names: list[str]) -> list[dict[str, object]]:
                 "metadataError": None
                 if usable
                 else (
-                    "metadata generation failed "
-                    f"({error_type or 'no schema-v2 metadata produced'})"
+                    f"metadata generation failed ({error_type or 'no schema-v2 metadata produced'})"
                 ),
             }
         )

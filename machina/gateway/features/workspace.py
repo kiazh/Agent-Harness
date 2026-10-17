@@ -151,9 +151,7 @@ async def retire_active_lsp_manager(gw: Gateway) -> None:
     await _retire_manager_bounded(gw, manager)
 
 
-async def drain_retired_lsp_managers(
-    gw: Gateway, *, timeout: float = MANAGER_STOP_TIMEOUT
-) -> None:
+async def drain_retired_lsp_managers(gw: Gateway, *, timeout: float = MANAGER_STOP_TIMEOUT) -> None:
     """Bounded, non-cancelling join of retired managers' stops (shutdown hook).
 
     A stop still running when the bound elapses is left detached and logged,

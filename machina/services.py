@@ -171,9 +171,7 @@ async def session_context_window(session: Session) -> int:
             base_url = ChatGPTProvider.BASE_URL
         except Exception:
             account_id, base_url = "", ""
-        return context_window_for(
-            model, provider, account_id=account_id, base_url=base_url
-        )
+        return context_window_for(model, provider, account_id=account_id, base_url=base_url)
     # Keep the historical call shape for every other provider (patch targets
     # and custom providers override the two-argument form).
     return context_window_for(model, provider)

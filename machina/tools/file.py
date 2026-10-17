@@ -1014,9 +1014,14 @@ def _bounded_glob(directory: Path, pattern: str):
                 inspected += 1
                 if entry.is_symlink():
                     continue
-                next_states = closure({index if parts[index] == "**" else index + 1
-                                       for index in states if index < len(parts)
-                                       and (parts[index] == "**" or fnmatch(entry.name, parts[index]))})
+                next_states = closure(
+                    {
+                        index if parts[index] == "**" else index + 1
+                        for index in states
+                        if index < len(parts)
+                        and (parts[index] == "**" or fnmatch(entry.name, parts[index]))
+                    }
+                )
                 candidate = Path(entry.path)
                 is_directory = entry.is_dir(follow_symlinks=False)
                 if len(parts) in next_states and (not directories_only or is_directory):

@@ -301,9 +301,7 @@ async def evaluate_request(
             mode="shadow",
             degraded=report is None,
             would_fit=bool(report["would_fit"]) if report is not None else None,
-            refusal=(
-                (report.get("refusal") or {}).get("code") if report is not None else None
-            ),
+            refusal=((report.get("refusal") or {}).get("code") if report is not None else None),
             estimated_tokens=report["estimated_tokens"] if report is not None else None,
             effective_budget=effective_budget,
             request_tokens=None,

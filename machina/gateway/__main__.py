@@ -157,7 +157,10 @@ async def _dispatch_requests(gateway: Any, queue: asyncio.Queue[str | None]) -> 
             runtime = getattr(gateway, "runtime", runtime_services)
             for task in pending:
                 runtime.track(task)
-            logger.warning("%d gateway request(s) resisted cancellation; resource shutdown continues", len(pending))
+            logger.warning(
+                "%d gateway request(s) resisted cancellation; resource shutdown continues",
+                len(pending),
+            )
 
 
 async def _serve() -> None:
@@ -207,6 +210,7 @@ def main() -> None:
         except KeyboardInterrupt:
             pass
     finally:
+
         async def retire_loop_tasks() -> None:
             tasks = {task for task in asyncio.all_tasks(loop) if task is not asyncio.current_task()}
             for task in tasks:
@@ -214,7 +218,9 @@ def main() -> None:
             if tasks:
                 _done, pending = await asyncio.wait(tasks, timeout=REQUEST_CANCEL_GRACE_SECONDS)
                 if pending:
-                    logger.warning("closing gateway loop with %d cancellation-resistant task(s)", len(pending))
+                    logger.warning(
+                        "closing gateway loop with %d cancellation-resistant task(s)", len(pending)
+                    )
                     return
             finalizers = loop.create_task(loop.shutdown_asyncgens())
             _done, pending = await asyncio.wait({finalizers}, timeout=REQUEST_CANCEL_GRACE_SECONDS)
