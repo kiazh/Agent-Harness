@@ -828,7 +828,7 @@ class OAuthNetworkClient:
         granted = payload.get("scope")
         if granted:
             granted_scopes = tuple(str(granted).split())
-            if set(granted_scopes) - set(approved or granted_scopes):
+            if set(granted_scopes) - set(approved):
                 raise OAuthNetworkError(
                     "granted scopes exceed approved scopes", reason="oauth_scope_not_allowed"
                 )
