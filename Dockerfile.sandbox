@@ -15,14 +15,23 @@
 FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
 
 WORKDIR /build
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY machina ./machina
 COPY skills ./skills
 
+# F-15: install the exact uv.lock resolution; F-14: remove the build tree from
+# the isolation image (only site-packages and the console script are needed).
+# uv itself is removed so the sandbox carries no resolver/build tooling.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git findutils grep coreutils diffutils \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir .
+    && pip install --no-cache-dir "uv==0.11.7" \
+    && uv export --frozen --no-dev --no-hashes --no-emit-project -o /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip install --no-cache-dir --no-deps . \
+    && pip uninstall -y uv \
+    && rm -rf /build /tmp/requirements.txt /root/.cache \
+    && mkdir -p /workspace && chown 65534:65534 /workspace
 
 USER 65534:65534
 WORKDIR /workspace

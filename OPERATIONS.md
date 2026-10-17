@@ -32,6 +32,7 @@ preserve the previous live setting. Configure only trusted backend endpoints.
 | HTTP authorization | `MACHINA_API_KEY`; terminate TLS at a trusted edge. `/health` and `/ready` are public; `/metrics` requires authentication. |
 | Local gateway | `MACHINA_GATEWAY_TOKEN`; TUI launcher provisions its own token. Do not publish unauthenticated stdio transport. |
 | Provenance | `MACHINA_PROVENANCE_KEY`, distinct from API/provider keys. |
+| MCP OAuth | `MACHINA_OAUTH_MASTER_KEY` (base64 of exactly 32 bytes) on headless/Docker hosts with no allowlisted OS keyring; without it OAuth reports `storage_unavailable`. State lives under `~/.machina/oauth/` (directory 0700, files 0600) or the OS keyring (`Machina/MCP-OAuth`). |
 | Workspace | `MACHINA_WORKSPACE_ROOT`; provision separate trusted script root with `MACHINA_SCRIPTS_DIR`. |
 | Docker sandbox | Working daemon and built `Dockerfile.sandbox` image; inspect approved mounts/network policy. Absence refuses sandbox execution. The sandbox needs the host Docker daemon: inside the Compose deployment the app container has neither the CLI nor the socket mount, so `sandbox` mode is unavailable there by design (fail-closed) — run sandbox mode from a host install. |
 | Search | Optional operator-controlled `SEARXNG_URL`; internet fetching still enforces per-hop address/deadline restrictions. |
@@ -49,6 +50,23 @@ and run `npm ci --ignore-scripts --prefix ui` for the TUI. Keep the UI and backe
 from the same release; the TUI negotiates protocol v2, while legacy clients that
 omit `protocolVersion` retain v1. See [the wire contract](communications/ui-gateway-protocol.md).
 
+Docker Compose renamed its application-home volume from `ahhome` to
+`machina-home`. Following the project default, the old volume's physical name is
+`<compose-project>_ahhome` and the new one is `<compose-project>_machina-home`
+(usually `machina_*`). Carry state over once while `app` is stopped:
+
+```bash
+docker compose stop app
+docker volume create machina_machina-home
+docker run --rm -v machina_ahhome:/from:ro -v machina_machina-home:/to alpine \
+  sh -c 'cp -a /from/. /to/'
+docker compose up -d
+# keep machina_ahhome until the new deployment is verified, then remove it.
+```
+
+The `ahhome:` entry stays declared for one release as a documented legacy alias
+(not mounted); it can be deleted in the release after the next one.
+
 Before upgrade: stop accepting work; drain or stop active workers; capture a
 consistent backup and record artifact/config versions. Run `machina init` using an
 operator migration role. Schema application is an atomic transaction and can be
@@ -59,8 +77,9 @@ of serving traffic. The base schema still requires `machina init`: deploying cod
 references new base-schema columns without running `machina init` first fails at turn time
 (`UndefinedColumnError` on first write), not at boot — always migrate before
 starting new workers. Legacy modes migrate to `ask`; execution claims remain separate from
-session business status. Version-1 action approvals require fresh review after
-the digest/workspace change. Preserve provider/backend configuration separately.
+session business status. Action digests are version 2 (workspace identity and the
+shell payload are bound); approvals persisted with a v1 digest never resume and
+require fresh review. Preserve provider/backend configuration separately.
 
 Verify `/health`, `/ready`, authenticated `/metrics`, TUI and HTTP chat, approval
 resume, memory/RAG, interval/heartbeat/cron/script jobs, and cancellation before
@@ -107,19 +126,30 @@ Provider, approval, cleanup, claim-loss, RAG, and scheduler diagnostics use boun
 operation names, IDs and counts; never put conversation content in labels.
 
 Alert on unavailable readiness, repeated provider errors/429s, claim loss,
-cleanup timeout/late failure, audit persistence failures/dropped entries, budget
-exhaustion, scheduler lease loss, and failed jobs. For example, the exported
-`machina_operations_total{operation="audit.persistence.failed"}` counter should
-produce an alert when its increase over five minutes is nonzero. First verify
-the selected metric labels against a staging scrape. Send a controlled test
-failure through the configured alert path and confirm delivery and recovery.
+cleanup timeout/late failure, audit persistence failures/dropped entries,
+budget exhaustion, scheduler lease loss, and failed jobs. For example, the
+exported `machina_operations_total{operation="audit.persistence.failed"}`
+counter should produce an alert when its increase over five minutes is nonzero,
+and `audit.spill.failed` should alert because it means a dropped event could not
+even reach the local spill file. First verify the selected metric labels
+against a staging scrape. Send a controlled test failure through the configured
+alert path and confirm delivery and recovery.
 
 Gateway logs rotate at 5 MiB with three backups per gateway log file (about
 20 MiB including the current file). Multiple processes writing the same
 rotating file need an operator-managed collector or separate process log paths.
 Protect `~/.machina/logs`; exception messages are scrubbed, and audit events
-exclude raw prompts/completions/tool payloads. The audit writer is best effort:
-queue overflow and failed persistence have metrics, not a durable replay queue.
+exclude raw prompts/completions/tool payloads. The audit writer is best effort
+(no blocking backpressure), but a dropped event is no longer lost silently:
+queue overflow, shutdown/before-start drops, and failed SQL writes append one
+sanitized JSON object per line to `<machina_home>/logs/audit-spill.jsonl`
+(survives a restart; `audit.queue.dropped*`, `audit.spill.written` and
+`audit.spill.failed` counters report the path). The spill is bounded: at 10 MiB
+the previous generation rotates to `audit-spill.jsonl.1` (one generation, so
+disk use is capped at roughly twice the limit); an oversized single record is
+still written once. If the file cannot be written, the old metrics/log-only
+behavior applies. Include the spill file in log shipping/retention and alert on
+`audit.spill.failed`, which means an event may exist only in process logs.
 Set PostgreSQL audit retention and Prometheus retention outside the application;
 include backups in the same policy. Restrict log readers and verify redaction
 with synthetic credentials before enabling external log shipping.

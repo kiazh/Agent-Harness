@@ -22,8 +22,8 @@ language servers.
 
 | Command | Purpose |
 |---|---|
-| `/workspace [split\|chat\|editor\|status\|close]` | Mode switching; status shows root, epoch and server states; close retires the workspace connection (open documents are kept) |
-| `/editor [maximize\|restore]` | Editor maximize / back to split |
+| `/workspace [split\|chat\|editor\|ratio\|side\|open <path>\|status\|close]` | Mode switching; `ratio <0.25-0.75\|reset>` sets the split ratio, `side left\|right` places the chat pane, `open <path>` opens another folder (re-mints the workspace identity), `status` shows root, epoch and server states, `close` retires the workspace connection (open documents are kept) |
+| `/editor [maximize\|restore\|complete\|close]` | Editor maximize / back to split; `complete` requests completion at the cursor (fallback when the terminal or macOS intercepts `Ctrl+Space`); `close` closes the active tab |
 | `/explorer [toggle\|open\|close]` | Right-edge file tree |
 | `/lsp [status\|start\|stop\|restart] [profile]` | Language-server lifecycle; status prints per-profile state, generation and capabilities |
 | `/problems` | Open/focus the Problems pane (Enter jumps to the location) |
@@ -36,17 +36,19 @@ language servers.
 |---|---|---|
 | Ctrl+P | Quick Open | `/quickopen` |
 | Ctrl+S | Save the active document (compare-and-swap; conflicts are shown) | command palette |
-| Ctrl+Space | Completion | command palette |
+| Ctrl+Space | Completion | `/editor complete` |
 | F12 / Shift+F12 | Definition / References | command palette |
 | F2 | Rename preview (only where the server supports it; otherwise an honest notice) | — |
 | F6 / Shift+F6 | Cycle focus: chat → editor → explorer → problems | commands |
-| Ctrl+Left / Ctrl+Right | Toggle chat maximize (previous split restores) | `/workspace` |
+| Ctrl+Left / Ctrl+Right | Editor-region only: `Ctrl+Right` toggles chat maximize, `Ctrl+Left` always returns to the 50/50 split (previous split restores). While the chat composer owns focus these keep word motion | `/workspace chat\|split` |
 | Ctrl+T | Toggle explorer (some terminals use this for a new tab) | `/explorer` |
+| Ctrl+W | Close the active editor tab (dirty → Save/Discard/Cancel). **Not** bound in the chat composer, where it remains delete-word-backward | `/editor close` |
 | Esc | Dismisses the top editor popup first; a second Esc stops a running turn | — |
 
-`Ctrl+W` is intentionally unbound (many terminals close the tab/window on it).
-Editor word motion stays on `alt+arrows`; `ctrl+arrows` are reserved for the
-global maximize binding when your terminal delivers them.
+`Ctrl+Left`/`Ctrl+Right` are gated to the editor region (commit `6f3131c`):
+the chat composer keeps its standard word motion. Editor word motion stays on
+`alt+arrows`. Some terminals intercept `Ctrl+W` (close tab/window) or `Ctrl+T`
+(new tab) before the app sees them; the command fallbacks above always work.
 
 ## Language servers
 

@@ -12,13 +12,17 @@
 #   ./install.sh [--dir DIR] [--dev] [--no-ui] [--interactive] [--yes] [--with-docker-db|--no-docker-db] [--skip-init] [--interop MODE]
 #
 # What it does, in order:
-#   1. Uses current checkout (or clones REPO_URL into --dir / ./machina)
+#   1. Uses --dir / MACHINA_INSTALL_DIR when given; otherwise the current
+#      checkout, or clones REPO_URL into ./machina
 #   2. Checks python>=3.11, node>=22.19 (UI only), npm, git
 #   3. Creates .venv, pip install -e . (or .[dev])
-#   4. npm install --prefix ui (unless --no-ui)
-#   5. Creates .env with sane defaults + random API/provenance keys (never prompts when piped)
+#   4. npm ci --prefix ui (unless --no-ui, Node <22.19, or npm absent)
+#   5. Seeds .env from .env.example (any missing target, not only the default)
+#      and generates random API/provenance/OAuth-master keys (never prompts
+#      when piped unless --interactive and a terminal is available)
 #   6. Tries `machina init`; on failure auto-provisions Postgres (docker, then
-#      Homebrew on macOS) and retries. OS-aware: macos | windows | linux.
+#      Homebrew on macOS unless --with-docker-db pinned it to Docker) and
+#      retries. OS-aware: macos | windows | linux.
 #   7. Installs an `machina` shim in ~/.local/bin, persists it to the shell rc
 #      (~/.zshrc / ~/.bash_profile / ~/.bashrc), and on Windows registers the
 #      venv in the user Path for PowerShell — so `machina` works in new shells.
@@ -66,7 +70,8 @@ Options:
                    otherwise current directory if already a checkout)
   --dev            Install Python dev extras (pip install -e ".[dev]")
   --no-ui          Skip UI dependencies (npm install --prefix ui)
-  --interactive    Prompt for OPENROUTER_API_KEY even when piped via curl
+  --interactive    Prompt (via /dev/tty) for OPENROUTER_API_KEY and harness
+                   interop even when piped via curl
   -y, --yes, --non-interactive
                    Never prompt; generate defaults and finish (default when piped)
   --with-docker-db Force auto-start of local Postgres via docker on init failure
@@ -125,6 +130,38 @@ esac
 
 is_repo_dir() { [ -f "$1/pyproject.toml" ] && [ -d "$1/machina" ] && [ -d "$1/ui" ]; }
 
+# clone_into_app_dir — clone REPO_URL into APP_DIR.
+# F-33: operators may pre-create the target (e.g. to hold a pre-seeded .env
+# before install.sh runs). `git clone` refuses a non-empty destination, so for
+# that case clone into a temporary directory and merge it in without ever
+# overwriting the operator's files. A normal empty/missing target keeps the
+# plain one-step clone.
+clone_into_app_dir() {
+  if [ ! -d "$APP_DIR" ] || [ -z "$(ls -A "$APP_DIR" 2>/dev/null)" ]; then
+    git clone --depth 1 "$REPO_URL" "$APP_DIR"
+    return
+  fi
+  local tmp entry base
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/machina-clone.XXXXXX")" || return 1
+  if ! git clone --depth 1 "$REPO_URL" "$tmp/repo"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  log "Target $APP_DIR is pre-populated; merging the clone without overwriting existing files"
+  for entry in "$tmp/repo"/* "$tmp/repo"/.[!.]* "$tmp/repo"/..?*; do
+    [ -e "$entry" ] || continue
+    base="$(basename "$entry")"
+    if [ -d "$entry" ] && [ -d "$APP_DIR/$base" ]; then
+      cp -R -n "$entry"/. "$APP_DIR/$base"/ || { rm -rf "$tmp"; return 1; }
+    elif [ -e "$APP_DIR/$base" ]; then
+      warn "Keeping pre-existing $APP_DIR/$base (clone did not overwrite it)"
+    else
+      mv "$entry" "$APP_DIR/" || { rm -rf "$tmp"; return 1; }
+    fi
+  done
+  rm -rf "$tmp"
+}
+
 pick_python() {
   local c
   for c in python3 python; do
@@ -139,6 +176,8 @@ pick_python() {
 }
 
 rand_hex() { "$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(32))'; }
+# Base64 of exactly 32 random bytes — the MCP OAuth master-key format.
+rand_b64() { "$PYTHON_BIN" -c 'import base64, secrets; print(base64.b64encode(secrets.token_bytes(32)).decode("ascii"))'; }
 
 # --- OS detection ------------------------------------------------------------
 # OS_FAMILY: macos | windows | linux | other. Drives shell-rc selection
@@ -158,7 +197,9 @@ OS_FAMILY="$(detect_os)"
 log "Detected OS: $OS_FAMILY"
 
 # --- Locate or clone the checkout -------------------------------------------
-if is_repo_dir "$(pwd)"; then
+# F-04: an explicit --dir / MACHINA_INSTALL_DIR always wins. The current
+# checkout is only the DEFAULT when no directory was requested.
+if [ -z "$INSTALL_DIR" ] && is_repo_dir "$(pwd)"; then
   APP_DIR="$(pwd)"
   log "Using current checkout: $APP_DIR"
 else
@@ -176,7 +217,7 @@ else
   else
     command -v git >/dev/null 2>&1 || die "git is required: https://git-scm.com/downloads"
     log "Cloning $REPO_URL -> $APP_DIR"
-    git clone --depth 1 "$REPO_URL" "$APP_DIR"
+    clone_into_app_dir || die "git clone failed: $REPO_URL -> $APP_DIR (see error above)"
   fi
 fi
 START_DIR="$PWD"
@@ -199,7 +240,6 @@ INSTALL_LIB="$APP_DIR/tools/install-helpers.sh"
 # The env-file target is resolved ONCE here: an absolute MACHINA_ENV_FILE wins
 # as-is, a relative one anchors to the startup directory (a later directory
 # can no longer redirect it), and unset means the checkout .env.
-if [ -n "${MACHINA_ENV_FILE:-}" ]; then ENV_IS_DEFAULT=0; else ENV_IS_DEFAULT=1; fi
 ENV_FILE="$(resolve_env_file "$START_DIR")"
 # --- env-file parent guard ---------------------------------------------------
 # MACHINA_ENV_FILE pointing into a missing or read-only directory used to abort
@@ -229,7 +269,11 @@ if [ "$DO_UI" = "1" ]; then
     warn "Node.js not found; UI will not work. Install 22.19+ from https://nodejs.org/ or re-run with --no-ui."
     DO_UI=0
   elif [ "$(node -e 'const p=process.versions.node.split(".").map(Number); console.log((p[0]>22||(p[0]===22&&p[1]>=19))?1:0)' 2>/dev/null || echo 0)" != "1" ]; then
-    warn "Node $(node --version) found; 22.19+ recommended. Continuing anyway."
+    # F-08: ui/package.json engines and the launcher enforce 22.19+, so an
+    # `npm ci` on an older Node can abort the whole install before .env, init,
+    # or the PATH shim exist. Degrade the UI instead of hard-failing the backend.
+    warn "Node $(node --version) found; 22.19+ is required for the TUI. Skipping UI dependencies (backend install continues; re-run with Node 22.19+ to build the UI)."
+    DO_UI=0
   fi
   if [ "$DO_UI" = "1" ] && ! command -v npm >/dev/null 2>&1; then
     warn "npm not found; skipping UI dependencies (re-run without --no-ui once npm exists)."
@@ -269,8 +313,11 @@ else
     log "Creating virtualenv (.venv) with $PYTHON_BIN"
   fi
   rm -rf .venv
-  "$PYTHON_BIN" -m venv .venv
-  venv_healthy || die "Could not build a working .venv with $PYTHON_BIN. Try running '$PYTHON_BIN -m venv --clear .venv' manually (see error above), or install Python 3.11+ from https://www.python.org/downloads/"
+  # F-32: guard the venv command itself; under `set -e` an unguarded failure
+  # exits before the diagnostic below (Debian/Ubuntu without python3-venv).
+  if ! "$PYTHON_BIN" -m venv .venv || ! venv_healthy; then
+    die "Could not build a working .venv with $PYTHON_BIN. Try running '$PYTHON_BIN -m venv --clear .venv' manually (see error above), or install Python 3.11+ and the venv/ensurepip package for your distribution (e.g. sudo apt-get install python3-venv)."
+  fi
   log "Virtualenv ready"
 fi
 VENV_PY="$(venv_python)"
@@ -293,6 +340,10 @@ if [ "$DO_DEV" = "1" ]; then
 else
   run_animated "Installing Machina" "$VENV_PY" -m pip install -e .
 fi
+# Deliberate F-15 exception: an editable checkout install follows the local
+# pyproject so source edits take effect. CI and container builds use the
+# authoritative `uv.lock` (uv export --frozen) instead; do not copy this
+# resolver behavior into release automation.
 # Re-resolve: the install creates the `machina` entry point (machina / machina.exe).
 MACHINA_BIN="$VENV_BIN/machina"
 [ -f "$MACHINA_BIN" ] || MACHINA_BIN="$VENV_BIN/machina.exe"
@@ -311,13 +362,15 @@ fi
 # Every read/write below targets $ENV_FILE (MACHINA_ENV_FILE-aware); see
 # resolve_env_file in tools/install-helpers.sh.
 umask 077
-if [ "$ENV_IS_DEFAULT" = "1" ] && [ ! -f "$ENV_FILE" ]; then
-  log "Creating .env from .env.example"
+# F-07: ANY missing env target (default or MACHINA_ENV_FILE override) is seeded
+# from .env.example before gap-filling. A custom path is a location choice,
+# not a statement that the file already exists.
+if [ ! -f "$ENV_FILE" ]; then
+  log "Creating $ENV_FILE from .env.example"
   cp .env.example "$ENV_FILE"
   chmod 600 "$ENV_FILE" 2>/dev/null || warn "could not restrict $ENV_FILE to mode 600; verify its permissions"
 else
-  log "$ENV_FILE already exists (or is overridden), keeping it (filling gaps only)"
-  [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
+  log "$ENV_FILE already exists, keeping it (filling gaps only)"
   chmod 600 "$ENV_FILE" 2>/dev/null || warn "could not restrict $ENV_FILE to mode 600; verify its permissions"
 fi
 
@@ -339,6 +392,17 @@ for KEY in MACHINA_API_KEY MACHINA_PROVENANCE_KEY; do
       ;;
   esac
 done
+
+# F-21: MCP OAuth needs a master key on headless/Docker hosts (no desktop
+# keyring), so generate one when absent. Existing operator keys are preserved.
+OAUTH_KEY="$(env_get MACHINA_OAUTH_MASTER_KEY "$ENV_FILE")" || die "Cannot read $ENV_FILE"
+case "$OAUTH_KEY" in
+  ""|"replace-with-a-base64-32-byte-key")
+    OAUTH_KEY_NEW="$(rand_b64)"
+    env_set MACHINA_OAUTH_MASTER_KEY "$OAUTH_KEY_NEW" "$ENV_FILE" || die "Cannot write $ENV_FILE"
+    log "Generated MACHINA_OAUTH_MASTER_KEY (base64, 32 bytes)"
+    ;;
+esac
 
 # Prompt for the LLM key only when we have a real TTY (or --interactive), never
 # blocking a `curl | bash` run. Reads from /dev/tty so the pipe isn't consumed.
@@ -406,6 +470,12 @@ else
     elif [ "$DOCKER_DB_RC" = "0" ] && INIT_OUTPUT="$(wait_for_init 2>&1)"; then
       INIT_STATE="ready"
       log "Schema ready (via auto-started docker Postgres)"
+    elif [ "$DOCKER_DB" = "yes" ]; then
+      # F-06: --with-docker-db is a hard constraint. Never install/start a
+      # host Homebrew Postgres when the operator explicitly pinned Docker.
+      printf '%s\n' "$INIT_OUTPUT" >&2
+      warn "\`machina init\` failed and Docker Postgres was requested (--with-docker-db)."
+      warn "Not falling back to Homebrew: start Docker (or fix machina-db/DATABASE_URL), then re-run: machina init"
     elif start_brew_db && INIT_OUTPUT="$(wait_for_init 2>&1)"; then
       INIT_STATE="ready"
       log "Schema ready (via Homebrew Postgres)"
@@ -550,14 +620,39 @@ register_windows_path() {
 # bake a broken relative exec into the shim.
 VENV_MACHINA="$(pwd)/$MACHINA_BIN"
 SHIM_DIR="$HOME/.local/bin"
+
+# F-05: `command -v machina` on Git Bash/MSYS may print the Scripts path
+# without the `.exe` suffix that VENV_MACHINA carries, and a previous install
+# can leave our own shim pointing at a moved/deleted checkout. Normalize both
+# sides (`.exe`, Windows drive form, case) and treat "$SHIM_DIR/machina" as
+# ours to replace — it is never a foreign launcher worth preserving.
+normalize_bin_path() {
+  local p="$1"
+  p="${p%.exe}"
+  case "$OS_FAMILY" in
+    windows)
+      if command -v cygpath >/dev/null 2>&1; then
+        p="$(cygpath -u "$p" 2>/dev/null || printf '%s' "$p")"
+      fi
+      p="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"
+      ;;
+  esac
+  printf '%s' "$p"
+}
+
 if [ -f "$VENV_MACHINA" ]; then
   # NOTE: don't trust `command -v machina` alone here — during install the venv is
   # activated, so `machina` resolves even when no other shell can see it. Only skip
-  # the shim when `machina` resolves to something outside this venv.
+  # the shim when `machina` resolves to a different, foreign launcher.
   existing_machina="$(command -v machina 2>/dev/null || true)"
-  if [ -n "$existing_machina" ] && [ "$existing_machina" != "$VENV_MACHINA" ]; then
+  if [ -n "$existing_machina" ] \
+    && [ "$(normalize_bin_path "$existing_machina")" != "$(normalize_bin_path "$VENV_MACHINA")" ] \
+    && [ "$existing_machina" != "$SHIM_DIR/machina" ]; then
     log "\`machina\` already on PATH: $existing_machina (leaving it)"
   elif mkdir -p "$SHIM_DIR" 2>/dev/null; then
+    if [ "$existing_machina" = "$SHIM_DIR/machina" ]; then
+      log "Replacing stale \`machina\` shim at $SHIM_DIR/machina"
+    fi
     # R5-9: escape the baked-in path for the double-quoted sh word it lands
     # in — a raw `$`, backtick, `"`, or `\` would be reinterpreted (or
     # executed) every time the shim runs. Plain paths are unchanged.
@@ -618,7 +713,14 @@ fi
 # on an interactive TTY and otherwise just prints the detection summary plus
 # the exact enable-later commands (`--yes`/piped runs never prompt).
 INTEROP_PROMPT="prompt"
-if [ "$ASSUME_YES" = "1" ] || [ ! -t 0 ]; then INTEROP_PROMPT="no-prompt"; fi
+# F-03: a piped `curl | bash --interactive` has no TTY on stdin but can still
+# prompt through /dev/tty. Only suppress prompting when the user asked for
+# non-interactive mode or no terminal exists at all.
+if [ "$ASSUME_YES" = "1" ] || { [ ! -t 0 ] && [ "$INTERACTIVE" != "1" ]; }; then
+  INTEROP_PROMPT="no-prompt"
+elif [ ! -e /dev/tty ]; then
+  INTEROP_PROMPT="no-prompt"
+fi
 installer_interop_setup "$INTEROP_MODE" "$INTEROP_PROMPT"
 
 installer_next_steps "$INIT_STATE" "$(pwd)/README.md"

@@ -11,7 +11,11 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      # F-11: probe TCP on the application database. `pg_isready -U postgres`
+      # checks the Unix socket/default DB and can pass while the first-boot
+      # temporary server (listen_addresses='') is still running, before
+      # `machina` exists on port 5432.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d machina"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -20,14 +24,23 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # F-11: a transient connection refusal during first-boot must not leave
+    # the API permanently down.
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/machina
-      # AH-AUDIT-039b: provider selection + per-provider keys forwarded
-      # explicitly from host configuration (empty default = unset; secrets
-      # never baked into image layers — .env stays excluded via .dockerignore).
+      # AH-AUDIT-039b / F-10: this block is the explicit, documented allowlist
+      # of host `.env` variables that reach the container. Keep it in parity
+      # with `.env.example` and the OPERATIONS.md configuration table; a
+      # variable added there but not here is silently ignored in Compose.
+      # `MACHINA_TEST_DATABASE_URL` is intentionally absent (tests only), and
+      # mounted `*_FILE` secret paths are operator-specific: mount the secret
+      # and set the `*_FILE` value through this block when deploying that way.
+      # Empty defaults mean "unset" (the application default applies); secrets
+      # are never baked into image layers (.env stays excluded via .dockerignore).
       MACHINA_PROVIDER: ${MACHINA_PROVIDER:-openrouter}
       MACHINA_MODEL: ${MACHINA_MODEL:-openrouter/free}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -47,12 +60,35 @@ services:
       CUSTOM_API_KEY: ${CUSTOM_API_KEY:-}
       MACHINA_API_KEY: ${MACHINA_API_KEY:?Set MACHINA_API_KEY in .env}
       MACHINA_PROVENANCE_KEY: ${MACHINA_PROVENANCE_KEY:-}
-      MACHINA_HOME: /home/appuser/.machina
-      MACHINA_SCRIPTS_DIR: /app/scripts
+      MACHINA_OAUTH_MASTER_KEY: ${MACHINA_OAUTH_MASTER_KEY:-}
+      # Retrieval (dense embeddings, reranking, RRF fusion).
+      MACHINA_EMBEDDING_BACKEND: ${MACHINA_EMBEDDING_BACKEND:-}
+      MACHINA_EMBEDDING_MODEL: ${MACHINA_EMBEDDING_MODEL:-}
+      MACHINA_EMBEDDING_BASE_URL: ${MACHINA_EMBEDDING_BASE_URL:-}
+      MACHINA_RERANKER_BACKEND: ${MACHINA_RERANKER_BACKEND:-}
+      MACHINA_RERANKER_LOCAL_MODEL: ${MACHINA_RERANKER_LOCAL_MODEL:-}
+      MACHINA_RERANKER_HTTP_URL: ${MACHINA_RERANKER_HTTP_URL:-}
+      MACHINA_RERANKER_HTTP_MODEL: ${MACHINA_RERANKER_HTTP_MODEL:-}
+      MACHINA_RRF_KEYWORD_WEIGHT: ${MACHINA_RRF_KEYWORD_WEIGHT:-}
+      MACHINA_RRF_DENSE_WEIGHT: ${MACHINA_RRF_DENSE_WEIGHT:-}
+      SEARXNG_URL: ${SEARXNG_URL:-}
+      # Persona memory and runtime learning.
+      MACHINA_PERSONA_MEMORY_ENABLED: ${MACHINA_PERSONA_MEMORY_ENABLED:-}
+      MACHINA_PERSONA_DEFAULT_EMOTION: ${MACHINA_PERSONA_DEFAULT_EMOTION:-}
+      MACHINA_LEARNING_REVIEW_AUTO_APPLY: ${MACHINA_LEARNING_REVIEW_AUTO_APPLY:-}
+      MACHINA_LEARNING_REVIEW_AUTO_APPLY_PER_DAY: ${MACHINA_LEARNING_REVIEW_AUTO_APPLY_PER_DAY:-}
+      MACHINA_LEARNED_SKILLS_DIR: ${MACHINA_LEARNED_SKILLS_DIR:-}
+      # Operations: workspace, timeouts, rate limits, lifetime budgets.
+      MACHINA_WORKSPACE_ROOT: ${MACHINA_WORKSPACE_ROOT:-}
+      MACHINA_TURN_TIMEOUT: ${MACHINA_TURN_TIMEOUT:-}
+      MACHINA_APPROVAL_TIMEOUT: ${MACHINA_APPROVAL_TIMEOUT:-}
+      MACHINA_HTTP_RATE_LIMIT: ${MACHINA_HTTP_RATE_LIMIT:-}
       MACHINA_USAGE_SESSION_TOKEN_LIMIT: ${MACHINA_USAGE_SESSION_TOKEN_LIMIT:-0}
       MACHINA_USAGE_SESSION_REQUEST_LIMIT: ${MACHINA_USAGE_SESSION_REQUEST_LIMIT:-0}
       MACHINA_USAGE_AGENT_TOKEN_LIMIT: ${MACHINA_USAGE_AGENT_TOKEN_LIMIT:-0}
       MACHINA_USAGE_AGENT_REQUEST_LIMIT: ${MACHINA_USAGE_AGENT_REQUEST_LIMIT:-0}
+      MACHINA_HOME: /home/appuser/.machina
+      MACHINA_SCRIPTS_DIR: /app/scripts
       PYTHONDONTWRITEBYTECODE: "1"
     read_only: true
     cap_drop: ["ALL"]
@@ -63,22 +99,21 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      # R4-095: this mount is INERT for the compose service. `machina
-      # init`/`serve` run through the console entry point, which imports the
-      # pip-installed copy in site-packages (/app is not on sys.path for a
-      # console script) — edits to the host tree do NOT reach the running
-      # container, so rebuild the image to change runtime code. It is kept for
-      # read-only source inspection only. Caveat: ad-hoc `python -m machina…`
-      # or `python -c` run from /app DOES pick this tree up (cwd is on
-      # sys.path there); that mixed-code path is the stale-code trap this note
-      # warns about — don't rely on it for deployments.
-      - ./machina:/app/machina:ro
+      # F-12: the host checkout is mounted for read-only inspection at a path
+      # that is NOT on sys.path (cwd stays /app, and /app/machina comes from
+      # the image). The old `./machina:/app/machina:ro` made `python -m
+      # machina…` from /app import the host tree while console scripts used
+      # site-packages — a split-brain that could run two different revisions.
+      # Edits to the host tree never reach the running container; rebuild the
+      # image to change runtime code.
+      - ./machina:/opt/host-machina:ro
       - ./scripts:/app/scripts:ro
       # AH-AUDIT-039a: explicit writable application home/state path with
       # correct non-root ownership (seeded from the image dir, see
       # Dockerfile) while code/root stay read-only. Persistent config and
       # learned state survive restart/recreate; the DB volume is untouched.
-      - ahhome:/home/appuser/.machina:rw
+      # F-35: renamed from `ahhome`; see the legacy alias below.
+      - machina-home:/home/appuser/.machina:rw
     entrypoint: ["/bin/sh", "-c"]
     command: ["machina init && exec machina serve --host 0.0.0.0 --port 8000"]
     healthcheck:
@@ -89,4 +124,11 @@ services:
 
 volumes:
   pgdata:
+  # F-35: canonical application home (was `ahhome`). To carry state over from a
+  # pre-rename deployment, see the one-time copy command in OPERATIONS.md.
+  machina-home:
+  # One-release legacy alias: the pre-rename name, declared so it is never
+  # silently re-created/renamed by Compose and operators can migrate it. It is
+  # NOT mounted; `app` uses `machina-home`. Remove this entry in the release
+  # after the next one.
   ahhome:

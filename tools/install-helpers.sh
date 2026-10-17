@@ -129,7 +129,16 @@ installer_interop_setup() {
     if ! "$MACHINA_BIN" interop setup --mode "$mode" --no-prompt; then
       warn "Interop setup did not complete; install continues. Retry later: machina interop setup"
     fi
+  elif [ "$prompt_mode" = "prompt" ] && { : < /dev/tty; } 2>/dev/null; then
+    # F-03: under `curl | bash --interactive` stdin is the pipe, so the CLI's
+    # sys.stdin.isatty() check would silently skip prompting even though the
+    # installer honours /dev/tty elsewhere. Feed the CLI the terminal.
+    if ! "$MACHINA_BIN" interop setup --mode "$mode" < /dev/tty; then
+      warn "Interop setup did not complete; install continues. Retry later: machina interop setup"
+    fi
   else
+    # No usable terminal: the CLI prints its detection summary without
+    # registering anything (piped auto behavior).
     if ! "$MACHINA_BIN" interop setup --mode "$mode"; then
       warn "Interop setup did not complete; install continues. Retry later: machina interop setup"
     fi

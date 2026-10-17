@@ -36,10 +36,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install locked dependencies (uv.lock is authoritative)
+        # F-15: install the exact resolution recorded in uv.lock instead of
+        # re-resolving `>=` constraints from PyPI. `--no-deps -e .` keeps the
+        # editable checkout (tests import from source) without letting pip
+        # upgrade locked transitive versions. hatchling is the build backend,
+        # not a runtime/dev dependency, so it is installed separately.
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,connectors]"
+          python -m pip install --upgrade pip "uv==0.11.7"
+          uv export --frozen --extra dev --extra connectors --no-hashes --no-emit-project -o /tmp/requirements.txt
+          pip install -r /tmp/requirements.txt
+          pip install --no-deps -e .
           python -m pip install hatchling
 
       - name: Verify lockfile matches pyproject (uv lock --check)
@@ -47,9 +54,7 @@ jobs:
         # change (or Dependabot PR) that was not regenerated into uv.lock fails
         # here; run `uv lock` on the branch to fix. uv is pinned to the version
         # this lockfile (revision 3) is verified with; bump both together.
-        run: |
-          python -m pip install "uv==0.11.7"
-          uv lock --check
+        run: uv lock --check
 
       - name: Run ruff check
         run: python -m ruff check machina/ tools/
@@ -58,7 +63,9 @@ jobs:
         run: python -m ruff format --check machina/ tools/
 
       - name: Run bandit security scan
-        run: bandit -r machina/ -ll -x machina/cli/
+        # F-16: CLI process-spawning/token code and build tooling are in scope;
+        # the old command excluded machina/cli/ and skipped tools/ entirely.
+        run: bandit -r machina/ tools/ -ll
 
       - name: Build distributable artifacts
         run: python -m hatchling build
@@ -86,7 +93,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres"
+          --health-cmd "pg_isready -h 127.0.0.1 -d machina_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -110,10 +117,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install gateway and initialize test schema
+      - name: Install gateway and initialize test schemas
         working-directory: .
         run: |
-          python -m pip install -e ".[dev]"
+          python -m pip install --upgrade pip "uv==0.11.7"
+          uv export --frozen --extra dev --no-hashes --no-emit-project -o /tmp/requirements.txt
+          pip install -r /tmp/requirements.txt
+          pip install --no-deps -e .
           python - <<'PY'
           import asyncio
           from machina.db.connection import db
@@ -121,6 +131,10 @@ jobs:
               try:
                   await db.connect()
                   await db.initialize_schema()
+                  # F-17: UI gateway tests touch runtime-migrated tables
+                  # (growth/delegation/image-context/soulspec). Starting the
+                  # gateway would apply these; the test setup must too.
+                  await db.initialize_runtime_schema()
               finally:
                   await db.close()
           asyncio.run(initialize())
@@ -153,5 +167,11 @@ jobs:
         run: docker build --tag machina-tool-sandbox:ci -f Dockerfile.sandbox .
       - name: Smoke-test installed CLI
         run: docker run --rm machina:ci --help
+      - name: Smoke-test sandbox image
+        # F-17: a build-only check cannot catch a runtime failure under
+        # USER 65534 (e.g. an unreadable site-packages tree) or a leftover
+        # build context. Execute the image as its runtime user.
+        run: |
+          docker run --rm machina-tool-sandbox:ci python -c "import machina, os, sys; assert not os.path.exists('/build'), 'sandbox image retains /build'; print('sandbox ok', machina.__file__)"
       - name: Validate Compose without loading local credentials
         run: MACHINA_API_KEY=ci-placeholder docker compose --env-file /dev/null config --quiet

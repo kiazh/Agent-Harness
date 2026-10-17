@@ -1057,7 +1057,10 @@ def http_json(
         headers["X-API-Key"] = api_key
     request = urllib.request.Request(base_url + path, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        # base_url is the loopback API server URL assembled by ApiServer
+        # (`http://host:port`); B310's file:/custom-scheme warning does not
+        # apply to this e2e driver's fixed http target.
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
             return response.status, _json_or_excerpt(response.read(65536))
     except urllib.error.HTTPError as error:
         return error.code, _json_or_excerpt(error.read(65536))

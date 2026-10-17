@@ -17,7 +17,11 @@ These data are transport payloads, never log or metric fields.
 
 The TUI sends `protocolVersion: 2` with `initialize`; its response reports the
 selected version. HTTP prompt/chat and approval-resume bodies accept
-`protocolVersion: 2`; responses report `X-AH-Protocol-Version: 2`.
+`protocolVersion: 2`; responses report the negotiated version in a header.
+The current server emits the legacy spelling `X-AH-Protocol-Version: 2`;
+`X-Machina-Protocol-Version` is the canonical forward name. Clients must treat
+the two spellings as aliases for the same version value (the value, not the
+prefix, is normative).
 For compatibility, omission selects version 1. An unsupported version is rejected.
 Version 1 gateway approval names are `permission.required` and
 `permission.resolved`; the TUI accepts them during migration. Version 1 HTTP
@@ -37,7 +41,7 @@ All rows have the common envelope. A trailing `?` marks an optional field.
 | `message.delta` | `text: string` | Redacted streaming text; nonterminal. |
 | `message.stopping` | `reason: string` | Cancellation requested; execution may still be retiring. |
 | `tool.start` | `id: string`, `name: string`, `args: object` | Tool execution proposed or started; pair by id. |
-| `tool.complete` | `id: string`, `name: string`, `result: string`, `isError: boolean`, `truncated?: boolean` | Tool outcome; isError reports failure, truncated reports preview truncation. |
+| `tool.complete` | `id: string`, `name: string`, `result: string`, `isError: boolean`, `truncated?: boolean`, `outcome?: "outcome_unknown"` | Tool outcome; isError reports failure, truncated reports preview truncation. `outcome_unknown` means a call was dispatched but no terminal result is known (timeout/401/403/retirement); it is not success and must not render as one. |
 | `usage` | `tokens: number` | Token accounting for the turn; nonterminal. |
 | `growth.status` | `stage: string`, `detail?: string` | Learning evidence landed (`rsi_updated`, `consolidation_done`, `review_done`); nonterminal, may arrive after turn retirement. For the current session, the TUI acknowledges it with a brief bottom-right square pulse, coalesced to at most once per 30 seconds. No routine transcript notice. |
 | `message.complete` | `text: string`, `tokens: number`, `iterations: number`, `toolCalls: number`, `cancelled: boolean`, `needsApproval?: object[]` | Terminal after execution retirement and ownership release; cancelled reports requested cancellation. |
@@ -108,8 +112,9 @@ server, discovers tools, or changes approval state. Connection states and
 negotiated protocol metadata come from the manager, without hardcoded protocol
 versions. The TUI uses these methods for `/mcp`, `/mcp list`, and `/mcp status`.
 Inventory is in-memory/default-empty until configuration ingestion/persistence
-ships; OpenCode/Codex inventory is outside this process. Connect/disconnect UI,
-OAuth and agent-loop remote execution are explicitly deferred.
+ships; OpenCode/Codex inventory is outside this process. Connect/disconnect UI
+and agent-loop remote execution are explicit preview/approval flows; OAuth
+landed later and is documented below.
 
 ## MCP management and native tool calls (2026-10-12)
 
@@ -127,7 +132,32 @@ No raw `mcp.call` RPC bypass exists. Native `mcp_list`, `mcp_describe` and
 `mcp_call` use the agent pipeline and inherited tool restrictions. `tool.complete`
 adds optional `outcome: "outcome_unknown"` for a dispatched call without a known
 terminal result. Missing outcome preserves legacy behavior; unknown never renders
-as success. OAuth/HTTP credential authentication remains unavailable.
+as success.
+
+## MCP OAuth (2026-10-15)
+
+Streamable-HTTP OAuth (authorization code + S256 PKCE, loopback callback,
+dynamic client registration when advertised) is implemented and exposed as
+authenticated human control-plane methods — never agent tools and never a raw
+`mcp.call` bypass. All require a connector `id` and the caller's `sessionId`
+(where accepted); one session cannot operate another session's preview/operation.
+Unknown parameters are rejected. See [docs/MCP_OAUTH.md](../docs/MCP_OAUTH.md).
+
+| Method | Params | Result |
+|---|---|---|
+| `mcp.oauth.preview` | `{id, sessionId, issuer?}` | `{previewId, digest, expiresAt, review: {connectorId, revision, endpoint, resource, issuer, requestedScopes, registrationMode, endpoints, redirectUri}, requiredScopes?, authChallenge?}`; or `{issuers: [...]}` when discovery needs an explicit issuer choice. Launch-free: no registration, no browser, no token request. |
+| `mcp.oauth.start` | `{id, sessionId, previewId, digest}` | `{operation: {operationId, connectorId, state, expiresAt, reasonCode?}}`. Consumes the reviewed preview; a changed digest/config is rejected. |
+| `mcp.oauth.status` | `{id, sessionId, operationId?}` | `{auth, operation?}`. `auth.state` is `not_configured|signed_out|authorized|reauthorization_required|storage_unavailable` plus `generation`, grant id/scopes/expiry when authorized, and `requiredScopes`/`authChallenge` when the live connection recorded a 403 `insufficient_scope`. Local state only; launches nothing. |
+| `mcp.oauth.url` | `{id, sessionId, operationId}` | `{authorizationUrl}` — the login link for the pending operation. |
+| `mcp.oauth.open` | `{id, sessionId, operationId}` | `{opened: boolean}` — explicit browser launch; failure is reported, never retried silently. |
+| `mcp.oauth.cancel` | `{id, sessionId, previewId?, operationId?}` | `{cancelled: boolean}` — retires the pending preview/operation and its loopback listener. |
+| `mcp.oauth.forget` | `{id, sessionId, expectedGeneration, revoke?}` | `{auth, remoteRevocation, partial, failures}` — removes local credentials at the reviewed generation; `revoke: true` asks the provider once. Destructive, so the TUI confirms with Cancel as default. |
+
+A 403 `insufficient_scope` is surfaced as sanitized step-up evidence
+(`requiredScopes`/`authChallenge`) on `mcp.oauth.status` and in the preview
+review; it never widens the requested scopes and never replays the call.
+`tool.complete` carries `outcome: "outcome_unknown"` for 401/403/timeout paths
+with an exactly-once effect counter.
 
 ## Provider catalogs and user-added providers (2026-10-14)
 

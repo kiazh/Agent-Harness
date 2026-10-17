@@ -13,7 +13,7 @@ Do not expose a gateway, database, or Docker socket to untrusted clients.
 | Human → HTTP/gateway | HTTP bearer key; local gateway token. Agent principals cannot resolve human approvals. A gateway without `MACHINA_GATEWAY_TOKEN` is explicitly unauthenticated and belongs only on trusted local stdio; the standalone `python -m machina.gateway` entrypoint mints a token and prints it to stderr when the variable is absent. | `test_api.py`, `test_approvals_ownership.py` |
 | Agent → tools | Broker evaluates declared effects and exact action; tools execute a stamped mode/backend/workspace snapshot. Durable mode reads fail closed on database failure. | `test_execution_context_boundary.py`, `test_integration_permissions.py` |
 | Tool → filesystem | Canonical workspace boundary, private path restrictions, symlink/parent traversal and hard-link defenses, identity checks on file operations. | `test_security.py`, `test_audit_remediation.py` |
-| Tool → process | Structured argv and guarded command grammar. Known project test/build/lint workflows are operator-trusted; other opaque execution requires approval; shell payloads are distinct approval material. Child environment uses an allowlist. | `test_terminal_safety.py`, `test_scheduler_scripts.py`, `test_integration_permissions.py` |
+| Tool → process | Structured argv and guarded command grammar. Known project test/build/lint workflows are operator-trusted; other opaque execution requires approval; shell payloads are distinct approval material. Redirection (including `2>/dev/null` — there is no `/dev/null` allowlist), expansion, backgrounding, compound syntax and unknown commands are opaque and require review; quoted operators are data. Child environment uses an allowlist. | `test_terminal_safety.py`, `test_scheduler_scripts.py`, `test_integration_permissions.py` |
 | Tool → external web | DNS/IP validation at every redirect; connect to the validated address with correct Host/TLS identity. Aggregate deadlines and byte/header bounds apply to extraction. | `test_web_extract_pinned_fetch.py`, `test_deep_fetch_deadline.py` |
 | Workers → PostgreSQL | Conditional owner-token claims, database clock, lease renewal, token-matched release/finish. Unknown ownership blocks effects and mutations. | `test_multi_worker_fencing.py`, `test_rest_ownership_loss.py`, `test_claim_failure_boundary.py` |
 | Runtime → retained evidence (tool artifacts) | Oversized tool results are stored verbatim as session-scoped artifacts (per-artifact size and retention are configuration; default 30-day expiry). Every read re-authorizes through the session's delegation ancestry; handles are opaque UUIDs; quota refuses new stores rather than evicting live evidence; expired rows answer unavailable and purge. This widens local at-rest tool-output retention beyond the 65 KB context-chunk copy, so operators should size `artifact_max_chars` and `artifact_retention_days` to their data policy. | `test_te_artifacts.py` |
@@ -97,6 +97,9 @@ backend. Config YAML excludes credential fields. Real environment variables
 win over dotenv. Mounted file paths are explicit, bounded, and reject symlinks.
 Dotenv writes validate names/content, reject newline injection, and replace the
 file atomically; POSIX mode is `0600`, while Windows needs operator-managed ACLs.
+Manual installs must create `.env` under `umask 077` (or `chmod 600 .env`) before
+filling it; a `cp .env.example .env` under the default `022` umask is
+world-readable until that is done.
 
 Configured credential values are registered for exact outbound redaction,
 including rotated values used by retiring providers. Recognized secret formats

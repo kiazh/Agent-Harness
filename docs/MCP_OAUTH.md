@@ -47,6 +47,42 @@ session cannot operate another session's preview or operation.
   Ciphertext alone is not recoverable; keep a separate master-key backup.
 - Headless/remote workers cannot complete a loopback browser callback;
   configure a local worker for authorization.
+- Deployments: `install.sh` generates `MACHINA_OAUTH_MASTER_KEY` when it is
+  absent, and `docker-compose.yml` forwards it into the `app` container, so
+  Docker/headless installs work without a desktop keyring.
+
+### Pinned identifiers
+
+These names are the contract (state on disk, operator configuration, and the
+dynamic client registration seen by providers). The pre-rename `AgentHarness`
+spellings (`AGENT_HARNESS_OAUTH_MASTER_KEY`, `~/.agent-harness/oauth`,
+`AgentHarness/MCP-OAuth`, `client_name: "AgentHarness"`) are **not** read and
+need no migration: reauthorize if you still hold credentials from that era.
+
+| Item | Value |
+|---|---|
+| Master-key environment variable | `MACHINA_OAUTH_MASTER_KEY` (base64, exactly 32 bytes) |
+| On-disk state directory | `~/.machina/oauth/` (honors `MACHINA_HOME`) |
+| OS keyring service / account | `Machina/MCP-OAuth` / `master-key-v1` |
+| Dynamic client registration `client_name` | `Machina` |
+| Allowed keyring backends | `macos`, `windows`, `secretservice`, `kwallet`, `libsecret` |
+
+### Keyring lock lifetime
+
+Master-key creation is serialized across processes on a file lock
+(`flock`, or `msvcrt.locking` on Windows). The OS keyring API has no
+compare-and-swap, so the worker that wins the lock keeps it until
+`keyring.set_password` actually returns — not merely until its bounded wait
+times out. Consequences, by design:
+
+- A timed-out creator surfaces `storage_unavailable`; the daemon thread keeps
+  the cross-process lock while the stalled backend call is still in flight.
+- Successors block on their bounded lock wait and then fail closed
+  (`oauth master-key creation lock timed out`) instead of minting a second key
+  and later overwriting the first one.
+- If the OS backend never returns, the lock is held until that process exits.
+  Restart the stalled worker (or set `MACHINA_OAUTH_MASTER_KEY` explicitly)
+  rather than trying to delete the lock file under a live process.
 
 ## Limitations (deferred scope)
 

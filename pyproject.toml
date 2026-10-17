@@ -54,7 +54,18 @@ dev = [
 machina = "machina.cli:app"
 
 [tool.hatch.build]
-exclude = ["**/node_modules/**", "**/__pycache__/**", ".venv*", ".env", ".env.local", ".coverage", "coverage.xml"]
+exclude = [
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    ".venv*",
+    ".env",
+    ".env.local",
+    ".coverage",
+    "coverage.xml",
+    # Machine-local runtime state (gitignored). Never ship it in any artifact.
+    "skills/telemetry.json",
+    "skills/telemetry.json.lock",
+]
 
 # AH-030: ship built-in skills inside the wheel so non-editable installs
 # still discover SKILL.md content. Falls back to MACHINA_SKILLS_DIR
@@ -64,15 +75,173 @@ exclude = ["**/node_modules/**", "**/__pycache__/**", ".venv*", ".env", ".env.lo
 # (skills/telemetry.json[.lock]) shipped in wheels built from a used checkout.
 # The wheel target therefore selects `skills` through `packages` (normal file
 # selection honors `exclude`) instead of force-include; member paths are
-# unchanged. The sdist still force-includes `skills` wholesale (hatchling has
-# no cheap subtractive form there) and may carry the counters-only telemetry
-# file; image contexts stay clean via .dockerignore.
+# unchanged.
 [tool.hatch.build.targets.wheel]
 packages = ["machina", "skills"]
-exclude = ["skills/telemetry.json", "skills/telemetry.json.lock"]
+# Same built-in skills allowlist as the sdist (F-13): untracked local skills
+# and machine-local telemetry must not ship in any artifact.
+exclude = [
+    "skills/telemetry.json",
+    "skills/telemetry.json.lock",
+    "skills/*",
+    "!skills/alembic-migrations/",
+    "!skills/background-jobs/",
+    "!skills/chaos-engineering/",
+    "!skills/cli-tui/",
+    "!skills/context-runtime/",
+    "!skills/cost-optimization/",
+    "!skills/data-visualization/",
+    "!skills/deployment-devops/",
+    "!skills/docs-communication/",
+    "!skills/ecc/",
+    "!skills/embedding-finetuning/",
+    "!skills/feature-flags/",
+    "!skills/grpc-services/",
+    "!skills/heartbeat-system/",
+    "!skills/incident-response/",
+    "!skills/kubernetes-ops/",
+    "!skills/langgraph/",
+    "!skills/llm-provider/",
+    "!skills/memory-management/",
+    "!skills/multi-agent/",
+    "!skills/observability-otel/",
+    "!skills/postgresql-pgvector/",
+    "!skills/prompt-engineering/",
+    "!skills/prompt-injection-defense/",
+    "!skills/rag-pipeline/",
+    "!skills/rate-limiting/",
+    "!skills/redis-caching/",
+    "!skills/research-writing/",
+    "!skills/security-sandboxing/",
+    "!skills/skills-system/",
+    "!skills/supply-chain-security/",
+    "!skills/terraform-iac/",
+    "!skills/testing-qa/",
+    "!skills/web-search/",
+    "!skills/yaml-agent-config/",
+    "!skills/alembic-migrations/**",
+    "!skills/background-jobs/**",
+    "!skills/chaos-engineering/**",
+    "!skills/cli-tui/**",
+    "!skills/context-runtime/**",
+    "!skills/cost-optimization/**",
+    "!skills/data-visualization/**",
+    "!skills/deployment-devops/**",
+    "!skills/docs-communication/**",
+    "!skills/ecc/**",
+    "!skills/embedding-finetuning/**",
+    "!skills/feature-flags/**",
+    "!skills/grpc-services/**",
+    "!skills/heartbeat-system/**",
+    "!skills/incident-response/**",
+    "!skills/kubernetes-ops/**",
+    "!skills/langgraph/**",
+    "!skills/llm-provider/**",
+    "!skills/memory-management/**",
+    "!skills/multi-agent/**",
+    "!skills/observability-otel/**",
+    "!skills/postgresql-pgvector/**",
+    "!skills/prompt-engineering/**",
+    "!skills/prompt-injection-defense/**",
+    "!skills/rag-pipeline/**",
+    "!skills/rate-limiting/**",
+    "!skills/redis-caching/**",
+    "!skills/research-writing/**",
+    "!skills/security-sandboxing/**",
+    "!skills/skills-system/**",
+    "!skills/supply-chain-security/**",
+    "!skills/terraform-iac/**",
+    "!skills/testing-qa/**",
+    "!skills/web-search/**",
+    "!skills/yaml-agent-config/**",
+]
 
-[tool.hatch.build.targets.sdist.force-include]
-"skills" = "skills"
+# F-13: the sdist used to force-include `skills` wholesale. Because
+# force-include bypasses every exclude (see above), a checkout that had run
+# Machina leaked skills/telemetry.json[.lock] into the source archive, and any
+# untracked local skill was packaged too. Hatchling's default file selection is
+# "every file not matched by .gitignore" — it does NOT know the git-tracked
+# set — so an untracked, non-ignored skills/<local>/ would still ship. Select
+# skills explicitly instead: exclude the whole tree, then re-include the
+# built-in skill directories listed here (the committed set).
+#
+# MAINTENANCE: a new built-in skill must be added to BOTH this list and the
+# wheel target's list. Local/learned skills intentionally stay out; runtime
+# learning defaults to ~/.machina/skills, not the checkout.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "skills/*",
+    "!skills/alembic-migrations/",
+    "!skills/background-jobs/",
+    "!skills/chaos-engineering/",
+    "!skills/cli-tui/",
+    "!skills/context-runtime/",
+    "!skills/cost-optimization/",
+    "!skills/data-visualization/",
+    "!skills/deployment-devops/",
+    "!skills/docs-communication/",
+    "!skills/ecc/",
+    "!skills/embedding-finetuning/",
+    "!skills/feature-flags/",
+    "!skills/grpc-services/",
+    "!skills/heartbeat-system/",
+    "!skills/incident-response/",
+    "!skills/kubernetes-ops/",
+    "!skills/langgraph/",
+    "!skills/llm-provider/",
+    "!skills/memory-management/",
+    "!skills/multi-agent/",
+    "!skills/observability-otel/",
+    "!skills/postgresql-pgvector/",
+    "!skills/prompt-engineering/",
+    "!skills/prompt-injection-defense/",
+    "!skills/rag-pipeline/",
+    "!skills/rate-limiting/",
+    "!skills/redis-caching/",
+    "!skills/research-writing/",
+    "!skills/security-sandboxing/",
+    "!skills/skills-system/",
+    "!skills/supply-chain-security/",
+    "!skills/terraform-iac/",
+    "!skills/testing-qa/",
+    "!skills/web-search/",
+    "!skills/yaml-agent-config/",
+    "!skills/alembic-migrations/**",
+    "!skills/background-jobs/**",
+    "!skills/chaos-engineering/**",
+    "!skills/cli-tui/**",
+    "!skills/context-runtime/**",
+    "!skills/cost-optimization/**",
+    "!skills/data-visualization/**",
+    "!skills/deployment-devops/**",
+    "!skills/docs-communication/**",
+    "!skills/ecc/**",
+    "!skills/embedding-finetuning/**",
+    "!skills/feature-flags/**",
+    "!skills/grpc-services/**",
+    "!skills/heartbeat-system/**",
+    "!skills/incident-response/**",
+    "!skills/kubernetes-ops/**",
+    "!skills/langgraph/**",
+    "!skills/llm-provider/**",
+    "!skills/memory-management/**",
+    "!skills/multi-agent/**",
+    "!skills/observability-otel/**",
+    "!skills/postgresql-pgvector/**",
+    "!skills/prompt-engineering/**",
+    "!skills/prompt-injection-defense/**",
+    "!skills/rag-pipeline/**",
+    "!skills/rate-limiting/**",
+    "!skills/redis-caching/**",
+    "!skills/research-writing/**",
+    "!skills/security-sandboxing/**",
+    "!skills/skills-system/**",
+    "!skills/supply-chain-security/**",
+    "!skills/terraform-iac/**",
+    "!skills/testing-qa/**",
+    "!skills/web-search/**",
+    "!skills/yaml-agent-config/**",
+]
 
 [tool.ruff]
 line-length = 100
