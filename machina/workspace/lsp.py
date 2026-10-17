@@ -865,8 +865,12 @@ class LspConnection:
         if params is not None:
             message["params"] = params
         try:
-            await self._send(message)
+            # The timeout covers the ordered write (which can block on a
+            # language server that stops draining stdin) as well as the
+            # response wait. Starting it after _send() let a stalled write
+            # outlive every configured request timeout.
             async with asyncio.timeout(timeout):
+                await self._send(message)
                 return await future
         except TimeoutError:
             if self._pending.pop(request_id, None) is not None:
