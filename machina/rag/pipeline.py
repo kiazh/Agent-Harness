@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import logging
 import math
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -117,6 +119,14 @@ class RAGConfig:
     enable_embeddings: bool = True
     enable_reranking: bool = True
     enable_hybrid_search: bool = True
+    # Admission bound for one indexed document (MCH-008). Enforced by the
+    # loader before and during the descriptor read; an oversized input is
+    # refused as a whole, never partially ingested.
+    max_document_bytes: int = 8 * 1024 * 1024
+    # PDF parsing budgets: extraction cost is page-proportional and the
+    # extracted text is joined into one document before chunking.
+    max_pdf_pages: int = 200
+    max_pdf_text_bytes: int = 8 * 1024 * 1024
 
 
 def _default_rag_config() -> RAGConfig:
@@ -149,9 +159,13 @@ class RAGPipeline:
     # retrieval settings cannot reuse one another's results.
     _search_cache_ttl: float = 300.0  # 5 minutes
     _search_cache_max_size: int = 256
-    # Embedding-space verification (AH-AUDIT-035) is a full per-row scan;
-    # cache verified (session, model, scope) verdicts with the same bounded
-    # TTL so cold searches do not rescan on every call (FM5 W15).
+    # Embedding-space verification (AH-AUDIT-035) is cached per
+    # (session, model, scope) with a bounded TTL. The TTL is the accepted
+    # cross-instance staleness policy for *ordinary* verdict reuse: a writer
+    # in another process cannot invalidate this instance's dict, so a cached
+    # verdict may live at most this long. Un-cached verification always runs
+    # in the same REPEATABLE READ transaction as the dense query, so the
+    # check and its use observe one snapshot (MCH-009/F-28).
     _embedding_space_cache_ttl: float = 300.0
     _embedding_space_cache_max_size: int = 256
 
@@ -193,7 +207,11 @@ class RAGPipeline:
             dense_weight=self._config.rrf_dense_weight,
             keyword_weight=self._config.rrf_keyword_weight,
         )
-        self._loader = loader or FileLoader()
+        self._loader = loader or FileLoader(
+            max_document_bytes=self._config.max_document_bytes,
+            max_pdf_pages=self._config.max_pdf_pages,
+            max_pdf_text_bytes=self._config.max_pdf_text_bytes,
+        )
 
     @property
     def config(self) -> RAGConfig:
@@ -242,11 +260,13 @@ class RAGPipeline:
         Returns:
             List of stored ContextChunk objects.
         """
-        # Load document
+        # Load document. Filesystem reads/parsing are blocking; run them off
+        # the event loop so cancellation/lease callbacks stay responsive
+        # (MCH-008). The loader itself enforces byte/page budgets.
         if isinstance(source, Document):
             doc = source
         else:
-            doc = self._loader.load(source)
+            doc = await asyncio.to_thread(self._loader.load, source)
 
         audit_log(
             "rag_index_start",
@@ -511,8 +531,16 @@ class RAGPipeline:
             for result in results:
                 result.retrieval_degraded = embedding_failed
             return await self._finish_search(
-                results, query, session_id, k, rerank, cache_key, now,
-                embed_model, "keyword-only", generation,
+                results,
+                query,
+                session_id,
+                k,
+                rerank,
+                cache_key,
+                now,
+                embed_model,
+                "keyword-only",
+                generation,
             )
         # Embedding-space identity (AH-AUDIT-035): dimension AND model must
         # match the stored dense space. Different same-dimension models
@@ -534,27 +562,29 @@ class RAGPipeline:
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
             record_failure("pipeline.search", _boundary_error)
-        await self._enforce_embedding_space(session_id, str(embed_model), scope)
 
-        # Hybrid search (PostgreSQL FTS + dense + RRF)
-        if self._config.enable_hybrid_search:
-            results = await self._search.search(
-                session_id=session_id,
-                query_embedding=query_embedding,
-                query_text=query,
-                db=db,
-                top_k=k * 2,  # Retrieve more for reranking
-                chunk_types=scope,
-            )
+        if self._embedding_space_verdict_cached(session_id, str(embed_model), scope):
+            # Verdict is fresh; a single statement needs no snapshot wrapper,
+            # but still uses one acquired connection when the executor is a
+            # pool (a bare test double may expose only ``fetch``).
+            async with self._snapshot_connection(require_transaction=False) as (
+                executor,
+                concurrent,
+            ):
+                results = await self._dense_retrieval(
+                    executor, concurrent, session_id, query_embedding, query, k, scope
+                )
         else:
-            # Dense-only search
-            results = await self._search.search_dense(
-                session_id=session_id,
-                query_embedding=query_embedding,
-                db=db,
-                top_k=k * 2,
-                chunk_types=scope,
-            )
+            # One REPEATABLE READ transaction/connection for verification AND
+            # candidate retrieval (MCH-009/F-28): a concurrent cross-process
+            # reindex cannot swap the embedding space between the two.
+            async with self._snapshot_connection() as (executor, concurrent):
+                await self._enforce_embedding_space(
+                    session_id, str(embed_model), scope, executor=executor
+                )
+                results = await self._dense_retrieval(
+                    executor, concurrent, session_id, query_embedding, query, k, scope
+                )
         return await self._finish_search(
             results,
             query,
@@ -568,90 +598,195 @@ class RAGPipeline:
             generation,
         )
 
+    async def _dense_retrieval(
+        self,
+        executor: Any,
+        concurrent: bool,
+        session_id: uuid.UUID,
+        query_embedding: list[float],
+        query: str,
+        k: int,
+        scope: tuple[str, ...],
+    ) -> list[SearchResult]:
+        """Run the configured dense retrieval branches on *executor*.
+
+        ``concurrent`` is False whenever *executor* is a single acquired
+        connection: asyncpg permits only one operation at a time per
+        connection, and the snapshot transaction forbids a second one.
+        """
+        if self._config.enable_hybrid_search:
+            return await self._search.search(
+                session_id=session_id,
+                query_embedding=query_embedding,
+                query_text=query,
+                db=executor,
+                top_k=k * 2,  # Retrieve more for reranking
+                chunk_types=scope,
+                concurrent=concurrent,
+            )
+        return await self._search.search_dense(
+            session_id=session_id,
+            query_embedding=query_embedding,
+            db=executor,
+            top_k=k * 2,
+            chunk_types=scope,
+        )
+
+    @asynccontextmanager
+    async def _snapshot_connection(self, *, require_transaction: bool = True):
+        """Yield ``(executor, concurrent)`` for verification + dense search.
+
+        A real ``Database`` (or asyncpg Pool) yields one acquired connection
+        inside ``REPEATABLE READ`` so the embedding-space verdict and the
+        vector query observe the same snapshot. Doubles that expose no
+        transaction protocol fall back to the existing single-connection or
+        direct-double path; only a direct ``db`` executor may run both
+        retrieval branches concurrently. With ``require_transaction=False``
+        (a cached verdict) the connection is still acquired but no transaction
+        is opened.
+        """
+        acquire = getattr(db, "acquire", None)
+        cm = None
+        # A ``Database`` that was never connected (and whose ``fetch`` a test
+        # patched directly) has no pool; use the direct-double path instead.
+        if getattr(db, "connected", None) is False:
+            acquire = None
+        if callable(acquire):
+            try:
+                cm = acquire()
+            except (TypeError, AttributeError):
+                cm = None
+            if cm is not None and not hasattr(cm, "__aenter__"):
+                close = getattr(cm, "close", None)
+                if callable(close):
+                    close()
+                cm = None
+        if cm is None:
+            yield db, True
+            return
+
+        async with cm as conn:
+            if not require_transaction:
+                yield conn, False
+                return
+            transaction = getattr(conn, "transaction", None)
+            txn = None
+            if callable(transaction):
+                try:
+                    txn = transaction(isolation="repeatable_read")
+                except TypeError:
+                    txn = None
+                if txn is not None and not hasattr(txn, "__aenter__"):
+                    close = getattr(txn, "close", None)
+                    if callable(close):
+                        close()
+                    txn = None
+            if txn is None:
+                yield conn, False
+                return
+            async with txn:
+                yield conn, False
+
     async def _enforce_embedding_space(
         self,
         session_id: uuid.UUID,
         query_model: str,
         chunk_types: tuple[str, ...] = DOCUMENT_TYPES,
+        *,
+        executor: Any = None,
     ) -> None:
         """Reject cross-model dense comparison (AH-AUDIT-035).
 
-        Compares the query embedding model against distinct stored models
-        for scoped chunks with non-NULL embeddings in this session. A
-        mismatch raises an explicit error (reindex/migrate); matching or
-        keyword-only indexes proceed. Legacy rows without model metadata
-        are treated as the default model only when dimensions agree.
-        Inspect all candidate rows in bounded pages: sampling payloads can
-        miss a second model, and database or metadata errors must not allow
-        an unverified dense comparison. Verified verdicts are cached per
-        (session, model, scope) with a bounded TTL; re-indexing invalidates
-        them (FM5 W15).
+        Compares the query embedding model against the distinct stored models
+        for scoped chunks with non-NULL embeddings in this session, in ONE
+        ``SELECT DISTINCT`` query (no Python keyset paging). A mismatch raises
+        an explicit error (reindex/migrate); matching or keyword-only indexes
+        proceed. Legacy rows without model metadata are treated as the default
+        model only when dimensions agree. Database or metadata errors must not
+        allow an unverified dense comparison.
+
+        *executor* is the connection used for the pending dense query, so both
+        statements can share one REPEATABLE READ snapshot. Verified verdicts
+        are cached per ``(session, model, scope)`` with a bounded TTL;
+        re-indexing invalidates this instance's entries. Cross-instance
+        reindex is covered by the TTL (``_embedding_space_cache_ttl``), the
+        documented accepted staleness policy, and a cache miss always
+        re-verifies inside the query transaction.
+
+        Note: the schema stores model identity inside ``payload_msgpack``,
+        so the DISTINCT projection is the payload itself. A dedicated
+        ``embedding_model``/``embedding_dims`` column with an index is the
+        deployment-scale form of this query; that schema change is outside
+        this module's lane.
         """
         cache_key = (session_id, query_model, tuple(chunk_types))
         generation = self._cache_generation
-        now = time.monotonic()
-        cached = self._embedding_space_cache.get(cache_key)
-        if cached is not None:
-            if now - cached[0] < self._embedding_space_cache_ttl:
-                return
-            del self._embedding_space_cache[cache_key]
+        if self._embedding_space_verdict_cached(session_id, query_model, chunk_types):
+            return
 
-        page_size = 256
-        cursor: uuid.UUID | None = None
+        query_db = executor if executor is not None else db
+        rows = await query_db.fetch(
+            """SELECT DISTINCT payload_msgpack FROM context_chunks
+               WHERE session_id = $1 AND chunk_type = ANY($2::text[])
+                 AND embedding IS NOT NULL""",
+            session_id,
+            list(chunk_types),
+        )
         stored: set[str] = set()
-        while True:
-            rows = await db.fetch(
-                """SELECT id, payload_msgpack FROM context_chunks
-                   WHERE session_id = $1 AND chunk_type = ANY($2::text[])
-                     AND embedding IS NOT NULL
-                     AND ($3::uuid IS NULL OR id > $3)
-                   ORDER BY id LIMIT $4""",
-                session_id,
-                list(chunk_types),
-                cursor,
-                page_size,
-            )
-            for row in rows:
-                try:
-                    payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
-                    if not isinstance(payload, dict):
-                        raise ValueError("embedding payload must be a dict")
-                    metadata = payload.get("metadata")
-                    if metadata is None:
-                        metadata = {}
-                    if not isinstance(metadata, dict):
-                        raise ValueError("embedding metadata must be a dict")
-                    model = metadata.get("embedding_model", "")
-                    if model is None:
-                        model = ""
-                    if not isinstance(model, str):
-                        raise ValueError("embedding model must be a string")
-                    stored.add(model or OpenAIEmbedder.DEFAULT_MODEL)
-                except Exception as e:
-                    raise ValueError(
-                        "Cannot verify stored embedding model metadata. "
-                        "Reindex (or migrate/backfill) before dense retrieval."
-                    ) from e
-            if stored - {query_model}:
+        for row in rows:
+            try:
+                payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
+                if not isinstance(payload, dict):
+                    raise ValueError("embedding payload must be a dict")
+                metadata = payload.get("metadata")
+                if metadata is None:
+                    metadata = {}
+                if not isinstance(metadata, dict):
+                    raise ValueError("embedding metadata must be a dict")
+                model = metadata.get("embedding_model", "")
+                if model is None:
+                    model = ""
+                if not isinstance(model, str):
+                    raise ValueError("embedding model must be a string")
+                stored.add(model or OpenAIEmbedder.DEFAULT_MODEL)
+            except Exception as e:
                 raise ValueError(
-                    f"embedding space mismatch: query model {query_model!r} vs stored "
-                    f"{sorted(stored)!r}. Reindex (or migrate/backfill) so candidate "
-                    "and query embeddings share one enforced space."
-                )
-            if len(rows) < page_size:
-                # Verified: cache the verdict (bounded, TTL) so cold searches
-                # do not rescan every row (FM5 W15).
-                if generation != self._cache_generation:
-                    return
-                self._embedding_space_cache[cache_key] = (time.monotonic(), query_model)
-                if len(self._embedding_space_cache) > self._embedding_space_cache_max_size:
-                    oldest_key = min(
-                        self._embedding_space_cache,
-                        key=lambda k: self._embedding_space_cache[k][0],
-                    )
-                    del self._embedding_space_cache[oldest_key]
-                return
-            cursor = rows[-1]["id"]
+                    "Cannot verify stored embedding model metadata. "
+                    "Reindex (or migrate/backfill) before dense retrieval."
+                ) from e
+        if stored - {query_model}:
+            raise ValueError(
+                f"embedding space mismatch: query model {query_model!r} vs stored "
+                f"{sorted(stored)!r}. Reindex (or migrate/backfill) so candidate "
+                "and query embeddings share one enforced space."
+            )
+        # Verified: cache the verdict (bounded, TTL) so cold searches do not
+        # rescan on every call (FM5 W15).
+        if generation != self._cache_generation:
+            return
+        self._embedding_space_cache[cache_key] = (time.monotonic(), query_model)
+        if len(self._embedding_space_cache) > self._embedding_space_cache_max_size:
+            oldest_key = min(
+                self._embedding_space_cache,
+                key=lambda k: self._embedding_space_cache[k][0],
+            )
+            del self._embedding_space_cache[oldest_key]
+
+    def _embedding_space_verdict_cached(
+        self,
+        session_id: uuid.UUID,
+        query_model: str,
+        chunk_types: tuple[str, ...] = DOCUMENT_TYPES,
+    ) -> bool:
+        """Whether a fresh (session, model, scope) verdict is cached."""
+        cache_key = (session_id, query_model, tuple(chunk_types))
+        cached = self._embedding_space_cache.get(cache_key)
+        if cached is None:
+            return False
+        if time.monotonic() - cached[0] < self._embedding_space_cache_ttl:
+            return True
+        del self._embedding_space_cache[cache_key]
+        return False
 
     async def _finish_search(
         self,

@@ -90,12 +90,16 @@ class HybridSearch:
         db: Any,
         top_k: int | None = None,
         chunk_types: tuple[str, ...] | None = None,
+        concurrent: bool = True,
     ) -> list[SearchResult]:
         """Perform hybrid search: PostgreSQL FTS + dense vector + RRF fusion.
 
-        Runs both retrievals concurrently for lower latency. Document-only
-        scope by default (AH-AUDIT-033); pass explicit chunk_types for a
-        documented combined scope.
+        Runs both retrievals concurrently for lower latency. When *db* is a
+        single acquired connection (the pipeline's REPEATABLE READ snapshot),
+        ``concurrent=False`` runs them sequentially: asyncpg permits one
+        operation at a time per connection. Document-only scope by default
+        (AH-AUDIT-033); pass explicit chunk_types for a documented combined
+        scope.
         """
         k = top_k or self._final_top_k
         scope = tuple(chunk_types) if chunk_types else DOCUMENT_TYPES
@@ -103,13 +107,24 @@ class HybridSearch:
         # again here (would over-retrieve k*4).
         retrieval_k = max(self._top_k, k)
 
-        # Run dense and sparse retrieval concurrently
+        # Run dense and sparse retrieval (concurrently when the caller owns a
+        # pool/direct executor; serially on one snapshot connection).
         dense_task = self._dense_search(session_id, query_embedding, retrieval_k, db, scope)
         sparse_task = self._bm25_search(session_id, query_text, retrieval_k, db, scope)
 
-        dense_results, sparse_results = await asyncio.gather(
-            dense_task, sparse_task, return_exceptions=True
-        )
+        if concurrent:
+            dense_results, sparse_results = await asyncio.gather(
+                dense_task, sparse_task, return_exceptions=True
+            )
+        else:
+            try:
+                dense_results = await dense_task
+            except Exception as e:  # surfaced through the shared branch policy
+                dense_results = e
+            try:
+                sparse_results = await sparse_task
+            except Exception as e:  # surfaced through the shared branch policy
+                sparse_results = e
 
         # Handle exceptions with intent: a single surviving branch keeps its
         # evidence (marked degraded); when BOTH branches fail the answer is

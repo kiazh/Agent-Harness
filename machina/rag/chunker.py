@@ -345,9 +345,8 @@ class RecursiveCharacterTextSplitter:
         parts = [(start, end) for start, end in spans if end > start]
 
         chunks: list[Chunk] = []
-        # Accumulated span [cur_start, cur_end) in `text`, as source offsets.
+        # Accumulated span [cur_start, ...) in `text`, as source offsets.
         cur_start: int | None = None
-        cur_end: int | None = None
 
         for i, (part_start, part_end) in enumerate(parts):
             if cur_start is None:
@@ -358,7 +357,7 @@ class RecursiveCharacterTextSplitter:
             candidate = text[cand_start:part_end]
 
             if self._estimate_tokens(candidate) <= self.chunk_size:
-                cur_start, cur_end = cand_start, part_end
+                cur_start = cand_start
                 continue
 
             # Candidate doesn't fit. Emit everything up to (and including)
@@ -407,10 +406,13 @@ class RecursiveCharacterTextSplitter:
                 # start (a genuine source slice, never fabricated). Start the
                 # gap at the sub-chunk's real end, which may sit before
                 # ``part_end`` because the recursion can drop trailing
-                # separators inside the part.
-                if i + 1 < len(parts) and sub_chunks:
+                # separators inside the part. For the LAST part the mirror of
+                # "the next part's start" is the end of this level's text:
+                # otherwise a trailing separator run (``source[18:20] == ". "``
+                # in the review reproduction) is silently dropped (P0-1).
+                if sub_chunks:
                     last = sub_chunks[-1]
-                    next_start = parts[i + 1][0]
+                    next_start = parts[i + 1][0] if i + 1 < len(parts) else len(text)
                     last_end = last.end - base_offset if last.end is not None else part_end
                     gap = text[last_end:next_start]
                     if gap:
@@ -419,19 +421,24 @@ class RecursiveCharacterTextSplitter:
                     if last.end is not None:
                         last.end = base_offset + next_start
                 chunks.extend(sub_chunks)
-                cur_start = cur_end = None
+                cur_start = None
             else:
-                cur_start, cur_end = part_start, part_end
+                cur_start = part_start
 
         if cur_start is not None:
-            emitted = text[cur_start:cur_end]
+            # Always emit the trailing remainder (P0-1): the final part's
+            # separator run is a literal source slice, and dropping it loses
+            # real characters when the boundary lands on a separator (e.g.
+            # ". "). No duplication: this span starts where the last emission
+            # ended.
+            emitted = text[cur_start : len(text)]
             chunks.append(
                 Chunk(
                     text=emitted,
                     metadata=dict(metadata),
                     token_count=self._estimate_tokens(emitted),
                     start=base_offset + cur_start,
-                    end=base_offset + cur_end,
+                    end=base_offset + len(text),
                 )
             )
 

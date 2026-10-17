@@ -68,6 +68,16 @@ def _luhn_valid(digits: str) -> bool:
 #: path). The R4-016 re-scan must never rewrite text already carrying one.
 _MARKER_RE = re.compile(r"\[REDACTED[A-Z_]*\]")
 
+#: Minimum length for exact-value replacement of a configured secret (P0-2).
+#: ``known_secret_values()`` returns *any* non-empty env value whose name ends
+#: in ``_API_KEY``/``_TOKEN``/``_PASSWORD`` and ``remember_secret_value()``
+#: accepts any non-empty string. A 1-3 character placeholder (``PASSWORD=1``)
+#: would otherwise substring-replace ordinary prose everywhere. The regex
+#: patterns already require 16-40+ char tokens; this floor keeps the literal
+#: path in the same class. Shorter values are treated as placeholders, not
+#: credentials: they are neither replaced nor reported as redactions.
+MIN_CONFIGURED_SECRET_LENGTH = 8
+
 #: Patterns whose matches must not be glued to a preceding alphanumeric
 #: character (R4-016: `sk-` inside identifiers like `task-…` must survive).
 #: The check runs in the substitution callback instead of a regex lookbehind:
@@ -312,6 +322,12 @@ class SecretRedactor:
         from machina.security.secrets import known_secret_values
 
         for value in known_secret_values():
+            # P0-2: a short configured value is a placeholder, not a
+            # credential. Substring-replacing it corrupts ordinary prose
+            # ("banana split cat" -> "b[REDACTED_SECRET]n..." for value "a"),
+            # so only values that pass the minimum length are replaceable.
+            if len(value) < MIN_CONFIGURED_SECRET_LENGTH:
+                continue
             if value in redacted:
                 redacted = redacted.replace(value, "[REDACTED_SECRET]")
                 redactions.append("configured_secret")
@@ -858,6 +874,10 @@ class StreamingSecretRedactor:
         from machina.security.secrets import known_secret_values
 
         for value in known_secret_values():
+            # Short placeholders are not replaceable (P0-2); holding a partial
+            # match for them would needlessly stall emission.
+            if len(value) < MIN_CONFIGURED_SECRET_LENGTH:
+                continue
             # Keep any partial configured credential across the emission boundary.
             for length in range(min(len(value) - 1, len(self._buf)), 0, -1):
                 if self._buf.endswith(value[:length]):

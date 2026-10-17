@@ -279,8 +279,15 @@ class PersonaMemoryStore:
         persona_id: str | None = None,
         limit_per_fact: int = 10,
     ) -> list[PersonaMemory]:
-        """Fetch up to ``limit_per_fact`` interpretations for each fact in one query."""
-        if not fact_ids:
+        """Fetch up to ``limit_per_fact`` interpretations for each fact in one query.
+
+        ``persona_id`` is required: persona interpretations are persona-owned,
+        and an unscoped call used to return *every* persona's private view of
+        the shared facts (P0-3). Returning no rows for an unscoped read keeps
+        the query from becoming a cross-persona leak; ordinary (non-persona)
+        memories remain readable through the memory store.
+        """
+        if not fact_ids or not persona_id or not str(persona_id).strip():
             return []
         rows = await db.fetch(
             """
@@ -293,7 +300,7 @@ class PersonaMemoryStore:
                        ) AS row_num
                 FROM persona_memories
                 WHERE fact_id = ANY($1::uuid[])
-                  AND ($2::text IS NULL OR persona_id = $2)
+                  AND persona_id = $2
             )
             SELECT id, fact_id, persona_id, interpretation,
                    emotional_valence, emotional_arousal, confidence,

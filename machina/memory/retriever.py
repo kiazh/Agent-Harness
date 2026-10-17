@@ -287,6 +287,12 @@ class MemoryRetriever:
 
         Fetches persona memories for the factual memories in candidates,
         scores them using EmotionTopology, and merges results.
+
+        An unscoped request (``persona_id`` and ``agent_id`` both None) skips
+        the persona merge entirely: querying with no persona filter would
+        return every persona's private interpretation and attach it to a
+        shared fact (P0-3). The factual candidates stay fully readable; only
+        the persona-conditioned annotation is withheld.
         """
         try:
             # Get fact IDs from candidates
@@ -295,8 +301,13 @@ class MemoryRetriever:
                 return candidates
 
             # Fetch persona memories for these facts. persona_id defaults to
-            # agent_id for backward compatibility.
+            # agent_id for backward compatibility. No resolved scope means no
+            # safe persona filter, so withhold the persona merge rather than
+            # reading across personas.
             persona_filter = persona_id if persona_id is not None else agent_id
+            if persona_filter is None or not str(persona_filter).strip():
+                logger.debug("unscoped retrieval: skipping persona interpretation merge")
+                return candidates
             persona_memories = await self.persona_store.search_persona_for_facts(
                 fact_ids, persona_filter, 10
             )

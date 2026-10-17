@@ -10,6 +10,8 @@ One coordinator for the flat evidence list the agent annotates prompts with
 2. **Token-budgeted coverage.** Entries are kept in their incoming priority
    order (memory, then RAG, then archive) until the token budget is spent;
    later entries that do not fit are omitted and counted, never silently.
+   Compaction/checkpoint summaries are the exception: they are protected
+   evidence and always survive the budget pass.
 
 The returned omission count is disclosed in the assembled prompt so a
 budget-trimmed view is never mistaken for the full evidence set.
@@ -28,6 +30,38 @@ from machina.observability.diagnostics import record_failure
 __all__ = ["dedupe_evidence", "select_evidence", "project_evidence", "project_retrieved"]
 
 _WHITESPACE_RE = re.compile(r"\s+")
+
+#: Chunk types that carry compaction/checkpoint state. They are protected
+#: evidence: losing one silently erases the only record of pre-compaction
+#: context, so the projector keeps them even under budget pressure.
+_PROTECTED_CHUNK_TYPES = frozenset(
+    {"compression_summary", "compaction_summary", "checkpoint_summary"}
+)
+
+
+def _is_protected_evidence(entry: Any) -> bool:
+    """True for a compaction/checkpoint summary entry (dict row or chunk)."""
+    chunk = _entry_chunk(entry)
+    if isinstance(chunk, dict):
+        type_value = chunk.get("type") or chunk.get("chunk_type")
+        if type_value in _PROTECTED_CHUNK_TYPES:
+            return True
+        payload = chunk.get("payload")
+        if isinstance(payload, dict):
+            return (
+                payload.get("type") in _PROTECTED_CHUNK_TYPES
+                or payload.get("chunk_type") in _PROTECTED_CHUNK_TYPES
+            )
+        return False
+    if getattr(chunk, "chunk_type", None) in _PROTECTED_CHUNK_TYPES:
+        return True
+    payload = getattr(chunk, "payload", None)
+    if isinstance(payload, dict):
+        return (
+            payload.get("type") in _PROTECTED_CHUNK_TYPES
+            or payload.get("chunk_type") in _PROTECTED_CHUNK_TYPES
+        )
+    return False
 
 
 def _entry_chunk(entry: Any) -> Any:
@@ -90,20 +124,35 @@ def dedupe_evidence(entries: list[Any]) -> tuple[list[Any], int]:
 def select_evidence(entries: list[Any], budget_tokens: int) -> tuple[list[Any], int]:
     """Keep entries in order until *budget_tokens* is spent.
 
-    Oversized entries are skipped (a smaller later entry may still fit) and
-    counted as omitted. ``budget_tokens <= 0`` keeps everything. When nothing
-    fits, the first entry is still kept so the assembler can truncate it —
-    evidence must never disappear entirely because of a budget estimate.
+    Compaction/checkpoint summaries are protected evidence: their cost is
+    reserved up front and they are always kept, even when the summary alone
+    exceeds the budget (the assembler may truncate it later, but the projector
+    must never silently drop the only record of pre-compaction state).
+
+    Other oversized entries are skipped (a smaller later entry may still fit)
+    and counted as omitted. ``budget_tokens <= 0`` keeps everything. When
+    nothing fits, the first entry is still kept so the assembler can truncate
+    it — evidence must never disappear entirely because of a budget estimate.
     Returns ``(kept, omitted_count)``.
     """
     if budget_tokens <= 0:
         return list(entries), 0
+
+    protected_cost = sum(_entry_tokens(entry) for entry in entries if _is_protected_evidence(entry))
+    # Reserve the protected summary's share first: ordinary entries compete
+    # only for what remains, so a summary appended later in the list is never
+    # displaced by cheaper evidence ahead of it.
+    ordinary_budget = max(0, budget_tokens - protected_cost)
+
     kept: list[Any] = []
     omitted = 0
     used = 0
     for entry in entries:
+        if _is_protected_evidence(entry):
+            kept.append(entry)
+            continue
         cost = _entry_tokens(entry)
-        if used + cost > budget_tokens:
+        if used + cost > ordinary_budget:
             omitted += 1
             continue
         kept.append(entry)

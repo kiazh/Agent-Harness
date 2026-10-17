@@ -108,13 +108,17 @@ def build_repomap(root: str, cache: ContentHashCache | None = None) -> RepoMap:
                 loc, imports, entry = cached
             else:
                 try:
-                    with open(abs_path, encoding="utf-8", errors="replace") as fh:
-                        source = fh.read()
+                    with open(abs_path, "rb") as fh:
+                        raw = fh.read()
                 except OSError:
                     continue
+                source = raw.decode("utf-8", errors="replace")
                 m.files_scanned += 1
                 loc, imports, entry = _parse(source)
-                cache.store(abs_path, (loc, imports, entry))
+                # Bind the cached parse to exactly the bytes parsed above; a
+                # concurrent rewrite makes store() decline instead of pairing
+                # the old parse with the new digest (MCH-003).
+                cache.store(abs_path, (loc, imports, entry), source=raw)
             m.loc_by_file[rel] = loc
             m.total_loc += loc
             if entry or name == "__main__.py":
