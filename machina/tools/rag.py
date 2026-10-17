@@ -19,6 +19,11 @@ from machina.tools.base import _core_symbol, registry
 
 logger = logging.getLogger(__name__)
 
+#: Bound on the formatted search_documents response (headers + passages +
+#: truncation markers + joins). Kept as a module constant so the exact-budget
+#: behavior is testable under a smaller budget.
+MAX_SEARCH_RESPONSE_CHARS = 8500
+
 
 def _execution_workspace() -> Path:
     """Workspace root approved for this tool call (R4-026).
@@ -502,8 +507,21 @@ async def search_documents(
                 f"\n{i}. [{result.score:.4f}; {ranking}] {source} (chunk {result.chunk.id})"
             )
         # Include headers, newlines and truncation markers in the total budget.
-        remaining = 8500 - len(lines[0]) - sum(map(len, headers)) - 100 * len(results)
+        remaining = (
+            MAX_SEARCH_RESPONSE_CHARS
+            - len(lines[0])
+            - sum(map(len, headers))
+            - 100 * len(results)
+        )
         passage_limit = min(2000, max(0, remaining // len(results)))
+        if passage_limit <= 0:
+            # Do not spend the whole budget on per-result markers with no
+            # usable evidence (combined #44 / original #57).
+            return (
+                f"Search results for '{query[:200]}' ({len(results)} results): "
+                "response budget exhausted before any passage could be shown. "
+                "Narrow the query or request fewer results."
+            )
         for result, header in zip(results, headers, strict=True):
             text = result.chunk.payload.get("text", "")
             lines.extend([header, text[:passage_limit]])
