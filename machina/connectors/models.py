@@ -9,6 +9,7 @@ logs, and audit payloads may carry.
 from __future__ import annotations
 
 import enum
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath, PureWindowsPath
@@ -24,6 +25,18 @@ MAX_STDERR_BYTES = 64_000
 MAX_TOOL_NAME_CHARS = 128
 MAX_ARGV_ENTRIES = 64
 MAX_ARGV_ENTRY_CHARS = 1024
+
+
+def _is_literal_loopback(host: str) -> bool:
+    """Literal ``localhost``/127.0.0.1/::1 only (never a resolving name)."""
+    lowered = (host or "").strip().lower().rstrip(".")
+    if lowered == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(lowered).is_loopback
+    except ValueError:
+        return False
+
 
 _CONNECTOR_ID_RE = re.compile(r"[a-z0-9][a-z0-9\-_]{0,63}")
 _ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
@@ -187,6 +200,19 @@ class ConnectorConfig:
                 raise ConfigError("endpoint must be a valid http(s) URL") from None
             if parts.scheme not in ("http", "https") or not parts.hostname:
                 raise ConfigError("endpoint must be an http(s) URL with a host")
+            # Transport policy mirrors oauth_network.validate_outbound_url:
+            # remote MCP traffic (tool arguments, results, and any bearer
+            # header) must be encrypted. The only plaintext exception is a
+            # literal loopback endpoint explicitly consented to with
+            # local_access; there is no DNS-name loopback exception.
+            if parts.scheme == "http":
+                if not _is_literal_loopback(parts.hostname):
+                    raise ConfigError(
+                        "remote MCP endpoints must use https://; "
+                        "http:// is allowed only for literal loopback"
+                    )
+                if not self.local_access:
+                    raise ConfigError("loopback http:// endpoints require local_access=true")
             if (
                 parts.username is not None
                 or parts.password is not None

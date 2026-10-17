@@ -230,8 +230,13 @@ async def approvals_resolve(gw: Gateway, params: dict[str, Any]) -> dict[str, An
     rec = await _store.get_approval(request_id)
     if rec is None:
         raise RpcError(INVALID_PARAMS, "unknown approval")
+    # C4: the stored binding must be proven. A missing sessionId used to skip
+    # the comparison entirely, so any request_id holder could resolve another
+    # session's approval. Requiring it keeps HTTP and gateway transports equal.
     bound_session = params.get("sessionId", params.get("session_id"))
-    if bound_session is not None and str(bound_session) != str(rec.get("session_id") or ""):
+    if bound_session is None or not str(bound_session).strip():
+        raise RpcError(INVALID_PARAMS, "sessionId is required to prove approval ownership")
+    if str(bound_session) != str(rec.get("session_id") or ""):
         raise RpcError(INVALID_PARAMS, "approval does not belong to this session")
     # Authenticated principal: gateway token holder (human transport), never agent.
     resolved = await _store.resolve_decision(request_id, verdict, principal="tui")

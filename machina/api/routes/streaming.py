@@ -176,7 +176,9 @@ async def _stream_session(
             source_close_timeout_s=RETIRE_JOIN_TIMEOUT_SECONDS,
         )
 
-        async def close_turn(*, driver_settled: bool = True, retirement_task: asyncio.Task | None = None):
+        async def close_turn(
+            *, driver_settled: bool = True, retirement_task: asyncio.Task | None = None
+        ):
             """Close the stream and the engine; ``driver_settled=False`` when the
             stream's step task was quarantined (its own unwind owns the stream
             close — an ``aclose`` on a still-running generator would raise)."""
@@ -187,7 +189,9 @@ async def _stream_session(
                     if stream is not None and driver_settled:
                         await stream.aclose()
                 finally:
-                    closed = await engine.close(cancelled=_stream_cancelled, retirement_task=retirement_task)
+                    closed = await engine.close(
+                        cancelled=_stream_cancelled, retirement_task=retirement_task
+                    )
                 return closed
 
             return await await_joined(finish())
@@ -219,6 +223,7 @@ async def _stream_session(
             from machina.core.agent_factory import build_agent_for_session
 
             _record_stage("building_agent")
+
             async def build_owned_agent():
                 built = await build_agent_for_session(session)
                 # Adoption belongs to the build task: even a build that resists
@@ -501,6 +506,9 @@ async def _stream_session(
         event_stream(),
         media_type="text/event-stream",
         headers={
+            # Canonical forward name + legacy alias (B4 documents both until a
+            # deprecation window; the version value is normative, not prefix).
+            "X-Machina-Protocol-Version": str(req.protocolVersion),
             "X-AH-Protocol-Version": str(req.protocolVersion),
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",

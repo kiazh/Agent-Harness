@@ -57,6 +57,7 @@ from machina.core.provider.catalog import validate_effort, validate_model_slug
 from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
+    ReservationSettlement,
     _truncated_stream_error,
     _validate_messages,
     _validate_params,
@@ -509,6 +510,7 @@ class ChatGPTProvider(LLMProvider, RateLimitBinding):
                 tools or [],
                 max_tokens,
             )
+        settlement = ReservationSettlement(reservation_id, usage_store)
 
         content_parts: list[str] = []
         call_accumulator = _FunctionCallAccumulator()
@@ -585,13 +587,14 @@ class ChatGPTProvider(LLMProvider, RateLimitBinding):
                 break
             if not saw_terminal:
                 raise _truncated_stream_error(_PROVIDER_NAME, resolved_model)
-        except Exception as exc:
+        except BaseException as exc:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_llm_call(
                 session_id="", model=resolved_model, duration_ms=duration_ms, is_error=True
             )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+            await settlement.fail()
+            if not isinstance(exc, Exception):
+                raise
             audit_log(
                 "llm_stream_error",
                 provider=_PROVIDER_NAME,
@@ -624,8 +627,7 @@ class ChatGPTProvider(LLMProvider, RateLimitBinding):
             prompt_tokens=usage["prompt_tokens"],
             completion_tokens=usage["completion_tokens"],
         )
-        if reservation_id is not None:
-            await usage_store.finish(reservation_id, usage, model=resolved_model)
+        await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete",
             provider=_PROVIDER_NAME,

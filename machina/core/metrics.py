@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 import time
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
@@ -121,7 +121,9 @@ class MetricsCollector:
         )
         self._counters: dict[str, int] = defaultdict(int)
         self._errors: dict[str, int] = defaultdict(int)
-        self._token_usage: OrderedDict[str, dict[str, int]] = OrderedDict()
+        # Cumulative process totals only: the Prometheus exposition is the
+        # reader (machina/observability/metrics.py). The per-session breakdown
+        # had no production reader and grew with every session.
         self._token_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def record_latency(self, operation: str, duration_ms: float) -> None:
@@ -147,18 +149,13 @@ class MetricsCollector:
             self._errors[operation] += 1
 
     def record_tokens(self, session_id: str, prompt_tokens: int, completion_tokens: int) -> None:
-        """Record token usage for a session."""
+        """Record cumulative token totals (scraped by the metrics endpoint).
+
+        *session_id* is kept for call-site compatibility; per-session figures
+        had no production reader, so only the process totals are retained.
+        """
+        del session_id
         with self._lock:
-            tu = self._token_usage.setdefault(
-                session_id,
-                {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            )
-            self._token_usage.move_to_end(session_id)
-            if len(self._token_usage) > 10_000:
-                self._token_usage.popitem(last=False)
-            tu["prompt_tokens"] += prompt_tokens
-            tu["completion_tokens"] += completion_tokens
-            tu["total_tokens"] += prompt_tokens + completion_tokens
             self._token_totals["prompt_tokens"] += prompt_tokens
             self._token_totals["completion_tokens"] += completion_tokens
             self._token_totals["total_tokens"] += prompt_tokens + completion_tokens
@@ -251,11 +248,6 @@ class MetricsCollector:
             errors = self._errors.get(base, 0) + self._errors.get(calls_key, 0)
         return errors / total if total > 0 else 0.0
 
-    def get_token_usage(self, session_id: str) -> dict[str, int]:
-        """Get token usage for a session."""
-        with self._lock:
-            return dict(self._token_usage.get(session_id, {}))
-
     def get_all_metrics(self) -> dict[str, Any]:
         """Get all metrics as a dictionary."""
         with self._lock:
@@ -268,7 +260,6 @@ class MetricsCollector:
                 "counters": dict(self._counters),
                 "errors": dict(self._errors),
                 "error_rates": {op: self.get_error_rate(op) for op in operations},
-                "token_usage": {sid: dict(tu) for sid, tu in self._token_usage.items()},
                 "token_totals": dict(self._token_totals),
             }
 
@@ -279,7 +270,6 @@ class MetricsCollector:
             self._latency_totals.clear()
             self._counters.clear()
             self._errors.clear()
-            self._token_usage.clear()
             self._token_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 

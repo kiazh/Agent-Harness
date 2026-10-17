@@ -519,16 +519,42 @@ class Gateway:
                 # (never persisted): --mode applies to this gateway process.
                 sync_execution_mode_env(mode, persist=False)
         if not self._db_ready:
+            # Own only the pool this call opened: an embedded gateway borrows
+            # the app's pool and must never close it on a failed handshake.
+            opened_here = not db.connected
             try:
                 await db.connect()
             except Exception as e:
-                raise RpcError(DATABASE_UNAVAILABLE, f"database unavailable: {e}") from e
+                reference = uuid.uuid4().hex[:12]
+                logger.error(
+                    "Database connection failed (reference=%s): %s",
+                    reference,
+                    e,
+                    exc_info=True,
+                )
+                await self._release_failed_db(opened_here)
+                # Sanitized client text: driver/DNS/user details stay in the
+                # server log; the reference lets an operator correlate them.
+                raise RpcError(
+                    DATABASE_UNAVAILABLE, f"database unavailable (reference: {reference})"
+                ) from e
             self._db_ready = True
             try:
                 await db.initialize_runtime_schema()
             except Exception as error:
                 self._db_ready = False
-                raise RpcError(DATABASE_UNAVAILABLE, "runtime schema upgrade failed") from error
+                reference = uuid.uuid4().hex[:12]
+                logger.error(
+                    "Runtime schema upgrade failed (reference=%s): %s",
+                    reference,
+                    error,
+                    exc_info=True,
+                )
+                await self._release_failed_db(opened_here)
+                raise RpcError(
+                    DATABASE_UNAVAILABLE,
+                    f"runtime schema upgrade failed (reference: {reference})",
+                ) from error
             from machina.core.usage import usage_store
 
             # W7: startup cleanup must not reap another worker's in-flight
@@ -557,6 +583,21 @@ class Gateway:
         if self._auth_token is not None and self._token_ok(params.get("token")):
             payload["cwdFull"] = os.getcwd()
         return payload
+
+    async def _release_failed_db(self, opened_here: bool) -> None:
+        """Close a pool this initialize attempt opened; never a borrowed one.
+
+        A failed connect may leave a partially-created asyncpg pool, and a
+        failed schema upgrade leaves a fully-open pool. Both would otherwise
+        persist until process exit while ``_db_ready`` is false.
+        """
+        if not opened_here:
+            return
+        try:
+            if db.connected:
+                await db.close()
+        except Exception as _boundary_error:
+            record_failure("server.initialize.db_cleanup", _boundary_error)
 
     async def _session_create(self, params: dict[str, Any]) -> dict[str, Any]:
         self.require_db()

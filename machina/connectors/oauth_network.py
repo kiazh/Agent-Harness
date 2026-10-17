@@ -31,6 +31,10 @@ from machina.connectors.oauth_models import (
     RegisteredOAuthClient,
 )
 
+# Dynamic-client-registration identity (docs/MCP_OAUTH.md). Kept as one
+# constant so a stale AgentHarness spelling cannot reappear in the DCR body.
+CLIENT_NAME = "Machina"
+
 # Cloud metadata IPs are never OAuth targets (SSRF).
 _METADATA_HOSTS = {"169.254.169.254", "100.100.100.100", "fd00:ec2::254"}
 _LOOPBACK_LITERALS = {"127.0.0.1", "::1", "0:0:0:0:0:0:0:1", "::ffff:127.0.0.1"}
@@ -731,7 +735,7 @@ class OAuthNetworkClient:
                 "server does not advertise dynamic registration", reason="oauth_registration_failed"
             )
         body = {
-            "client_name": "Machina",
+            "client_name": CLIENT_NAME,
             "redirect_uris": [snapshot.redirect_uri],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],

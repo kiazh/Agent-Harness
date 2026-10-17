@@ -35,7 +35,19 @@ async def resolve_approval(request_id: str, req: ResolveApprovalRequest) -> dict
     rec = await _store.get_approval(request_id)
     if rec is None:
         raise HTTPException(404, "approval not found")
-    if req.sessionId is not None and str(rec.get("session_id")) != str(req.sessionId):
+    # C4: ownership is proven, never assumed. An omitted sessionId used to
+    # skip this check, letting any request_id holder resolve another
+    # session's approval. Require the caller to name the binding and compare
+    # it unconditionally (fail closed when the record has no session).
+    if req.sessionId is None:
+        raise HTTPException(
+            400,
+            {
+                "type": "approval.ownership_required",
+                "message": "sessionId is required to prove approval ownership",
+            },
+        )
+    if str(rec.get("session_id") or "") != str(req.sessionId):
         raise HTTPException(403, "approval does not belong to this session")
     verdict = req.verdict.lower()
     if verdict not in ("approved", "denied", "cancelled", "expired"):

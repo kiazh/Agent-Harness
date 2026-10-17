@@ -193,11 +193,15 @@ def estimate_cost(
     omit cache rates while ordinary input/output rates are known and the
     request genuinely used no cache. A missing rate for a *used* category
     makes the whole estimate unknown — the ledger must not under-report.
+    A row with no positive category (for example only ``total_tokens`` with
+    prompt=completion=0) is also unknown: ``0.0`` would assert "free" when
+    the split was simply not reported.
     """
     entry = lookup_price(provider, model, overrides=overrides)
     if entry is None:
         return None, None
     cost = 0.0
+    priced_tokens = 0
     for tokens, rate in (
         (uncached_input_tokens, entry.input_per_mtok),
         (cache_read_tokens, entry.cache_read_per_mtok),
@@ -208,6 +212,12 @@ def estimate_cost(
             continue
         if rate is None:
             return None, None
+        priced_tokens += tokens
         cost += tokens * rate / 1_000_000
+    if priced_tokens == 0:
+        # A row that reports only ``total_tokens`` (prompt=completion=0) has
+        # no priced category. Returning 0.0 would label it "free"; the split
+        # is unknown, so cost stays unknown (NULL in the ledger).
+        return None, None
     version = f"{PRICE_TABLE_VERSION}:{entry.verified_at}"
     return cost, version

@@ -17,6 +17,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
@@ -48,6 +49,83 @@ _METADATA_HOSTS = {"169.254.169.254", "100.100.100.100", "fd00:ec2::254"}
 def _looks_like_auth_failure(error: Exception) -> bool:
     text = f"{type(error).__name__}: {error}".lower()
     return "401" in text or "403" in text or "unauthorized" in text or "forbidden" in text
+
+
+def _response_from_exception(error: Exception) -> Any:
+    """Find an HTTP response on the exception or its wrapped causes/groups."""
+    pending: list[Any] = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop(0)
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        response = getattr(current, "response", None)
+        if response is not None and getattr(response, "status_code", None) is not None:
+            return response
+        exceptions = getattr(current, "exceptions", None)
+        if exceptions:
+            pending.extend(exceptions)
+        for attribute in ("__cause__", "__context__"):
+            nested = getattr(current, attribute, None)
+            if nested is not None:
+                pending.append(nested)
+    return None
+
+
+def _safe_scope_tokens(value: str) -> tuple[str, ...]:
+    """Bound and sanitize a server-provided OAuth scope challenge."""
+    tokens: list[str] = []
+    for token in (value or "").split():
+        if not 1 <= len(token) <= 128:
+            continue
+        if any(ord(char) < 0x21 or ord(char) > 0x7E or char in '"\\' for char in token):
+            continue
+        if token not in tokens:
+            tokens.append(token)
+        if len(tokens) >= 64:
+            break
+    return tuple(tokens)
+
+
+def _auth_challenge_from_error(error: Exception) -> tuple[int | None, str, tuple[str, ...]]:
+    """Extract a sanitized 401/403/insufficient_scope challenge, if present.
+
+    A 403 may carry ``WWW-Authenticate: Bearer error="insufficient_scope",
+    scope="a b"``. Only the fixed error class and scope tokens are retained;
+    the raw header never reaches a client.
+    """
+    response = _response_from_exception(error)
+    text = f"{type(error).__name__}: {error}"
+    status: int | None = None
+    header = ""
+    if response is not None:
+        try:
+            status = int(response.status_code)
+        except (TypeError, ValueError):
+            status = None
+        headers = getattr(response, "headers", None) or {}
+        try:
+            header = headers.get("www-authenticate") or headers.get("WWW-Authenticate") or ""
+        except Exception:
+            header = ""
+    if status is None:
+        match = re.search(r"\b(401|403)\b", text)
+        status = int(match.group(1)) if match else None
+    if not header:
+        if "insufficient_scope" in text.lower():
+            return status, "insufficient_scope", ()
+        return status, "", ()
+    from machina.connectors.oauth_network import parse_bearer_challenges
+
+    for challenge in parse_bearer_challenges(str(header)):
+        error_name = str(challenge.get("error") or "").lower()
+        scopes = _safe_scope_tokens(str(challenge.get("scope") or ""))
+        # Only the documented step-up signal gets the fixed label; a plain
+        # 403 with no error class may still carry a scope challenge.
+        if error_name == "insufficient_scope" or (status == 403 and not error_name):
+            return status, "insufficient_scope" if (error_name or scopes) else "", scopes
+    return status, "", ()
 
 
 def _default_oauth_coordinator():
@@ -266,6 +344,12 @@ class MCPConnection:
         self.server_name = ""
         self.server_version = ""
         self.last_error = ""
+        # F-26: sanitized scope challenge from the last auth rejection. A 401
+        # leaves requiredScopes empty; only a 403 insufficient_scope populates
+        # it, for human step-up review (never auto-widen or replay).
+        self.auth_status: int | None = None
+        self.auth_challenge_error = ""
+        self.auth_challenge_scopes: tuple[str, ...] = ()
         self._stack: AsyncExitStack | None = None
         self._session: Any = None
         self._stderr: _PipeStderr | None = None
@@ -306,6 +390,9 @@ class MCPConnection:
             )
         self.state = ConnectionState.CONNECTING
         self.last_error = ""
+        self.auth_status = None
+        self.auth_challenge_error = ""
+        self.auth_challenge_scopes = ()
         try:
             assert self._ready is not None
             await asyncio.shield(self._ready)
@@ -506,9 +593,30 @@ class MCPConnection:
             self._raise_auth_required(exc)
             raise
 
+    def _capture_auth_challenge(self, exc: Exception) -> None:
+        """Record a sanitized 403 scope challenge without changing behavior."""
+        status, error_name, scopes = _auth_challenge_from_error(exc)
+        if status is not None:
+            self.auth_status = status
+        if status == 403 and (error_name or scopes):
+            self.auth_challenge_error = "insufficient_scope"
+            self.auth_challenge_scopes = tuple(self._redact(scope) for scope in scopes)
+
+    def auth_challenge_view(self) -> dict[str, Any] | None:
+        """Sanitized connection-local auth evidence for status/preview views."""
+        if self.auth_status is None:
+            return None
+        view: dict[str, Any] = {"status": self.auth_status}
+        if self.auth_challenge_error:
+            view["error"] = self.auth_challenge_error
+        if self.auth_challenge_scopes:
+            view["requiredScopes"] = list(self.auth_challenge_scopes)
+        return view
+
     def _raise_auth_required(self, exc: Exception) -> None:
         """Mark AUTH_REQUIRED for transport auth failures; no-op otherwise."""
         if _looks_like_auth_failure(exc):
+            self._capture_auth_challenge(exc)
             self.state = ConnectionState.AUTH_REQUIRED
             self.last_error = self._redact("server requires authorization; authorize via /mcp")
             raise AuthRequired(self.last_error) from exc
@@ -719,6 +827,9 @@ class MCPConnection:
         except Exception as exc:
             if _looks_like_auth_failure(exc):
                 # Post-dispatch auth failure: conservatively unknown, no replay.
+                # 403 insufficient_scope keeps its challenge for human step-up;
+                # 401 keeps the existing generic auth-required behavior.
+                self._capture_auth_challenge(exc)
                 self.state = ConnectionState.AUTH_REQUIRED
                 self.last_error = self._redact("server requires authorization; authorize via /mcp")
                 return CallOutcome(ok=False, outcome_unknown=True, error=self.last_error)

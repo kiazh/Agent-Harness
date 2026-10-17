@@ -21,6 +21,7 @@ from machina.core.provider.caches import _cache_get, _cache_key, _cache_put, _ca
 from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.reasoning import _resolve_effort, normalize_reasoning_effort
 from machina.core.provider.transport import (
+    ReservationSettlement,
     _stream_with_retry,
     _tools_payload,
     _validate_messages,
@@ -131,6 +132,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                 tools or [],
                 max_tokens,
             )
+        settlement = ReservationSettlement(reservation_id, usage_store)
 
         start = time.monotonic()
         try:
@@ -146,7 +148,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                 raise ProviderError(
                     f"Ollama returned no message for {model or self.model}: {detail}"
                 )
-        except Exception as e:
+        except BaseException as e:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_llm_call(
                 session_id="",
@@ -154,8 +156,9 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                 duration_ms=duration_ms,
                 is_error=True,
             )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+            await settlement.fail()
+            if not isinstance(e, Exception):
+                raise
             audit_log("llm_call_error", provider="ollama", model=model or self.model, error=str(e))
             raise
 
@@ -173,12 +176,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         )
 
         # Finish usage reservation
-        if reservation_id is not None:
-            await usage_store.finish(
-                reservation_id,
-                usage,
-                model=data.get("model", model or self.model),
-            )
+        await settlement.settle(usage, model=data.get("model", model or self.model))
 
         audit_log(
             "llm_call_complete",
@@ -252,6 +250,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                 tools or [],
                 max_tokens,
             )
+        settlement = ReservationSettlement(reservation_id, usage_store)
 
         content_parts: list[str] = []
         tool_calls: list[dict] = []
@@ -325,9 +324,10 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                 raise ProviderError(
                     f"Ollama stream ended without a terminal done frame for {model or self.model}"
                 )
-        except Exception as e:
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+        except BaseException as e:
+            await settlement.fail()
+            if not isinstance(e, Exception):
+                raise
             audit_log(
                 "llm_stream_error", provider="ollama", model=model or self.model, error=str(e)
             )
@@ -340,12 +340,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         usage = parse_ollama_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
 
         # Finish usage reservation
-        if reservation_id is not None:
-            await usage_store.finish(
-                reservation_id,
-                usage,
-                model=resolved_model,
-            )
+        await settlement.settle(usage, model=resolved_model)
 
         audit_log(
             "llm_stream_complete",

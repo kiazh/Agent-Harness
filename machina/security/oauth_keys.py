@@ -145,6 +145,11 @@ def get_master_key(*, key_provider=None, timeout: float = 5.0, lock_path=None) -
 
         # The worker retains the lock through an ambiguous write timeout.
         # A later caller must never race its still-running key creation.
+        # The lock fd lives inside ``_create_locked`` and is released only
+        # after ``keyring.set_password`` returns (or raises). If that backend
+        # never returns, the daemon thread holds the cross-process lock until
+        # process exit: every successor fails closed on its bounded wait
+        # instead of overwriting the in-flight key (F-27).
         return _keyring_bounded(
             _create_locked, timeout=timeout, timeout_message="os keyring write timed out"
         )

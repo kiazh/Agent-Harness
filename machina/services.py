@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio as _asyncio
 import inspect as _inspect
+import json
 import logging as _logging
 from pathlib import Path
 from typing import Any
@@ -324,88 +325,131 @@ async def compress_session(
 
 
 async def _estimate_next_request(session_id) -> int:
-    """Conservative approximation of the next model request (AH-AUDIT-041).
+    """Approximation of the next model request on the gate's own basis.
 
-    This is an approximation, not a measurement of the rendered request:
-    it sums stored conversational context, the EFFECTIVE tool schema for
-    this session's agent definition (restricted specialists count only
-    their allowlist, not the full registry), reserved output tokens, and
-    the effective system instructions (base prompt plus the session agent's
-    definition prompt). Retrieved memory/RAG material and provider-specific
-    serialization are not measured here — callers treat the result as a
-    compaction trigger threshold, never as exact request accounting. No
-    provider calls, no memory access-state changes.
+    The auto-compaction trigger must not use a different token unit than the
+    hard capacity gate, or a session can sit "below threshold" while the gate
+    refuses the turn. This function therefore rebuilds the same recent-context
+    message window the agent assembles from and delegates to
+    :func:`machina.core.prompt.request_context_tokens`: one tiktoken counter
+    over one JSON serialization for context chunks, tool definitions, system
+    instructions, framing, visual reserve and the output reserve.
+
+    It remains an approximation (retrieved memory/RAG and the provider's
+    instance-specific reservation ceiling are not replayed), never a substitute
+    for the gate. No provider calls and no memory access-state changes.
     """
-    from machina.core.assembler import get_token_count
+    from machina.core.prompt import request_context_tokens
 
-    total = 0
     definition_prompt = ""
-    # Stored context tokens (actual message content)
-    try:
-        total += await context_manager.get_token_usage(session_id)
-    except Exception as _boundary_error:
-        # Optional fallback preserves the primary outcome; report no payload.
-        record_failure("services._estimate_next_request", _boundary_error)
-    # Effective tool schema: the session agent's allowlist when resolvable.
+    allowed: list | None = None
+    session = None
     try:
         from machina.core.session import session_manager as _sessions
 
+        session = await _sessions.get(session_id)
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services.maybe_auto_compact.session", _boundary_error)
+    if session is not None:
         try:
-            session = await _sessions.get(session_id)
+            from machina.core.agent_def import agent_registry
+
+            definition = await agent_registry.get(session.agent_id or "harness")
+            if definition is not None:
+                from machina.core.agent_factory import definition_tool_cap
+
+                # AgentDef [] means unrestricted (full registry), unlike
+                # authority-layer [] which means zero tools; resolve through
+                # the same translation execution uses.
+                allowed = definition_tool_cap(definition)
+                definition_prompt = definition.system_prompt or ""
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
-            record_failure("services.maybe_auto_compact.session", _boundary_error)
-            session = None
-        allowed: list | None = None
-        definition_prompt = ""
-        if session is not None:
-            try:
-                from machina.core.agent_def import agent_registry
+            record_failure("services._estimate_next_request", _boundary_error)
 
-                definition = await agent_registry.get(session.agent_id or "harness")
-                if definition is not None:
-                    from machina.core.agent_factory import definition_tool_cap
-
-                    # AgentDef [] means unrestricted (full registry), unlike
-                    # authority-layer [] which means zero tools; resolve
-                    # through the same translation execution uses.
-                    allowed = definition_tool_cap(definition)
-                    definition_prompt = definition.system_prompt or ""
-            except Exception as _boundary_error:
-                # Optional fallback preserves the primary outcome; report no payload.
-                record_failure("services._estimate_next_request", _boundary_error)
-        from machina.tools.base import registry
-
-        if allowed is None:
-            total += get_token_count(str(registry.get_tool_definitions()))
-        else:
-            allowed_set = set(allowed)
-            total += get_token_count(
-                str(
-                    [
-                        t
-                        for t in registry.get_tool_definitions()
-                        if getattr(t, "name", "") in allowed_set
-                    ]
-                )
-            )
+    # Context window: the same bounded recent-context read the agent uses.
+    messages: list[dict[str, Any]] = []
+    try:
+        recent = await context_manager.get_recent_context(session_id, limit=10)
     except Exception as _boundary_error:
         # Optional fallback preserves the primary outcome; report no payload.
         record_failure("services._estimate_next_request", _boundary_error)
-    # Reserved output tokens
+        recent = []
+    for entry in reversed(recent or []):
+        if not isinstance(entry, dict):
+            continue
+        payload = entry.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        content = payload.get("content")
+        if not isinstance(content, str):
+            try:
+                content = json.dumps(payload, ensure_ascii=False, default=str)
+            except Exception:
+                content = str(payload)
+        chunk_type = entry.get("type")
+        if chunk_type == "assistant_message":
+            role = "assistant"
+        elif chunk_type == "tool_call":
+            role = "tool"
+        else:
+            role = "user"
+        message: dict[str, Any] = {"role": role, "content": content}
+        tool_call_id = payload.get("tool_call_id")
+        if role == "tool" and isinstance(tool_call_id, str):
+            message["tool_call_id"] = tool_call_id
+        messages.append(message)
+
+    # Effective tool schema: the session agent's allowlist when resolvable.
+    tools: list = []
     try:
-        total += int(config.get("max_tokens") or 4096)
-    except Exception:
-        total += 4096
-    # Effective system instructions (base + specialist definition prompt)
+        from machina.tools.base import registry
+
+        definitions = registry.get_tool_definitions()
+        if allowed is None:
+            tools = list(definitions)
+        else:
+            allowed_set = set(allowed)
+            tools = [t for t in definitions if getattr(t, "name", "") in allowed_set]
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services._estimate_next_request", _boundary_error)
+
+    # Effective system instructions (base + specialist definition prompt).
     try:
         from machina.core.agent import SYSTEM_PROMPT
 
-        total += get_token_count(SYSTEM_PROMPT + (definition_prompt or ""))
+        system_prompt = SYSTEM_PROMPT + (definition_prompt or "")
     except Exception as _boundary_error:
         # Optional fallback preserves the primary outcome; report no payload.
         record_failure("services._estimate_next_request", _boundary_error)
-    return total
+        system_prompt = definition_prompt or ""
+    messages.insert(0, {"role": "system", "content": system_prompt})
+
+    provider_name = None
+    if session is not None:
+        candidate = getattr(session, "provider", None)
+        provider_name = candidate if isinstance(candidate, str) else None
+    if not provider_name:
+        provider_name = config.get("provider")
+
+    try:
+        return request_context_tokens(messages, tools, provider_name)
+    except Exception as _boundary_error:
+        # Same counter/serialization fallback (never the old len//4 basis).
+        from machina.core.assembler import get_token_count
+        from machina.core.provider.transport import _tools_payload
+
+        record_failure("services._estimate_next_request", _boundary_error)
+        try:
+            return (
+                get_token_count(json.dumps(messages, ensure_ascii=False))
+                + get_token_count(json.dumps(_tools_payload(tools), ensure_ascii=False))
+                + int(config.get("max_tokens") or 4096)
+            )
+        except Exception:
+            return 0
 
 
 def _record_compaction_status(

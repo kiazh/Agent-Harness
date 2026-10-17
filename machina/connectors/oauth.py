@@ -258,7 +258,7 @@ class OAuthCoordinator:
                     "expires_at": expires_at,
                     "local_access": bool(config.local_access),
                 }
-            return {
+            result: dict[str, Any] = {
                 "previewId": preview_id,
                 "digest": digest,
                 "expiresAt": expires_at.isoformat(),
@@ -279,6 +279,14 @@ class OAuthCoordinator:
                     "redirectUri": redirect_uri,
                 },
             }
+            # F-26: surface the last 403 challenge in the review so the human
+            # can choose the step-up scopes. This is display evidence only:
+            # ``requested`` (and the signed digest) stay unchanged.
+            challenge = self._scope_challenge(config.id)
+            if challenge and challenge.get("requiredScopes"):
+                result["requiredScopes"] = list(challenge["requiredScopes"])
+                result["authChallenge"] = challenge
+            return result
         finally:
             # aclose is idempotent: one close site covers success and failure.
             try:
@@ -767,6 +775,36 @@ class OAuthCoordinator:
         return result
 
     async def _public_auth(self, config) -> dict[str, Any]:
+        view = await self._public_auth_base(config)
+        return self._with_scope_challenge(config.id, view)
+
+    def _scope_challenge(self, connector_id: str) -> dict[str, Any] | None:
+        """The live connection's sanitized 403 step-up challenge, if any."""
+        try:
+            service = self._service
+            manager = getattr(service, "manager", None)
+            connection = manager.connection(connector_id) if manager is not None else None
+            return connection.auth_challenge_view() if connection is not None else None
+        except Exception as _boundary_error:
+            record_failure("oauth.status.challenge", _boundary_error)
+            return None
+
+    def _with_scope_challenge(self, connector_id: str, view: dict[str, Any]) -> dict[str, Any]:
+        """Attach a live 403 insufficient_scope challenge to the auth view.
+
+        F-26: the challenge is evidence for a later human step-up. It never
+        widens the requested scope set and never triggers a replay. A 401 has
+        no requiredScopes, so its view is unchanged.
+        """
+        challenge = self._scope_challenge(connector_id)
+        if not challenge or not challenge.get("requiredScopes"):
+            return view
+        enriched = dict(view)
+        enriched["requiredScopes"] = list(challenge["requiredScopes"])
+        enriched["authChallenge"] = challenge
+        return enriched
+
+    async def _public_auth_base(self, config) -> dict[str, Any]:
         settings = OAuthSettings.from_dict(getattr(config, "oauth", None))
         if settings is None:
             return {"state": "not_configured", "generation": 0}
@@ -1018,6 +1056,7 @@ class OAuthCoordinator:
         # Local invalidation first (tombstone), then one bounded revoke attempt.
         binding = await self._primary_binding(config)
         remote = "not_requested"
+        failures: list[dict[str, str]] = []
         snapshot_record = None
         if binding is not None:
             try:
@@ -1037,8 +1076,14 @@ class OAuthCoordinator:
                     remote = await network.revoke_token(
                         snapshot_record, deadline=loop.time() + 10.0
                     )
-                except Exception:
+                except Exception as _boundary_error:
+                    # The local grant is already retired; report the remote step
+                    # as incomplete instead of pretending revocation succeeded.
+                    record_failure("oauth.forget.revoke", _boundary_error)
                     remote = "failed"
+                    failures.append(
+                        {"step": "remoteRevocation", "reason": type(_boundary_error).__name__}
+                    )
                 finally:
                     try:
                         await network.aclose()
@@ -1046,19 +1091,33 @@ class OAuthCoordinator:
                         pass
             elif revoke:
                 remote = "unsupported"
+        if remote == "failed" and not any(
+            entry["step"] == "remoteRevocation" for entry in failures
+        ):
+            failures.append({"step": "remoteRevocation", "reason": "remote_rejected"})
         self._auth_cache.pop(connector_id, None)
-        # Retire live connection/catalog.
+        # Retire live connection/catalog. A failure here means the logout is
+        # only partial: the credential store is retired, but the in-process
+        # bearer header / dispatchable catalog may still be live. Record and
+        # surface it; never report an unqualified success.
         if self._service is not None:
             try:
                 await self._service.manager.disconnect(connector_id)
-            except Exception:
-                pass
+            except Exception as _boundary_error:
+                record_failure("oauth.forget.disconnect", _boundary_error)
+                failures.append({"step": "disconnect", "reason": type(_boundary_error).__name__})
             try:
                 self._service.registry._drop_tools(connector_id)
-            except Exception:
-                pass
+            except Exception as _boundary_error:
+                record_failure("oauth.forget.drop_tools", _boundary_error)
+                failures.append({"step": "drop_tools", "reason": type(_boundary_error).__name__})
         auth = await self._public_auth(config)
-        return {"auth": auth, "remoteRevocation": remote}
+        return {
+            "auth": auth,
+            "remoteRevocation": remote,
+            "partial": bool(failures),
+            "failures": failures,
+        }
 
     async def _primary_binding(self, config) -> OAuthBinding | None:
         try:

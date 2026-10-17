@@ -258,6 +258,57 @@ def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
     ]
 
 
+class ReservationSettlement:
+    """Exactly-once settlement for a provider usage reservation.
+
+    Providers reserve before opening a stream and must settle on every exit:
+    success, error, cancellation, or generator close. ``GeneratorExit`` and
+    ``CancelledError`` are ``BaseException`` and bypass an ``except Exception``
+    handler, so streaming transports call :meth:`settle` on the success path
+    and :meth:`fail` from ``finally``. The local guard (not the ledger's
+    ``status='reserved'`` predicate) ensures a late close after a successful
+    finish cannot issue a second write.
+    """
+
+    __slots__ = ("reservation_id", "_store", "_settled")
+
+    def __init__(self, reservation_id, store=None) -> None:
+        self.reservation_id = reservation_id
+        if store is None and reservation_id is not None:
+            # Lazy import: usage imports this package's transports indirectly.
+            from machina.core.usage import usage_store as store
+        self._store = store
+        self._settled = False
+
+    async def settle(
+        self, usage: dict[str, Any] | None = None, *, model: str | None = None
+    ) -> None:
+        """Finish the reservation with *usage* (success). No-op if settled."""
+        await self._finish(usage, failed=False, model=model)
+
+    async def fail(self) -> None:
+        """Finish the reservation as failed. No-op if already settled."""
+        await self._finish(None, failed=True, model=None)
+
+    async def _finish(
+        self,
+        usage: dict[str, Any] | None,
+        *,
+        failed: bool,
+        model: str | None,
+    ) -> None:
+        if self._settled or self.reservation_id is None:
+            return
+        self._settled = True
+        try:
+            await self._store.finish(self.reservation_id, usage, failed=failed, model=model)
+        except Exception as error:
+            # Accounting is additive: a failed settle must never mask the
+            # generator's real close/cancel path or break teardown. The
+            # orphaned reservation is still bounded by the ledger's cleanup.
+            record_failure("provider.reservation_settle", error)
+
+
 # ---------------------------------------------------------------------------
 # Prompt-cache breakpoints moved to machina/core/provider/prompt_cache.py
 # (god-file discipline); re-exported so existing import paths keep working.

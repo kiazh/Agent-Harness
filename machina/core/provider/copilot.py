@@ -47,7 +47,9 @@ from machina.core.provider.base import LLMProvider
 from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
+    ReservationSettlement,
     _stream_error_message,
+    _tools_payload,
     _truncated_stream_error,
     _validate_messages,
     _validate_params,
@@ -116,20 +118,6 @@ class _ToolCallAccumulator:
         return calls
 
 
-def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-            },
-        }
-        for tool in tools
-    ]
-
-
 class CopilotProvider(LLMProvider, RateLimitBinding):
     """OpenAI-compatible Copilot API over the user's Copilot subscription."""
 
@@ -145,7 +133,6 @@ class CopilotProvider(LLMProvider, RateLimitBinding):
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.model = self._normalize_model(model) or self.DEFAULT_MODEL
-        self._default_effort = str(reasoning_effort or "").strip().lower()
         self._rate_limit_key = _PROVIDER_NAME
         self._auth_path = auth_path
         base = (
@@ -250,6 +237,7 @@ class CopilotProvider(LLMProvider, RateLimitBinding):
                 tools or [],
                 max_tokens,
             )
+        settlement = ReservationSettlement(reservation_id, usage_store)
 
         content_parts: list[str] = []
         accumulator = _ToolCallAccumulator()
@@ -342,13 +330,14 @@ class CopilotProvider(LLMProvider, RateLimitBinding):
                         saw_terminal = True
             if not saw_terminal:
                 raise _truncated_stream_error(_PROVIDER_NAME, resolved_model)
-        except Exception as exc:
+        except BaseException as exc:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_llm_call(
                 session_id="", model=resolved_model, duration_ms=duration_ms, is_error=True
             )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+            await settlement.fail()
+            if not isinstance(exc, Exception):
+                raise
             audit_log(
                 "llm_stream_error",
                 provider=_PROVIDER_NAME,
@@ -382,8 +371,7 @@ class CopilotProvider(LLMProvider, RateLimitBinding):
             prompt_tokens=usage["prompt_tokens"],
             completion_tokens=usage["completion_tokens"],
         )
-        if reservation_id is not None:
-            await usage_store.finish(reservation_id, usage, model=resolved_model)
+        await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete",
             provider=_PROVIDER_NAME,

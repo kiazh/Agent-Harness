@@ -24,6 +24,7 @@ from machina.core.provider.reasoning import _resolve_effort, normalize_reasoning
 from machina.core.provider.specs import ProviderSpec
 from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
+    ReservationSettlement,
     _post_with_retry,
     _stream_error_message,
     _stream_with_retry,
@@ -131,19 +132,21 @@ class DirectProvider(LLMProvider, RateLimitBinding):
             reservation_id = await usage_store.reserve(
                 session_id, agent_id, self.spec.name, model, messages, tools or [], max_tokens
             )
+        settlement = ReservationSettlement(reservation_id, usage_store)
 
         start = time.monotonic()
         try:
             resp = await _post_with_retry(self.client, "/chat/completions", payload)
             resp.raise_for_status()
             data = resp.json()
-        except Exception as e:
+        except BaseException as e:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_llm_call(
                 session_id="", model=model, duration_ms=duration_ms, is_error=True
             )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+            await settlement.fail()
+            if not isinstance(e, Exception):
+                raise
             audit_log("llm_call_error", provider=self.spec.name, model=model, error=str(e))
             raise
 
@@ -158,8 +161,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
             metrics.record_llm_call(
                 session_id="", model=model, duration_ms=duration_ms, is_error=True
             )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+            await settlement.fail()
             audit_log("llm_call_error", provider=self.spec.name, model=model, error="no_choices")
             raise ProviderError(message)
 
@@ -176,8 +178,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
         )
-        if reservation_id is not None:
-            await usage_store.finish(reservation_id, usage, model=data.get("model", model))
+        await settlement.settle(usage, model=data.get("model", model))
         audit_log(
             "llm_call_complete",
             provider=self.spec.name,
@@ -238,7 +239,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
             reservation_id = await usage_store.reserve(
                 session_id, agent_id, self.spec.name, model, messages, tools or [], max_tokens
             )
-
+        settlement = ReservationSettlement(reservation_id, usage_store)
         content_parts: list[str] = []
         tool_calls_by_index: dict[int, dict[str, str]] = {}
         stream_usage: dict[str, int] = {}
@@ -295,9 +296,12 @@ class DirectProvider(LLMProvider, RateLimitBinding):
                             tc["arguments"] += frag
             if not saw_terminal:
                 raise _truncated_stream_error(self.spec.name, resolved_model)
-        except Exception as e:
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+        except BaseException as e:
+            # GeneratorExit/CancelledError are BaseException: settle before
+            # re-raising so an early close cannot strand the reservation.
+            await settlement.fail()
+            if not isinstance(e, Exception):
+                raise
             audit_log("llm_stream_error", provider=self.spec.name, model=model, error=str(e))
             raise
 
@@ -326,8 +330,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
                 "estimated": True,
             }
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-        if reservation_id is not None:
-            await usage_store.finish(reservation_id, usage, model=resolved_model)
+        await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete", provider=self.spec.name, model=model, tool_calls=len(tool_calls)
         )

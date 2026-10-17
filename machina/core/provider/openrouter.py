@@ -29,6 +29,7 @@ from machina.core.provider.rate_limit import RateLimitBinding
 from machina.core.provider.reasoning import _resolve_effort, normalize_reasoning_effort
 from machina.core.provider.sse import sse_data
 from machina.core.provider.transport import (
+    ReservationSettlement,
     _is_free_model,
     _log_prompt_cache_breakpoints,
     _post_with_retry,
@@ -154,6 +155,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                 tools or [],
                 max_tokens,
             )
+        settlement = ReservationSettlement(reservation_id, usage_store)
 
         start = time.monotonic()
         candidates = [model]
@@ -229,7 +231,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         try:
             if data is None:
                 raise last_err or RuntimeError("LLM call failed with no response")
-        except Exception as e:
+        except BaseException as e:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_llm_call(
                 session_id="",
@@ -237,8 +239,9 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                 duration_ms=duration_ms,
                 is_error=True,
             )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+            await settlement.fail()
+            if not isinstance(e, Exception):
+                raise
             audit_log("llm_call_error", provider="openrouter", model=model, error=str(e))
             raise
 
@@ -256,8 +259,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
             metrics.record_llm_call(
                 session_id="", model=used_model, duration_ms=duration_ms, is_error=True
             )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+            await settlement.fail()
             audit_log(
                 "llm_call_error",
                 provider="openrouter",
@@ -281,12 +283,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         )
 
         # Finish usage reservation
-        if reservation_id is not None:
-            await usage_store.finish(
-                reservation_id,
-                usage,
-                model=data.get("model", model),
-            )
+        await settlement.settle(usage, model=data.get("model", model))
 
         audit_log(
             "llm_call_complete",
@@ -386,6 +383,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                 tools or [],
                 max_tokens,
             )
+        settlement = ReservationSettlement(reservation_id, usage_store)
 
         content_parts: list[str] = []
         tool_calls_by_index: dict[int, dict[str, str]] = {}
@@ -465,8 +463,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                     # Account-wide daily quota exhausted: no free candidate can
                     # succeed, so stop now instead of sleeping through the rest
                     # of the chain and burning more of the quota.
-                    if reservation_id is not None:
-                        await usage_store.finish(reservation_id, failed=True)
+                    await settlement.fail()
                     audit_log(
                         "llm_stream_rate_limited",
                         provider="openrouter",
@@ -488,7 +485,13 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                     content_parts = []
                     tool_calls_by_index = {}
                     stream_usage = {}
-                    await asyncio.sleep(2.0)
+                    try:
+                        await asyncio.sleep(2.0)
+                    except BaseException:
+                        # Cancel/close while waiting for the next fallback
+                        # candidate must settle the shared reservation.
+                        await settlement.fail()
+                        raise
                     continue
                 if (
                     status == 404
@@ -542,10 +545,15 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                         break
                     except Exception as e2:
                         e = e2
-                if reservation_id is not None:
-                    await usage_store.finish(reservation_id, failed=True)
+                await settlement.fail()
                 audit_log("llm_stream_error", provider="openrouter", model=cand, error=str(e))
                 raise e
+            except BaseException:
+                # GeneratorExit/CancelledError at a text yield or inside the
+                # SDK stream bypass ``except Exception``; settle before the
+                # generator closes so the reservation is not stranded.
+                await settlement.fail()
+                raise
 
         # Build final tool calls list
         tool_calls: list[dict] = []
@@ -575,8 +583,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         )
 
         # Finish usage reservation
-        if reservation_id is not None:
-            await usage_store.finish(reservation_id, usage, model=resolved_model)
+        await settlement.settle(usage, model=resolved_model)
 
         audit_log(
             "llm_stream_complete", provider="openrouter", model=model, tool_calls=len(tool_calls)

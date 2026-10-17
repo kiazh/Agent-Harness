@@ -59,6 +59,10 @@ def _scan(command: str) -> tuple[bool, list[str] | None]:
             start = index
             continue
         elif char in "$`()<>#*?[]{}~":
+            # Redirection is intentionally opaque, including the common
+            # `2>/dev/null` form: there is no /dev/null allowlist. These
+            # require broker review exactly like expansion/globbing, matching
+            # SECURITY.md's shell grammar contract.
             shell = opaque = True
         index += 1
     tail = command[start:].strip()

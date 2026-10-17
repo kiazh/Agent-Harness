@@ -88,10 +88,12 @@ async def harness_status() -> str:
     def _shrink() -> str:
         return json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
 
-    # Truncation ladder, cheapest context first. The final guard refuses
-    # rather than emitting truncated JSON; every omitted field is marked so
-    # absence is never misread as emptiness. Learning notes are live evidence,
-    # so every recoverable/duplicated section above them drops first.
+    # Truncation ladder, lowest-value context first: duplicated/recoverable
+    # detail (inventory names, the FEATURES duplicate, workspace profiles,
+    # persona display config) shrinks before live learning state (notes, then
+    # the pinned RSI trial). The final guard refuses rather than emitting
+    # truncated JSON; every omitted field is marked so absence is never
+    # misread as emptiness.
     serialized = _shrink()
     if len(serialized) > _MAX_STATUS_BYTES and "installed" in safe:
         # Inventory names are detail; the per-source counts remain.
@@ -114,14 +116,16 @@ async def harness_status() -> str:
             workspace["profiles_omitted"] = "Inspect /lsp status"
             serialized = _shrink()
     if len(serialized) > _MAX_STATUS_BYTES:
+        # Recoverable display config: the /persona editor holds the real value.
+        # Drop it before live learning notes (which are evidence, not config).
+        safe["persona_description"] = None
+        safe["persona_description_omitted"] = "Inspect description in the /persona Add editor"
+        serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES:
         # Keep JSON valid for the agent's bounded tool-message budget. Never
         # turn omitted notes into evidence that learning has no saved state.
         safe["learning"]["notes"] = {}
         safe["learning"]["notes_omitted"] = "Inspect full notes with /growth show"
-        serialized = _shrink()
-    if len(serialized) > _MAX_STATUS_BYTES:
-        safe["persona_description"] = None
-        safe["persona_description_omitted"] = "Inspect description in the /persona Add editor"
         serialized = _shrink()
     if len(serialized) > _MAX_STATUS_BYTES and safe["learning"]["rsi"].get("trial") is not None:
         safe["learning"]["rsi"]["trial"] = None

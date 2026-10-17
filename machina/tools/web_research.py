@@ -100,17 +100,28 @@ async def web_research(query: str, limit: int = 3) -> str:
                     if not content.strip():
                         failures += 1
                         continue
+                    # Same canonical redacted form as the dedup key above:
+                    # document_source must equal the queried identity or every
+                    # repeat re-indexes the page.
                     document = Document(
                         content=content,
-                        source=url,
-                        metadata={"title": title, "url": url, "research_query": query.strip()},
+                        source=stored_url,
+                        metadata={
+                            "title": title,
+                            "url": stored_url,
+                            "research_query": query.strip(),
+                        },
                         doc_type="web",
                     )
                     chunks = await pipeline.index_document(
                         source=document,
                         session_id=session_id,
                         agent_id=agent_id,
-                        metadata={"title": title, "url": url, "research_query": query.strip()},
+                        metadata={
+                            "title": title,
+                            "url": stored_url,
+                            "research_query": query.strip(),
+                        },
                     )
                     if not chunks:
                         raise ToolError("No document chunks were saved")
@@ -122,13 +133,13 @@ async def web_research(query: str, limit: int = 3) -> str:
                 )
                 lines.extend(
                     (
-                        f"\n{saved}. {title} — {url} ({state})",
+                        f"\n{saved}. {title} — {stored_url} ({state})",
                         content[:1200].replace("\n", " "),
                     )
                 )
             except Exception as error:
                 failures += 1
-                logger.info("web research source failed (%s): %s", url, error)
+                logger.info("web research source failed (%s): %s", stored_url, error)
 
         if not saved:
             raise ToolError("Search results were found, but no pages could be fetched and saved.")

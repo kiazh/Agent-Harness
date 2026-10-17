@@ -18,14 +18,44 @@ _refresh_after = 0.0
 # case-insensitive substring on the model id; the longest key wins so
 # "mistral-small" beats bare "mistral" (local) for "mistral-small-latest".
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    # Vendor-documented windows for the ids the picker currently ships
+    # (2026-10 catalog). Conservative where the vendor offers a beta/expansion
+    # tier: the standard window is used so a turn is never refused against a
+    # capacity the model may not actually serve.
+    "gemini-2.5-flash": 1_048_576,
+    "gemini-2.5-pro": 1_048_576,
     "gemini-2.0-flash": 1_048_576,
-    "grok-4": 256_000,
-    "claude-3-5-sonnet": 200_000,
+    "gpt-4.1": 1_047_576,
+    "gpt-4o": 128_000,
     "gpt-4o-mini": 128_000,
+    # GPT-5.x standard API window; ChatGPT catalog windows (272K–500K) win
+    # when the chatgpt provider resolves them.
+    "gpt-5": 400_000,
+    "o3": 200_000,
+    "o4-mini": 200_000,
+    "grok-4": 256_000,
+    "grok-3": 131_072,
+    "claude-sonnet-4": 200_000,
+    "claude-opus-4": 200_000,
+    "claude-haiku-4": 200_000,
+    "claude-3-7-sonnet": 200_000,
+    "claude-3-5-sonnet": 200_000,
     "llama-3.3-70b": 128_000,
+    "mistral-large": 128_000,
     "mistral-small": 128_000,
+    # DeepSeek's hosted API is 64K for the chat/reasoner families; V4 reports
+    # a 1M window in the OpenRouter catalog (provider-scoped lookup wins).
+    "deepseek-v4": 1_048_576,
+    "deepseek-v3": 64_000,
+    "deepseek-r1": 64_000,
     "deepseek-chat": 64_000,
     "deepseek-reasoner": 64_000,
+    # Qwen hosted families. qwen-max is the 32K DashScope entry; the
+    # 2.5/3 families are documented at 128K.
+    "qwen3": 131_072,
+    "qwen2.5": 131_072,
+    "qwen-plus": 131_072,
+    "qwen-max": 32_768,
     # Kimi Code membership models (kimi.com/code/docs model table): k3 is 1M
     # for higher tiers / 256K below, k3-256k is fixed 256K, kimi-for-coding
     # (K2.8 Preview) is 1M, and its HighSpeed variant is 256K. Longest-key
@@ -80,9 +110,12 @@ def context_window_for(model: str | None, provider=None) -> int:
     account catalog windows apply only when *provider* names that family
     (name or instance). The chatgpt lookup is network-free — it reads the
     in-process live catalog, the Codex CLI's local cache, or the bundled
-    verified snapshot, in that order. Base, local and other direct providers
-    always use the curated fallback so one serving's capacity never leaks
-    into another provider's estimate.
+    verified snapshot, in that order. Catalog metadata is authoritative when
+    it resolves: the curated table below is only a fallback for providers
+    without a catalog, so a stale local entry can never override live
+    discovery. Base, local and other direct providers always use the curated
+    fallback so one serving's capacity never leaks into another provider's
+    estimate.
     """
     # Anything non-string (e.g. test doubles) behaves like an unknown model.
     name = model.lower() if isinstance(model, str) else ""

@@ -35,7 +35,11 @@ identifying args in ``_TARGET_KEYS`` — e.g. web_extract→url,
 search_files→pattern|path, web_search→query — bytes=0 always; reads add no
 artifact bytes, so progress comes only from new-target coverage). Distinct
 URLs/patterns/queries are therefore NEW coverage and can never trip the
-stagnation stop. Every other tool (writes, file reads, terminal, delegate,
+stagnation stop. Status/inventory reads with no identifying args
+(harness_status/list_agents/skill_list) additionally key their target on a
+digest of the ACTUAL returned text: three identical status reads still trip
+the stop, but reads whose live state changed do not. Every other tool
+(writes, file reads, terminal, delegate,
 skill bodies, unknown shapes) defaults conservative non-stagnant (bytes=1):
 re-execution there is often legitimate (verify-after-write, polling,
 retries) and the agent loop must stay UNBOUNDED — see
@@ -50,6 +54,7 @@ never create an import cycle and never breaks turns.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sys
@@ -82,9 +87,12 @@ _ELIGIBLE = frozenset(
 # coverage every round (wave-2 audit regression: a generic key list lacked
 # "url" and let "path" shadow "pattern", stopping real research at ~4 calls).
 # Keys listed for a tool are joined (e.g. "pattern|path"), so a difference in
-# ANY listed key counts as new coverage. Tools with no identifying args
-# present fall back to the tool name: repeated identical status reads
-# (harness_status/list_agents) are genuinely stagnant.
+# ANY listed key counts as new coverage. Tools with no identifying args of
+# their own (harness_status/list_agents, and skill_list with an empty query)
+# additionally key on a digest of the ACTUAL result text: only an identical
+# result is the same target, so live state that changes between reads is new
+# coverage rather than a false stagnation stop.
+_RESULT_KEYED = frozenset({"harness_status", "list_agents", "skill_list"})
 _TARGET_KEYS: dict[str, tuple[str, ...]] = {
     "session_recall": ("query",),
     "recall": ("query",),
@@ -259,8 +267,24 @@ def record_approval_pause(approval: Any) -> None:
 # ─── stagnation mapping + forced-write evidence ─────────────────────────────
 
 
-def target_bytes(tool: Any, args: Any) -> tuple[str, int]:
-    """Central per-tool (target, new_bytes) extraction (see module mapping rule)."""
+def _result_digest(result: Any) -> str:
+    """Stable short digest of one tool result (JSON-safe, deterministic)."""
+    if isinstance(result, str):
+        text = result
+    else:
+        text = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def target_bytes(tool: Any, args: Any, result: Any = None) -> tuple[str, int]:
+    """Central per-tool (target, new_bytes) extraction (see module mapping rule).
+
+    ``result`` is the tool output when the caller has it. For result-keyed
+    status/inventory reads, the target embeds a digest of the actual result so
+    identical-looking calls that returned different data count as new coverage;
+    only a same-digest repeat is stagnantly covered. Callers that omit
+    ``result`` keep the historical arg/tool-name fallback.
+    """
     try:
         name = str(tool or "unknown")
         argv = args if isinstance(args, dict) else {}
@@ -270,22 +294,36 @@ def target_bytes(tool: Any, args: Any) -> tuple[str, int]:
             return (f"{argv.get('session_id', '')}:{argv.get('chunk_id', '')}" or name, 0)
         keys = _TARGET_KEYS.get(name, ())
         parts = [str(argv[k]) for k in keys if argv.get(k)]
-        return ("|".join(parts)[:500] if parts else name, 0)
+        target = "|".join(parts)
+        if name in _RESULT_KEYED and result is not None:
+            # Keep the digest inside the 500-char budget even when identifying
+            # args are long; the result must always discriminate the target.
+            digest = f"result:{_result_digest(result)}"
+            target = f"{target[:400]}|{digest}" if target else digest
+        return (target[:500] if target else name, 0)
     except Exception:
         return (str(tool or "unknown"), 1)
 
 
 def check_stagnation(history: Any, batch: Any) -> tuple[Any, str | None]:
-    """Fold one tool batch into progress history; return (history, stop|None)."""
+    """Fold one tool batch into progress history; return (history, stop|None).
+
+    For result-keyed status reads the batch entry's ``result`` (full output,
+    when the caller has it) or ``result_preview`` is folded into the target.
+    """
     try:
         from machina.core.progress import is_stagnant, record, stop_reason
 
         hist = list(history or [])
         for entry in batch or []:
             if isinstance(entry, dict):
+                result = entry.get("result")
+                if result is None:
+                    result = entry.get("result_preview")
                 t, b = target_bytes(
                     entry.get("tool"),
                     entry.get("args"),
+                    result,
                 )
                 hist = record(hist, str(entry.get("tool") or "unknown"), t, b)
         return (hist, stop_reason(hist) if is_stagnant(hist) else None)

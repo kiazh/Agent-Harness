@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import tempfile
 from pathlib import Path
 
@@ -165,6 +166,30 @@ def find_env_file(start: Path | None = None) -> Path:
     return here / ".env"
 
 
+def _tighten_existing_mode(target: Path) -> None:
+    """Best-effort 0600 repair for a legacy world/group-readable ``.env``.
+
+    Only a regular file owned by the current user is touched; symlinks and
+    other owners are left alone. A chmod failure never fails the read (the
+    caller still gets its values) but is reported, not swallowed silently.
+    """
+    if os.name != "posix" or not hasattr(os, "chmod"):
+        return
+    try:
+        info = os.lstat(target)
+    except OSError:
+        return
+    if not stat.S_ISREG(info.st_mode):
+        return
+    if info.st_uid != os.geteuid():
+        return
+    if info.st_mode & 0o077:
+        try:
+            os.chmod(target, 0o600)
+        except OSError as _boundary_error:
+            record_failure("env_file.tighten_mode", _boundary_error)
+
+
 def read_env_values(path: Path | None = None) -> dict[str, str]:
     """Read persisted dotenv assignments without resolving interpolation.
 
@@ -175,6 +200,7 @@ def read_env_values(path: Path | None = None) -> dict[str, str]:
     """
     target = path or find_env_file()
     values: dict[str, str] = {}
+    _tighten_existing_mode(target)
     try:
         if target.is_file() and target.stat().st_size > _ENV_MAX_BYTES:
             raise ValueError(f".env file exceeds {_ENV_MAX_BYTES} bytes")
@@ -252,8 +278,7 @@ def _env_bindings(text: str) -> list[str]:
 
     from dotenv.parser import parse_stream
 
-    return [binding.original.string.rstrip("\r\n")
-            for binding in parse_stream(StringIO(text))]
+    return [binding.original.string.rstrip("\r\n") for binding in parse_stream(StringIO(text))]
 
 
 def set_env_values(

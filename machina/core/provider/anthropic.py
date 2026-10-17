@@ -30,6 +30,7 @@ from machina.core.provider.reasoning import (
 )
 from machina.core.provider.sse import sse_data, sse_event
 from machina.core.provider.transport import (
+    ReservationSettlement,
     _log_prompt_cache_breakpoints,
     _post_with_retry,
     _prompt_cache_breakpoints_enabled,
@@ -296,19 +297,21 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
                 tools or [],
                 payload["max_tokens"],
             )
+        settlement = ReservationSettlement(reservation_id, usage_store)
 
         start = time.monotonic()
         try:
             resp = await _post_with_retry(self.client, "/v1/messages", payload)
             resp.raise_for_status()
             data = resp.json()
-        except Exception as e:
+        except BaseException as e:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_llm_call(
                 session_id="", model=model, duration_ms=duration_ms, is_error=True
             )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+            await settlement.fail()
+            if not isinstance(e, Exception):
+                raise
             audit_log("llm_call_error", provider=self.PROVIDER_NAME, model=model, error=str(e))
             raise
 
@@ -319,8 +322,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
             metrics.record_llm_call(
                 session_id="", model=model, duration_ms=duration_ms, is_error=True
             )
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+            await settlement.fail()
             audit_log(
                 "llm_call_error", provider=self.PROVIDER_NAME, model=model, error="no_content"
             )
@@ -335,8 +337,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
         )
-        if reservation_id is not None:
-            await usage_store.finish(reservation_id, usage, model=data.get("model", model))
+        await settlement.settle(usage, model=data.get("model", model))
         audit_log(
             "llm_call_complete",
             provider=self.PROVIDER_NAME,
@@ -399,6 +400,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
                 tools or [],
                 payload["max_tokens"],
             )
+        settlement = ReservationSettlement(reservation_id, usage_store)
 
         text_parts: list[str] = []
         blocks: dict[int, dict[str, Any]] = {}
@@ -509,9 +511,12 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
                     f"Anthropic stream ended without a terminal message_stop event "
                     f"for {resolved_model}"
                 )
-        except Exception as e:
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
+        except BaseException as e:
+            # GeneratorExit/CancelledError bypass ``except Exception``; settle
+            # before re-raising so an early close cannot strand the reservation.
+            await settlement.fail()
+            if not isinstance(e, Exception):
+                raise
             audit_log("llm_stream_error", provider=self.PROVIDER_NAME, model=model, error=str(e))
             raise
 
@@ -548,8 +553,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
         # placeholder in message_start.
         stream_usage["output_tokens"] = output_tokens
         usage = parse_anthropic_usage(stream_usage)
-        if reservation_id is not None:
-            await usage_store.finish(reservation_id, usage, model=resolved_model)
+        await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete",
             provider=self.PROVIDER_NAME,
