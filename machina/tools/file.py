@@ -746,14 +746,19 @@ async def read_file(
             fd = _open_secure_read(file_path, check_base=not outside)
             try:
                 with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
+                    # fdopen owns the descriptor now; the context manager
+                    # closes it on every exit. Clear our copy so the error
+                    # handler cannot close a reused descriptor number.
+                    fd = -1
                     page, shown, total, total_exact = _read_page(
                         f, offset=offset, limit=limit, max_bytes=effective_max, path=path
                     )
             except BaseException:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
                 raise
             if not page:
                 return ""
