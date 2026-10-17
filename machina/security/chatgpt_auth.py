@@ -338,7 +338,7 @@ def import_from_codex(
 
 
 def logout(*, path: str | Path | None = None) -> bool:
-    """Invalidate then remove credentials without waiting on a token refresh."""
+    """Invalidate and remove credentials under the credential publication lock."""
     target = Path(path) if path is not None else auth_path()
     return store_fence.fenced_logout(target)
 

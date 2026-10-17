@@ -15,7 +15,7 @@ import copy
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from machina.core.assembler import get_token_count
@@ -371,7 +371,18 @@ class ContextCompressor:
                     session_id,
                     agent_id,
                     checked_checkpoint,
-                    created_at=max(old_stamps) if old_stamps else None,
+                    created_at=(
+                        max(
+                            old_stamps,
+                            key=lambda stamp: (
+                                stamp.replace(tzinfo=UTC)
+                                if stamp.utcoffset() is None
+                                else stamp.astimezone(UTC)
+                            ),
+                        )
+                        if old_stamps
+                        else None
+                    ),
                 )
             ] + all_compressed
         compressed_tokens = sum(c.token_count for c in all_compressed)

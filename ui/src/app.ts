@@ -2479,7 +2479,7 @@ export class App implements FeatureHost {
 		}
 		// Maximizing chat moves focus to the composer; keep the return shortcut
 		// reachable there. In split mode the composer retains word motion.
-		if (ready && this.workspaceLayout?.effectiveMode === "chat" && matchesKey(data, Key.ctrl("left"))) {
+		if (ready && integration.controller.mode === "chat" && matchesKey(data, Key.ctrl("left"))) {
 			this.workspaceHostSurface?.restoreSplit();
 			return { consume: true };
 		}

@@ -89,3 +89,12 @@ test("F30 read-only and navigation commands remain usable during a turn", () => 
 		assert.equal(guard(input), "allow", input);
 	}
 });
+
+test("settings menus stop first during a turn and are available when idle", () => {
+	for (const input of ["/settings", "/config"]) {
+		assert.equal(guard(input), "stop-first", input);
+		assert.equal(guard(input, false), "allow", input);
+	}
+	assert.equal(guardSubmit({ name: "settings", args: "" }, true), "stop-first");
+	assert.equal(guard("/config list"), "allow");
+});

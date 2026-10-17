@@ -111,10 +111,12 @@ _NEGATORS = frozenset(
     }
 )
 _NEGATION_WINDOW = 2
+_WORD_TOKEN = r"[^\W_]+"
+_SENTENCE_BOUNDARIES = ".!?\r\n"
 
 
 def _content_tokens(text: str) -> list[str]:
-    """Lowercase word tokens with punctuation removed and contractions split.
+    """Lowercase words and sentence boundaries, with contractions split.
 
     ``split()`` alone leaves ``"good."`` / ``"bad,"`` unmatched against the
     sentiment sets and hides ``"isn't"`` from the negator check.
@@ -122,7 +124,7 @@ def _content_tokens(text: str) -> list[str]:
     lowered = text.lower().replace("\u2019", "'")
     lowered = re.sub(r"n't\b", " not", lowered)
     lowered = lowered.replace("cannot", "can not")
-    return re.findall(r"[^\W_]+", lowered, flags=re.UNICODE)
+    return re.findall(_WORD_TOKEN + r"|[.!?\r\n]+", lowered, flags=re.UNICODE)
 
 
 def _fact_pattern(fact: str) -> re.Pattern[str] | None:
@@ -131,11 +133,14 @@ def _fact_pattern(fact: str) -> re.Pattern[str] | None:
     The final word accepts a plural suffix ("API" matches "APIs") without
     enabling arbitrary substring matches.
     """
-    words = [re.escape(part) for part in str(fact).strip().lower().split()]
+    words = [re.escape(part) for part in re.findall(_WORD_TOKEN, str(fact).lower())]
     if not words:
         return None
-    words[-1] = words[-1] + r"(?:s|es)?"
-    return re.compile(r"(?<!\w)" + r"\s+".join(words) + r"(?!\w)", re.UNICODE)
+    if re.search(r"[b-df-hj-np-tv-z]y$", words[-1]):
+        words[-1] = words[-1][:-1] + r"(?:y|ies)"
+    else:
+        words[-1] = words[-1] + r"(?:s|es)?"
+    return re.compile(r"(?<!\w)" + r"[\W_]+".join(words) + r"(?!\w)", re.UNICODE)
 
 
 def _fact_mentioned(fact: str, content_lower: str) -> bool:
@@ -152,11 +157,15 @@ def _sentiment_polarity(tokens: list[str]) -> tuple[bool, bool]:
     """Return ``(has_positive, has_negative)`` with local negation applied."""
     positive = False
     negative = False
+    sentence_start = 0
     for index, word in enumerate(tokens):
+        if word[0] in _SENTENCE_BOUNDARIES:
+            sentence_start = index + 1
+            continue
         polarity = 1 if word in _POSITIVE_WORDS else -1 if word in _NEGATIVE_WORDS else 0
         if polarity == 0:
             continue
-        window = tokens[max(0, index - _NEGATION_WINDOW) : index]
+        window = tokens[max(sentence_start, index - _NEGATION_WINDOW) : index]
         if any(negator in _NEGATORS for negator in window):
             polarity = -polarity
         if polarity > 0:

@@ -239,7 +239,10 @@ test("OAuthProgress sanitizes provider text and stays usable when narrow", async
 	assert.equal(sanitizeStatus("keep  two  spaces"), "keep  two  spaces");
 	assert.equal(sanitizeStatus("a\x1b]0;window title\x07b"), "ab");
 	// C1 CSI (0x9b) is a control even without ESC.
-	assert.equal(sanitizeStatus("a\x9bb"), "ab");
+	assert.equal(sanitizeStatus("a\x9bb"), "a");
+	assert.equal(sanitizeStatus("a\x9b31mb"), "ab");
+	assert.equal(sanitizeStatus("a\x9b?25lb"), "ab");
+	assert.equal(sanitizeStatus("a\x9b1 qz"), "az");
 	const progress = new OAuthProgress("Title\x1b[31m", "Status\x00with\x1bcontrols", {
 		onOpen: () => {},
 		onCancel: () => {},

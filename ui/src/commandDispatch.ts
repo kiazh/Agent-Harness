@@ -48,6 +48,7 @@ export type SubmitGuard = "allow" | "turn-busy" | "stop-first";
  *   (required to unblock a paused turn); `revoke` drops grants mid-turn.
  * - `/growth show` reads; the bare menu or teach/feedback/forget/rollback
  *   write learned state.
+ * - `/settings` and bare `/config` open settings, including the model picker.
  * - `/default-model` (alias `/model`) always picks or sets a model.
  *
  * Aliases are already resolved by `parseCommand`; `splitSub` lowercases the
@@ -59,6 +60,10 @@ function mutatesInFlightSession(command: ParsedCommand): boolean {
 			const [sub] = splitSub(command.args);
 			return sub !== "catalog" && sub !== "list";
 		}
+		case "settings":
+			return true;
+		case "config":
+			return splitSub(command.args)[0] === "";
 		case "default-model":
 			return true;
 		case "provider": {

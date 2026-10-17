@@ -303,9 +303,11 @@ async def providers_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         raise RpcError(INVALID_PARAMS, f"could not save provider ({type(exc).__name__})") from None
     key = store.resolve_provider_key(store.get_provider_entry(name) or entry)
     fetch_error: str | None = None
-    models: list[dict[str, Any]] = []
+    models: list[dict[str, Any]] = list(entry.get("models") or [])
     try:
         pulled = await asyncio.to_thread(store.fetch_models, entry["base_url"], api_key=key)
+        if not pulled and models:
+            raise store.ProviderStoreError("empty model discovery; keeping cached catalog")
         models = await asyncio.to_thread(store.save_models, name, pulled)
     except Exception as exc:
         fetch_error = str(exc) or type(exc).__name__
