@@ -713,6 +713,10 @@ export class CompletionSession {
 			return { ok: false, reason: "stale", message: "the buffer changed after this completion was computed" };
 		}
 		const edits: LspTextEdit[] = [];
+		// Additional edits are staged FIRST so the main completion edit stays the
+		// transaction's primary (caller-order last) and the caret lands after the
+		// inserted completion, not after an auto-import at the top of the file.
+		for (const extra of item.additionalTextEdits) edits.push(copyEdit(extra));
 		if (item.textEdit) {
 			edits.push(copyEdit(item.textEdit));
 		} else {
@@ -721,7 +725,6 @@ export class CompletionSession {
 				newText: item.label,
 			});
 		}
-		for (const extra of item.additionalTextEdits) edits.push(copyEdit(extra));
 		const payload: WorkspaceEditPayload = {
 			label: `Accept ${item.label}`,
 			changes: [{ uri: this.uriValue, version: this.capturedVersionValue, edits }],

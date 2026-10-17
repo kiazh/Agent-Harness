@@ -39,6 +39,8 @@ class FakeTUI implements TUI {
 	children: Component[] = [];
 	focused: Component | null = null;
 	overlay: OverlayHandle | undefined;
+	/** Last overlay component passed to showOverlay (dialog render assertions). */
+	overlayComponent: Component | undefined;
 	inputListeners: Array<(data: string) => void> = [];
 	started = false;
 	stopped = false;
@@ -61,6 +63,7 @@ class FakeTUI implements TUI {
 		this.focused = c;
 	}
 	showOverlay(_c: Component): OverlayHandle {
+		this.overlayComponent = _c;
 		const handle: OverlayHandle = {
 			hide: () => {
 				if (this.overlay === handle) this.overlay = undefined;
@@ -224,7 +227,7 @@ interface Integration {
 		documents(): Array<{ id: string; uri: string; dirty: boolean }>;
 	};
 	tabs: { activeDocumentId(): string | null; count(): number };
-	pane: { handleIntelligenceKey(data: string): string; render(width: number): string[] };
+	pane: { handleIntelligenceKey(data: string): string; render(width: number): string[]; invalidate(): void };
 	view: { setView(state: unknown): void };
 }
 
@@ -236,10 +239,15 @@ interface Internals {
 	completionSession?: CompletionSession;
 	quickOpenPane?: unknown;
 	exiting: boolean;
-	editor: object;
+	editor: Component;
 	dialogs: Array<{ cancel(): void }>;
 	openWorkspacePath(path: string, options?: { preview?: boolean }): Promise<void>;
 	noteRegionFocus(region: string): void;
+	workspaceGeneration: number;
+	isWorkspaceCurrent(gen: number): boolean;
+	switchWorkspaceRoot(path: string): Promise<{ ok: boolean; message: string }>;
+	closeWorkspaceTab(documentId: string): Promise<void>;
+	pick: (title: string, items: SelectItem[]) => Promise<SelectItem | undefined>;
 }
 
 function internals(app: App): Internals {
@@ -478,12 +486,14 @@ test("a completion popup never consumes keys after the composer takes focus", as
 	await settle();
 	assert.ok(internals(app).completionSession, "the list is open on the editor");
 
-	// The mouse focus seam retargets the composer without a keyboard cycle.
-	internals(app).noteRegionFocus("chat-composer");
-	assert.equal(internals(app).activeRegion, "chat-composer");
+	// Focus moved without the region seam (an overlay restore, a mouse path):
+	// the TUI now targets the composer while activeRegion still says editor.
+	tui.setFocus(internals(app).editor);
 	tui.press(ENTER);
-	assert.ok(internals(app).completionSession, "the stale popup did not eat Enter outside its region");
-	assert.equal(integration.store.getDocument(documentId)?.text, "hello\n", "nothing was applied");
+	await settle();
+	assert.equal(internals(app).activeRegion, "chat-composer", "the region was reconciled from real focus");
+	assert.equal(internals(app).completionSession, undefined, "the orphaned editor popup was unmounted");
+	assert.equal(integration.store.getDocument(documentId)?.text, "hello\n", "nothing was applied by the stale popup");
 	await app.exit();
 });
 
@@ -573,6 +583,59 @@ test("a completion click selects the clicked row in the machine before accepting
 	await app.exit();
 });
 
+// ─── finding 5b: a windowed click maps to the presented row ────────────────
+
+test("a click on a scrolled completion window accepts that row, not the first item", async () => {
+	const { app, tui, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const { integration, documentId } = await openEditorFile(app);
+	const items = Array.from({ length: 10 }, (_, index) => ({
+		label: `item-${index}`,
+		textEdit: { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: `item-${index}` },
+	}));
+	client.handlers.set("workspace.intelligence", (params) => ({
+		workspaceId: "ws1",
+		source: "editor-buffer",
+		uri: params.uri,
+		documentVersion: params.version,
+		serverGeneration: 1,
+		workspaceEpoch: 1,
+		operation: params.operation,
+		state: "ready",
+		freshness: "versioned",
+		truncated: false,
+		result: { items },
+	}));
+	tui.press(CTRL_SPACE);
+	await settle();
+	const popup = (app as unknown as { completionPopup?: { moveSelection(delta: number): number; handleMouse(event: unknown): unknown } }).completionPopup;
+	assert.ok(popup, "the popup is wired");
+	popup.moveSelection(9); // window scrolls: presented rows are 3..9
+	popup.handleMouse({
+		type: "click",
+		button: "left",
+		x: 0,
+		y: 2, // the third presented row == item index 5
+		screenX: 0,
+		screenY: 2,
+		width: 80,
+		height: 10,
+		shift: false,
+		alt: false,
+		ctrl: false,
+	});
+	await settle();
+	assert.equal(internals(app).completionSession, undefined, "the click accepted");
+	assert.equal(
+		integration.store.getDocument(documentId)?.text,
+		"item-5hello\n",
+		"the clicked row was applied, not the first item",
+	);
+	scriptPicks(app, ["discard"]);
+	await app.exit();
+});
+
 // ─── finding 7: save-and-close survives a save conflict ────────────────────
 
 test("save-and-close finishes after a conflict is overwritten", async () => {
@@ -599,6 +662,160 @@ test("save-and-close finishes after a conflict is overwritten", async () => {
 	assert.equal(saves, 2, "the conflict was overwritten explicitly");
 	assert.equal(integration.tabs.count(), 0, "the user's close request survived the detour");
 	assert.equal(integration.store.getDocument(documentId), undefined, "the buffer was released");
+	await app.exit();
+});
+
+// ─── focus reconciliation across a pane unmount ─────────────────────────────
+
+test("a hidden editor cannot keep keys: drift is reconciled before Ctrl+S saves", async () => {
+	const { app, tui, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const { integration, documentId } = await openEditorFile(app);
+	integration.store.insertText(documentId, "dirty");
+	assert.equal(integration.store.getDocument(documentId)?.dirty, true);
+
+	tui.press(CtrlRight); // editor-scoped: maximize chat, unmount the pane
+	assert.equal(internals(app).workspaceLayout?.editor, undefined);
+
+	// Two independent drift sources: the TUI still targets the removed pane,
+	// and a late mouse seam reports the now-invisible editor region.
+	tui.setFocus(integration.pane);
+	internals(app).noteRegionFocus("editor");
+	assert.equal(internals(app).activeRegion, "chat-composer", "an invisible region is clamped immediately");
+
+	const savesBefore = client.requests.filter((entry) => entry.method === "workspace.save").length;
+	tui.press("\x13"); // Ctrl+S
+	await settle();
+	assert.equal(internals(app).activeRegion, "chat-composer");
+	assert.equal(tui.focused, internals(app).editor, "keys were handed to the composer, not the dead pane");
+	assert.equal(
+		client.requests.filter((entry) => entry.method === "workspace.save").length,
+		savesBefore,
+		"Ctrl+S in the composer never saves the hidden buffer",
+	);
+	// The buffer is (intentionally) still dirty; answer the quit review.
+	scriptPicks(app, ["discard"]);
+	await app.exit();
+});
+
+// ─── save-conflict continuations survive (and are fenced) ───────────────────
+
+test("save-all-and-exit continues after a conflict is overwritten", async () => {
+	const { app, tui, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const { integration, documentId } = await openEditorFile(app);
+	integration.store.insertText(documentId, "dirty");
+
+	let saves = 0;
+	client.handlers.set("workspace.save", () => {
+		saves += 1;
+		if (saves === 1) {
+			return { conflict: { diskRevision: "rev-2", baseRevision: "rev-1", reason: "disk changed" } };
+		}
+		return { ok: true, revision: "rev-3" };
+	});
+	scriptPicks(app, ["save", "overwrite-explicit"]);
+
+	await app.exit();
+	assert.equal(saves, 2, "the conflict was overwritten explicitly");
+	assert.equal(tui.stopped, true, "the requested exit completed after the detour");
+});
+
+test("a root switch retires a parked dirty-close conflict (no stale write)", async () => {
+	const { app, tui, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const { integration, documentId } = await openEditorFile(app);
+	integration.store.insertText(documentId, "dirty");
+
+	let saves = 0;
+	client.handlers.set("workspace.save", () => {
+		saves += 1;
+		if (saves === 1) {
+			return { conflict: { diskRevision: "rev-2", baseRevision: "rev-1", reason: "disk changed" } };
+		}
+		return { ok: true, revision: "rev-3" };
+	});
+	let releaseConflict: (() => void) | undefined;
+	const answers: Array<string | undefined> = ["save"];
+	internals(app).pick = async () => {
+		const next = answers.shift();
+		if (next !== undefined) return { value: next, label: next };
+		return new Promise<SelectItem | undefined>((resolve) => {
+			releaseConflict = () => resolve({ value: "overwrite-explicit", label: "Overwrite" });
+		});
+	};
+
+	tui.press(CTRL_W);
+	await settle();
+	await settle();
+	assert.equal(saves, 1, "the first save hit the conflict");
+	assert.ok(releaseConflict, "the conflict picker is parked");
+
+	await internals(app).switchWorkspaceRoot("/other");
+	assert.ok(internals(app).workspaceGeneration >= 2, "the switch became the live lifecycle entry");
+	releaseConflict!();
+	await settle();
+	await settle();
+	assert.equal(saves, 1, "the retired close never wrote into the successor workspace");
+	// The dirty buffer is retained across the switch; answer the quit review.
+	scriptPicks(app, ["discard"]);
+	await app.exit();
+});
+
+// ─── background restore focus ──────────────────────────────────────────────
+
+test("a background restore opens remembered files without stealing composer focus", async () => {
+	const { app, tui, client } = makeApp();
+	const state = JSON.stringify({
+		version: 1,
+		byRoot: {
+			"/ws": {
+				version: 1,
+				requestedMode: "split",
+				splitRatio: 0.5,
+				explorerRequested: false,
+				openUris: ["file:///ws/remembered.ts"],
+				activeUri: "file:///ws/remembered.ts",
+			},
+		},
+	});
+	client.handlers.set("config.get", () => ({
+		config: { nowplaying_enabled: false, workspace_ui_state: state },
+		secrets: [],
+	}));
+	await app.start();
+	await waitForWorkspace(app);
+	await settle();
+	const integration = internals(app).integration!;
+	assert.equal(integration.tabs.count(), 1, "the remembered file reopened");
+	assert.equal(internals(app).activeRegion, "chat-composer", "the composer still owns the region");
+	assert.equal(tui.focused, internals(app).editor, "the restored tab never steals focus");
+	await app.exit();
+});
+
+// ─── dialog chrome sanitization ─────────────────────────────────────────────
+
+test("a hostile dialog title cannot carry bidi/controls into the rendered menu", async () => {
+	const { app, tui } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const hostile = "\u202Eevil\u0007\u001b]0;owned\u001b\\";
+	const pending = internals(app).pick(`Save ${hostile}.py`, [
+		{ value: "ok", label: `row ${hostile}`, description: `desc ${hostile}\x1b[31mred` },
+	]);
+	await settle();
+	const overlay = tui.overlayComponent;
+	assert.ok(overlay, "the dialog rendered");
+	const rendered = overlay.render(80).join("\n");
+	assert.ok(!/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(rendered), "no bidi/isolate control survives");
+	assert.ok(!rendered.includes("\x07"), "no BEL survives");
+	assert.ok(!rendered.includes("[31m"), "an SGR payload in a label is stripped, not painted");
+	assert.match(rendered, /Save evil/, "the honest visible title remains");
+	internals(app).dialogs[0]!.cancel();
+	await pending;
 	await app.exit();
 });
 

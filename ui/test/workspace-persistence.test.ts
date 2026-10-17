@@ -278,3 +278,51 @@ test("small documents under the byte bound keep every root", async () => {
 	for (let index = 0; index < 5; index++) await persistence.save(`/ws/small-${String(index)}`, fullState());
 	assert.equal(Object.keys(byRootOf(store)).length, 5, "no spurious eviction for a small document");
 });
+
+test("an oversized current entry is compacted into the byte budget, keeping layout intent", async () => {
+	const store = new MemoryStore();
+	const persistence = new WorkspacePersistence(store);
+	const huge = (): WorkspacePersistedState => ({
+		version: 1,
+		requestedMode: "editor",
+		splitRatio: 0.62,
+		explorerRequested: true,
+		explorerWidth: 32,
+		openUris: Array.from({ length: 100 }, (_, index) => `file:///ws/${index}-${"u".repeat(4000)}`),
+		activeUri: "file:///ws/active.ts",
+		cursorByUri: Object.fromEntries(
+			Array.from({ length: 100 }, (_, index) => [`file:///ws/${index}-${"c".repeat(100)}`, { offset: index }]),
+		),
+	});
+	await persistence.save("/ws/oversized", huge());
+	const bytes = new TextEncoder().encode(store.value ?? "").length;
+	assert.ok(bytes < MAX_PERSISTED_DOCUMENT_BYTES, `compaction must fit the backend bound: ${bytes}`);
+	const restored = await persistence.load("/ws/oversized");
+	assert.ok(restored, "the current root is still remembered, not dropped whole");
+	assert.equal(restored.state.requestedMode, "editor", "layout intent survives compaction");
+	assert.equal(restored.state.splitRatio, 0.62);
+	assert.ok(restored.state.openUris.length < 100, "the URI list was compacted to fit");
+	assert.equal(restored.state.cursorByUri, undefined, "cursors are the first thing dropped");
+	// A later normal save still fits and retains this root.
+	await persistence.save("/ws/other", fullState());
+	assert.ok(await persistence.load("/ws/oversized"));
+});
+
+test("an entry that cannot fit even after compaction is dropped with one bounded warning", async () => {
+	const store = new MemoryStore();
+	const warnings: string[] = [];
+	const persistence = new WorkspacePersistence(store, {
+		onWarning: (message) => warnings.push(message),
+	});
+	// A root key alone exceeds the whole 64 KiB document budget.
+	const impossibleRoot = `/${"r".repeat(70 * 1024)}`;
+	await assert.rejects(persistence.save(impossibleRoot, fullState()), /too large to persist/);
+	assert.equal(warnings.length, 1, "exactly one bounded warning");
+	assert.ok(warnings[0]!.length < 300, `warning stays bounded: ${warnings[0]!.length}`);
+	const bytes = new TextEncoder().encode(store.value ?? "").length;
+	assert.ok(bytes < MAX_PERSISTED_DOCUMENT_BYTES, "the wedged entry no longer blocks the document");
+	assert.equal(Object.keys(byRootOf(store)).length, 0);
+	// Saving recovered: the next root persists normally instead of failing forever.
+	await persistence.save("/ws/recovered", fullState());
+	assert.deepEqual(await persistence.load("/ws/recovered"), { state: fullState(), migrated: false });
+});

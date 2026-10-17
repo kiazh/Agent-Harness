@@ -6,8 +6,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { EditorPane, uriDisplayPath } from "../src/components/EditorPane.ts";
+import { EditorPane, displayLanguageName, uriDisplayPath } from "../src/components/EditorPane.ts";
 import { ProblemsPane, formatProblemRow } from "../src/components/ProblemsPane.ts";
+import { hasNoDisplayControls, sanitizeDisplay } from "../src/editor/display.ts";
 import { ProblemsModel } from "../src/editor/intelligence.ts";
 import { EditorStore } from "../src/editor/model.ts";
 import { TabModel } from "../src/editor/tabs.ts";
@@ -126,4 +127,68 @@ test("a percent-encoded newline in a URI flattens to one space in single-line ch
 	}
 	assert.match(stripTerminalSequences(rows[0] ?? ""), /\[a b\.py ✕\]/);
 	assert.match(stripTerminalSequences(rows[1] ?? ""), /\/w\/a b\.py/);
+});
+
+/** Bidi overrides/isolates reorder visible text without printing a byte. */
+const BIDI_CONTROLS_RE = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const BIDI_NAME = "evil\u202Egnp.exe";
+const BIDI_URI = `file:///w/${encodeURIComponent(BIDI_NAME)}`;
+
+test("bidi/isolate controls in a document URI never reorder the tab strip or breadcrumb", () => {
+	const label = uriDisplayPath(BIDI_URI);
+	assert.equal(label, "/w/evilgnp.exe", "the override is stripped, the honest byte order remains");
+	assert.ok(!BIDI_CONTROLS_RE.test(label));
+
+	const pane = setupPane(BIDI_URI);
+	pane.layout(8);
+	const rows = pane.render(80);
+	for (const [name, row] of [["tab strip", rows[0] ?? ""], ["breadcrumb", rows[1] ?? ""]] as const) {
+		assert.ok(!BIDI_CONTROLS_RE.test(row), `${name} carries a bidi/isolate control: ${JSON.stringify(row)}`);
+	}
+	assert.match(stripTerminalSequences(rows[0] ?? ""), /\[evilgnp\.exe ✕\]/);
+	assert.match(stripTerminalSequences(rows[1] ?? ""), /\/w\/evilgnp\.exe/);
+});
+
+test("bidi/isolate controls in a diagnostic URI never reorder the problems path", () => {
+	const model = new ProblemsModel();
+	model.push({ uri: BIDI_URI, version: 1, source: "ts", diagnostics: [
+		{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, severity: 1, message: "boom" },
+	] });
+	const row = model.rows()[0];
+	assert.ok(row);
+	const formatted = formatProblemRow(row);
+	assert.ok(!BIDI_CONTROLS_RE.test(formatted), `formatProblemRow leaks a bidi control: ${JSON.stringify(formatted)}`);
+	assert.equal(formatted, "/w/evilgnp.exe:1:1 ✗ boom (ts)");
+
+	const pane = new ProblemsPane({ model, rowBudget: 3 });
+	for (const line of pane.render(80)) {
+		assert.ok(!BIDI_CONTROLS_RE.test(line), `pane row leaks a bidi control: ${JSON.stringify(line)}`);
+	}
+});
+
+test("chrome helper strips encoded ESC and bidi/isolate controls from one-line labels", () => {
+	// A URI-decoded name carries a live OSC 52 clipboard write + BEL plus a
+	// bidi override: neither may reach a single-line chrome sink.
+	const hostile = decodeURIComponent("evil%1B%5D52%3Bc%3BcHduZWQ%07\u202Egnp.exe");
+	assert.equal(hasNoDisplayControls(hostile), false, "raw hostile label is rejected");
+	assert.equal(sanitizeDisplay(hostile), "evilgnp.exe", "sequence and override removed, order honest");
+	assert.equal(hasNoDisplayControls(sanitizeDisplay(hostile)), true, "sanitized label validates");
+	assert.equal(sanitizeDisplay("\u2066a\u2069\u200E"), "a", "isolates and marks removed");
+	assert.equal(sanitizeDisplay("a\nb\tc"), "a b c", "one physical row, tabs collapse");
+	// Styling is stripped wholesale (not left as literal `[31m` text).
+	assert.equal(sanitizeDisplay("a\x1b[31mred\x1b[0m"), "ared");
+});
+
+test("language/status chrome ignores controls and bidi", () => {
+	assert.equal(displayLanguageName("py\u202Ethon\u001b[31m"), "Python", "control bytes never rename a language");
+
+	const pane = setupPane(CLEAN_URI);
+	pane.setLspStatus("ready\u202E\u0007\x1b]0;owned\x1b\\");
+	pane.layout(8);
+	const rows = pane.render(80);
+	const status = rows.at(-1) ?? "";
+	assert.ok(!BIDI_CONTROLS_RE.test(status), "the status row carries no bidi control");
+	assert.ok(!status.includes("\x07"), "no BEL survives");
+	assert.ok(!status.includes("]0;owned"), "no OSC payload survives");
+	assert.match(stripTerminalSequences(status), /ready/, "the honest LSP state remains");
 });

@@ -172,8 +172,10 @@ export interface SecretFormOptions {
  * frame paints one mask dot per UTF-16 unit (keeping the inherited cursor,
  * paste, undo and navigation math exact). Blank values are rejected in the
  * form unless allowEmpty is set (explicit keyless path: blank submits "");
- * Esc always cancels. References are dropped after submit/cancel as hygiene
- * (no guaranteed memory erasure is claimed).
+ * Esc always cancels. Submit and cancel purge the retained copies: the
+ * reference is dropped and the editor's undo stack, kill ring and paste
+ * buffer are cleared, so the value cannot be resurrected by Ctrl+-,
+ * Ctrl+Y or a later paste (render buffers never saw the raw value).
  */
 export class SecretInput extends Input {
 	override render(width: number): string[] {
@@ -188,9 +190,23 @@ export class SecretInput extends Input {
 		}
 	}
 
-	/** Drop the retained reference (undo history may still hold copies). */
+	/**
+	 * Purge the value and every opaque copy pi-tui retains: the undo stack,
+	 * the kill ring, and the paste buffer. Those fields are private in
+	 * pi-tui's Input, so they are reached through a structural view — without
+	 * the purge, Ctrl+- (undo), Ctrl+W (kill) or a pasted draft could
+	 * resurrect a submitted secret after the form reports success.
+	 */
 	clearSecret(): void {
 		this.setValue("");
+		const privates = this as unknown as {
+			undoStack?: { clear(): void };
+			killRing?: { ring: string[] };
+			pasteBuffer?: string;
+		};
+		privates.undoStack?.clear();
+		if (privates.killRing) privates.killRing.ring.length = 0;
+		privates.pasteBuffer = "";
 	}
 }
 

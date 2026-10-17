@@ -29,7 +29,8 @@ import {
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import { Menu, type MenuOptions, type MenuSectionItem } from "./Menu.ts";
-import { sanitizeDisplay } from "../design/text.ts";
+import { singleLine } from "../design/text.ts";
+import { SHORTCUT_ROWS } from "../design/shortcuts.ts";
 
 /** One searchable command row (built from `SLASH_COMMANDS`). */
 export interface HelpCommandItem {
@@ -96,11 +97,6 @@ export const HELP_QUERY_MAX = 200;
 const SECTION_VALUE = "__section__";
 const COMMAND_PREFIX = "command:";
 const KEY_PREFIX = "key:";
-
-/** Single physical row per label: control sequences stripped, newlines collapse. */
-function singleLine(text: string): string {
-	return sanitizeDisplay(text).replace(/\n/g, " ");
-}
 
 /**
  * Menu whose filter is a tokenized match over an injected haystack. The house
@@ -185,33 +181,12 @@ export function helpMenuCommands(
 }
 
 /**
- * Default keybinding reference rows (the data the `?` menu and the legacy
- * help text carried), grouped by context.
+ * Default keybinding reference rows, grouped by context. Same rows as the
+ * `?`/F1 picker (design/shortcuts.ts); only the picker value is left behind.
  */
-export const HELP_KEYS: readonly HelpKeyItem[] = [
-	{ context: "Composer", label: "Enter — send", description: "Send a message or run a command" },
-	{ context: "Composer", label: "Shift+Enter — new line" },
-	{ context: "Composer", label: "Drop an image / Ctrl+V — paste image", description: "PNG, JPEG, GIF or WebP" },
-	{ context: "Composer", label: "Esc — stop reply", description: "Twice on empty input edits the last prompt" },
-	{ context: "Composer", label: "Ctrl+C — stop / clear / exit", description: "Stop a reply, clear a draft, or exit when empty" },
-	{ context: "Composer", label: "Ctrl+D — exit", description: "When input is empty and idle" },
-	{ context: "Composer", label: "Ctrl+L — clear chat", description: "When idle" },
-	{ context: "Composer", label: "Tab — complete", description: "Commands and arguments" },
-	{ context: "Composer", label: "↓ — subagent menu", description: "On empty input: switch between the main session and its subagents" },
-	{ context: "Composer", label: "Ctrl+Shift+←/→ — switch agents", description: "Cycle the main session and its subagents" },
-	{ context: "Workspace", label: "Ctrl+P — quick open", description: "Fuzzy file search in the workspace" },
-	{ context: "Workspace", label: "Ctrl+S — save file", description: "Save the active editor buffer" },
-	{ context: "Workspace", label: "Ctrl+W — close tab", description: "Close the active editor tab (dirty: save/discard/cancel); the terminal may intercept" },
-	{ context: "Workspace", label: "Ctrl+T — file tree", description: "Toggle the right-edge explorer (/explorer)" },
-	{ context: "Workspace", label: "Ctrl+Space — completion", description: "macOS may steal Ctrl+Space · fallback /editor complete" },
-	{ context: "Workspace", label: "F12 — definition · Shift+F12 — references · F2 — rename", description: "Editor intelligence; /problems lists diagnostics" },
-	{ context: "Workspace", label: "F6 / Shift+F6 — cycle focus", description: "Composer → editor → explorer → problems" },
-	{ context: "Workspace", label: "Ctrl+→ maximize chat · Ctrl+← 50/50 split", description: "Editor focus; the composer keeps Ctrl+←/→ word motion" },
-	{ context: "Workspace", label: "/workspace open <path> — open a folder", description: "Also split|chat|editor|ratio|side|status|close" },
-	{ context: "Global", label: "? / F1 — shortcuts", description: "? on empty input, F1 with a draft" },
-	{ context: "Global", label: "/help — all commands", description: "This menu; /growth shows learning details" },
-	{ context: "Global", label: "□ / ▪ — activity and learning", description: "Pulses while working and briefly when learning is saved" },
-];
+export const HELP_KEYS: readonly HelpKeyItem[] = SHORTCUT_ROWS.map(({ context, label, description }) => (
+	description === undefined ? { context, label } : { context, label, description }
+));
 
 /**
  * Menu-shaped `/help`: keyboard and mouse map to the same actions. The host

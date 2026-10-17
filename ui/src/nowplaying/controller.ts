@@ -39,6 +39,8 @@ export class NowPlayingController {
 	private pollTimer: NodeJS.Timeout | undefined;
 	/** Invalidates in-flight refreshes on disable/stop and orders overlaps. */
 	private seq = 0;
+	/** Orders enable/disable transitions: only the newest mutates visible state. */
+	private transition = 0;
 	/** Reads awaiting a gateway answer; the poll tick skips while this is > 0. */
 	private inFlight = 0;
 	onChange?: () => void;
@@ -52,10 +54,12 @@ export class NowPlayingController {
 
 	/** Load the config gate, take the first reading, and start polling. */
 	async initialize(config: Record<string, unknown>): Promise<void> {
+		const transition = ++this.transition;
 		this.enabled = config.nowplaying_enabled !== false;
 		this.bar.visible = this.enabled;
 		if (this.enabled) {
 			await this.refresh();
+			if (transition !== this.transition) return;
 			this.start();
 		} else {
 			this.sync();
@@ -149,6 +153,10 @@ export class NowPlayingController {
 
 	/** Persist the bar on/off; hiding also drops the stale reading. */
 	async setEnabled(enabled: boolean): Promise<boolean> {
+		// The newest intent wins immediately: an older in-flight transition can
+		// no longer mutate timers, visibility or the cleared reading, and its
+		// (possibly later) write is compensated to the live value below.
+		const transition = ++this.transition;
 		this.enabled = enabled;
 		let saved = true;
 		try {
@@ -160,6 +168,13 @@ export class NowPlayingController {
 		} catch {
 			saved = false;
 		}
+		if (transition !== this.transition) {
+			// A newer transition owns the state. If this stale write landed
+			// last it may have clobbered the persisted gate; re-assert the
+			// newest value (same value as the newest write, so ordering safe).
+			if (saved) void this.persistLiveEnabled();
+			return saved;
+		}
 		if (!enabled) {
 			this.stop();
 			this.seq += 1;
@@ -170,8 +185,25 @@ export class NowPlayingController {
 		}
 		this.bar.visible = true;
 		await this.refresh();
+		if (transition !== this.transition) {
+			if (saved) void this.persistLiveEnabled();
+			return saved;
+		}
 		this.start();
 		return saved;
+	}
+
+	/** Best-effort re-write of the live enabled value after a stale write. */
+	private async persistLiveEnabled(): Promise<void> {
+		try {
+			await this.request("config.set", {
+				key: "nowplaying_enabled",
+				value: this.enabled,
+				persist: true,
+			});
+		} catch {
+			// The UI state is already authoritative; persistence stays best-effort.
+		}
 	}
 
 	private sync(): void {

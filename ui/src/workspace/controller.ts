@@ -356,6 +356,14 @@ export class WorkspaceController {
 	private readonly persistDebounceMs: number;
 
 	private phaseValue: WorkspacePhase = "closed";
+	/**
+	 * Lifecycle generation (contract C3): bumped on open, close, root switch
+	 * and dispose. Async continuations capture it before their first await and
+	 * re-check with `isCurrent` after every await before publishing state.
+	 */
+	private generationValue = 0;
+	/** Close in flight; a concurrent close joins instead of racing it. */
+	private closeInFlight: Promise<void> | undefined;
 	private currentIdentity: WorkspaceOpenResult | undefined;
 	private rootKeyValue: string | undefined;
 	private disposed = false;
@@ -427,6 +435,20 @@ export class WorkspaceController {
 		return this.rootKeyValue;
 	}
 
+	/** Current lifecycle generation (contract C3; read-only seam for callers/tests). */
+	get generation(): number {
+		return this.generationValue;
+	}
+
+	/**
+	 * True while `generation` still names the live lifecycle. A continuation
+	 * that fails this check must publish nothing: no documents, mirrors,
+	 * identity, phase, restore state or persistence.
+	 */
+	isCurrent(generation: number): boolean {
+		return !this.disposed && generation === this.generationValue;
+	}
+
 	/**
 	 * Open a workspace root with an explicit trust decision (default true: the
 	 * app only calls this after the user chose the root). Any previously open
@@ -438,28 +460,51 @@ export class WorkspaceController {
 		options: { trust?: boolean } = {},
 	): Promise<WorkspaceOpenResult | undefined> {
 		if (this.disposed) return undefined;
-		if (this.phaseValue !== "closed") await this.closeWorkspace();
+		// Any in-flight open/read is now superseded, even if no close follows.
+		this.generationValue += 1;
+		if (this.phaseValue !== "closed") {
+			await this.closeWorkspace();
+			// A newer open/close/dispose may have run while the close settled.
+			if (this.disposed) return undefined;
+			if (this.phase === "closing") {
+				// We superseded the in-flight close (our entry bump made its
+				// continuations stale), so it returned before publishing the
+				// local teardown. Its gateway close already completed; finish
+				// the local half so this open can proceed.
+				this.currentIdentity = undefined;
+				this.rootKeyValue = undefined;
+				this.clearPersistTimer();
+				this.phaseValue = "closed";
+			}
+			if (this.phase !== "closed") return undefined;
+		}
 		const trimmed = typeof root === "string" ? root.trim() : "";
 		if (trimmed.length === 0) {
 			this.notifySafe("warning", "a workspace root is required");
 			return undefined;
 		}
+		const generation = ++this.generationValue;
 		this.phaseValue = "opening";
 		let identity: WorkspaceOpenResult;
 		try {
 			identity = await this.gateway.open(trimmed, options.trust ?? true);
 		} catch (error) {
+			if (!this.isCurrent(generation)) return undefined;
 			this.phaseValue = "closed";
 			this.notifySafe("error", `could not open workspace ${trimmed}: ${messageOf(error)}`);
 			return undefined;
 		}
+		// A close/dispose or a newer root switch owned the lifecycle while the
+		// open was in flight: never install the stale identity or phase.
+		if (!this.isCurrent(generation)) return undefined;
 		this.currentIdentity = identity;
 		this.rootKeyValue = identity.resolvedRoot;
 		this.phaseValue = "ready";
 		// Persist the requested mode/ratio under the resolved root immediately,
 		// MERGING with any stored document: a default write here must never
 		// clobber the previous session's open files before restore() reads them.
-		await this.persistLayoutIntent();
+		await this.persistLayoutIntent(generation);
+		if (!this.isCurrent(generation)) return undefined;
 		const trustNote = identity.trusted ? "" : " (untrusted: intelligence disabled)";
 		this.notifySafe("info", `workspace open: ${identity.rootLabel}${trustNote}`);
 		this.requestRenderSafe();
@@ -469,20 +514,35 @@ export class WorkspaceController {
 	/** Retire the remote workspace; local buffers stay (the app decides). */
 	async closeWorkspace(): Promise<void> {
 		if (this.phaseValue === "closed") return;
+		// A concurrent close joins the running one: the second caller must not
+		// race the first's continuations (or close a newer binding).
+		if (this.closeInFlight) return this.closeInFlight;
+		const generation = ++this.generationValue;
 		this.phaseValue = "closing";
-		const closes: Array<Promise<unknown>> = [];
-		for (const state of this.sync.values()) {
-			this.clearSyncTimer(state);
-			closes.push(this.bounded(this.tryDocumentClose(state.uri)));
+		const work = (async () => {
+			const closes: Array<Promise<unknown>> = [];
+			for (const state of this.sync.values()) {
+				this.clearSyncTimer(state);
+				closes.push(this.bounded(this.tryDocumentClose(state.uri)));
+			}
+			await Promise.allSettled(closes);
+			this.sync.clear();
+			await this.bounded(this.tryGatewayClose());
+			// A dispose (or a newer lifecycle) superseded this close while the
+			// gateway was settling: it owns the published state from here on.
+			if (!this.isCurrent(generation)) return;
+			this.currentIdentity = undefined;
+			this.rootKeyValue = undefined;
+			this.clearPersistTimer();
+			this.phaseValue = "closed";
+			this.requestRenderSafe();
+		})();
+		this.closeInFlight = work;
+		try {
+			await work;
+		} finally {
+			if (this.closeInFlight === work) this.closeInFlight = undefined;
 		}
-		await Promise.allSettled(closes);
-		this.sync.clear();
-		await this.bounded(this.tryGatewayClose());
-		this.currentIdentity = undefined;
-		this.rootKeyValue = undefined;
-		this.clearPersistTimer();
-		this.phaseValue = "closed";
-		this.requestRenderSafe();
 	}
 
 	/**
@@ -492,6 +552,7 @@ export class WorkspaceController {
 	async dispose(): Promise<void> {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.generationValue += 1;
 		this.clearPersistTimer();
 		const uris: string[] = [];
 		for (const [documentId, state] of this.sync) {
@@ -502,6 +563,7 @@ export class WorkspaceController {
 		await Promise.allSettled(uris.map((uri) => this.bounded(this.tryDocumentClose(uri))));
 		await this.bounded(this.tryGatewayClose());
 		this.currentIdentity = undefined;
+		this.rootKeyValue = undefined;
 		this.phaseValue = "closed";
 	}
 
@@ -612,6 +674,7 @@ export class WorkspaceController {
 	 * explicit (non-preview) open pins an existing preview tab.
 	 */
 	async openUri(uri: string, options: OpenUriOptions = {}): Promise<OpenUriOutcome> {
+		const generation = this.generationValue;
 		const identity = this.currentIdentity;
 		if (this.phaseValue !== "ready" || !identity) {
 			if (options.quiet !== true) this.notifySafe("warning", "open a workspace before opening files");
@@ -631,6 +694,11 @@ export class WorkspaceController {
 		let read: WorkspaceReadResult | undefined;
 		try {
 			const result = await this.gateway.read(uri);
+			// The workspace may have closed or switched while the read was in
+			// flight: a stale completion publishes nothing (contract C3).
+			if (!this.ownsDocumentLifetime(generation, identity)) {
+				return { status: "no-workspace", uri };
+			}
 			if (isWorkspaceRefusal(result)) {
 				if (options.quiet !== true) {
 					this.notifySafe("warning", `${displayName(uri)}: ${result.refused.message}`);
@@ -639,6 +707,7 @@ export class WorkspaceController {
 			}
 			read = result;
 		} catch (error) {
+			if (!this.isCurrent(generation)) return { status: "no-workspace", uri };
 			if (options.quiet !== true) this.notifySafe("error", `could not read ${displayName(uri)}: ${messageOf(error)}`);
 			return { status: "failed", uri, message: messageOf(error) };
 		}
@@ -661,7 +730,16 @@ export class WorkspaceController {
 			this.store.closeDocument(document.id);
 			return { status: "failed", uri: read.uri, message: tab.error.message };
 		}
-		if (tab.replacedDocumentId) await this.evictReplaced(tab.replacedDocumentId);
+		if (tab.replacedDocumentId) {
+			await this.evictReplaced(tab.replacedDocumentId);
+			if (!this.ownsDocumentLifetime(generation, identity)) {
+				// A close/switch interleaved while the replaced preview retired:
+				// roll the just-published buffer/tab back instead of leaking it.
+				this.tabs.close(document.id);
+				this.store.closeDocument(document.id);
+				return { status: "no-workspace", uri };
+			}
+		}
 
 		const state: DocumentSyncState = {
 			uri: document.uri,
@@ -677,6 +755,13 @@ export class WorkspaceController {
 		};
 		this.sync.set(document.id, state);
 		await this.syncDocumentOpen(document, state, options.quiet === true);
+		if (!this.ownsDocumentLifetime(generation, identity)) {
+			// Do not issue a documentClose here: the binding may already point at
+			// a newer workspace, and the old remote workspace was retired by the
+			// close/switch that superseded this read.
+			this.retireDocument(document.id);
+			return { status: "no-workspace", uri };
+		}
 
 		if (read.readOnly && options.quiet !== true) {
 			this.notifySafe("warning", `${displayName(document.uri)} opened read-only`);
@@ -1044,13 +1129,16 @@ export class WorkspaceController {
 	 * Best-effort: failures notify once and never block editing or chat.
 	 */
 	async persist(): Promise<WorkspacePersistedState | undefined> {
+		const generation = this.generationValue;
 		const rootKey = this.rootKeyValue;
 		if (!rootKey) return undefined;
 		const state = this.buildPersistedState();
 		try {
 			await this.persistence.save(rootKey, state);
+			if (!this.isCurrent(generation)) return state;
 			this.persistFailureNotified = false;
 		} catch (error) {
+			if (!this.isCurrent(generation)) return state;
 			if (!this.persistFailureNotified) {
 				this.persistFailureNotified = true;
 				this.notifySafe("warning", `workspace state could not be saved: ${messageOf(error)}`);
@@ -1065,11 +1153,14 @@ export class WorkspaceController {
 	 * state: a full `persist()` here would replace the previous session's
 	 * open-file metadata with the current (empty) tab set.
 	 */
-	private async persistLayoutIntent(): Promise<void> {
+	private async persistLayoutIntent(generation: number): Promise<void> {
 		const rootKey = this.rootKeyValue;
 		if (!rootKey) return;
 		try {
 			const existing = await this.persistence.load(rootKey);
+			// A close/switch superseded the open while the stored document loaded:
+			// writing now would resurrect intent for a lifetime that no longer owns it.
+			if (!this.isCurrent(generation)) return;
 			const base = existing ?? this.buildPersistedState();
 			await this.persistence.save(rootKey, {
 				...base,
@@ -1078,8 +1169,10 @@ export class WorkspaceController {
 				explorerRequested: this.explorerRequested,
 				chatSide: this.chatSideValue,
 			});
+			if (!this.isCurrent(generation)) return;
 			this.persistFailureNotified = false;
 		} catch (error) {
+			if (!this.isCurrent(generation)) return;
 			if (!this.persistFailureNotified) {
 				this.persistFailureNotified = true;
 				this.notifySafe("warning", `workspace state could not be saved: ${messageOf(error)}`);
@@ -1089,8 +1182,10 @@ export class WorkspaceController {
 
 	/** Load the stored state for a root; undefined when absent or unreadable. */
 	async restore(rootKey: string): Promise<WorkspacePersistedState | undefined> {
+		const generation = this.generationValue;
 		try {
-			return await this.persistence.load(rootKey);
+			const state = await this.persistence.load(rootKey);
+			return this.isCurrent(generation) ? state : undefined;
 		} catch {
 			return undefined;
 		}
@@ -1114,16 +1209,19 @@ export class WorkspaceController {
 	 * (`applyRestoredLayout`).
 	 */
 	async reopenRecent(state: WorkspacePersistedState): Promise<{ opened: number; skipped: number }> {
+		const generation = this.generationValue;
 		const uris = Array.isArray(state.openUris) ? state.openUris.slice(0, WORKSPACE_REOPEN_LIMIT) : [];
 		if (this.phaseValue !== "ready") return { opened: 0, skipped: uris.length };
 		let opened = 0;
 		let skipped = 0;
 		for (const uri of uris) {
+			if (!this.isCurrent(generation)) return { opened, skipped: uris.length - opened };
 			// Restoring remembered files must not steal focus from the composer.
 			const outcome = await this.openUri(uri, { quiet: true, focus: false });
 			if (outcome.status === "opened" || outcome.status === "focused") opened += 1;
 			else skipped += 1;
 		}
+		if (!this.isCurrent(generation)) return { opened, skipped };
 		if (typeof state.activeUri === "string") {
 			const active = this.findDocumentByUri(state.activeUri);
 			if (active) this.tabs.setActive(active.id);
@@ -1186,6 +1284,14 @@ export class WorkspaceController {
 	}
 
 	// ─── internals: documents ───────────────────────────────────────────────
+
+	/**
+	 * A document read belongs to the open lifetime it started in: same
+	 * generation, still ready, and bound to the same workspace identity.
+	 */
+	private ownsDocumentLifetime(generation: number, identity: WorkspaceOpenResult): boolean {
+		return this.isCurrent(generation) && this.phaseValue === "ready" && this.currentIdentity === identity;
+	}
 
 	private findDocumentByUri(uri: string): DocumentRecord | undefined {
 		for (const document of this.store.documents()) {

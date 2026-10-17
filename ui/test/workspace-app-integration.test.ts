@@ -263,6 +263,11 @@ async function settle(times = 40): Promise<void> {
 	for (let index = 0; index < times; index++) await new Promise((resolve) => setImmediate(resolve));
 }
 
+/** Real-time wait for debounce windows (the pane timers are not mockable). */
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Spy on transcript notices without touching the rendering path. */
 function captureNotices(app: App): Array<{ text: string; kind: unknown }> {
 	const notices: Array<{ text: string; kind: unknown }> = [];
@@ -278,7 +283,7 @@ function captureNotices(app: App): Array<{ text: string; kind: unknown }> {
 /** Internal handles the production wiring owns (read-only test access). */
 function internals(app: App): {
 	integration?: {
-		controller: { phase: string; identity?: { workspaceId: string }; getLayoutInput(): { requestedMode: string; explorerRequested: boolean; splitRatio: number; preferredPane: string; chatSide?: string }; mode: string; chatSide: string; setRatio(ratio: number): void; setChatSide(side: "left" | "right"): void; lspStatus(): Promise<unknown> };
+		controller: { phase: string; identity?: { workspaceId: string; resolvedRoot: string }; getLayoutInput(): { requestedMode: string; explorerRequested: boolean; splitRatio: number; preferredPane: string; chatSide?: string }; mode: string; chatSide: string; setRatio(ratio: number): void; setChatSide(side: "left" | "right"): void; lspStatus(): Promise<unknown>; generation: number; isCurrent(generation: number): boolean; closeWorkspace(): Promise<void> };
 		store: { documents(): Array<{ id: string; uri: string; dirty: boolean }>; insertText(id: string, text: string): unknown; setSelection(id: string, selection: { cursorOffset: number }): unknown; getViewState(id: string): { cursorOffset: number } | undefined; applyEdit(id: string, edits: Array<{ range: { startOffset: number; endOffset: number }; text: string }>): unknown };
 		tabs: { activeDocumentId(): string | null; count(): number; list(): Array<{ documentId: string }> };
 		view: { focused: boolean; setView(state: unknown): void };
@@ -302,6 +307,15 @@ function internals(app: App): {
 	editor: object;
 	shell: { onWorkspaceExplorerToggle?: () => void };
 	openWorkspacePath(path: string, options?: { preview?: boolean }): Promise<void>;
+	/** Roots switch through the same `/workspace open` entry point. */
+	switchWorkspaceRoot(path: string): Promise<{ ok: boolean; message: string }>;
+	// MCH-012 seam: the app-local workspace fence (bumped per entry into an
+	// open/switch/close path; `isWorkspaceCurrent` is the single test point for
+	// the controller-side generation go-live).
+	workspaceGeneration: number;
+	isWorkspaceCurrent(gen: number): boolean;
+	/** C3: capture the authoritative fence (app epoch + controller generation). */
+	captureWorkspaceFence(): number;
 } {
 	return app as unknown as ReturnType<typeof internals>;
 }
@@ -1060,6 +1074,142 @@ test("Ctrl+P opens the Quick Open overlay, Enter opens the file, Esc closes it",
 	await settle();
 	assert.equal(internals(app).quickOpenPane, undefined, "Esc closes the overlay");
 	assert.equal(internals(app).exiting, false);
+	await app.exit();
+});
+
+test("P0-20 opening a file from Quick Open kills its pending provider request (no late RPC)", async () => {
+	const { app, tui, client } = makeApp();
+	client.responses.set("workspace.quickOpen", {
+		entries: [{ path: "src/a.ts", name: "a.ts", directory: "src" }],
+		total: 1,
+		truncated: false,
+		reasons: [],
+		indexing: false,
+		scanned: 1,
+		stale: false,
+		workspaceEpoch: 1,
+		exclusions: [],
+	});
+	await app.start();
+	await waitForWorkspace(app);
+	tui.press("\x10");
+	assert.ok(internals(app).quickOpenPane, "overlay opened");
+	await settle();
+	const pane = internals(app).quickOpenPane as { handleInput(data: string): void };
+	pane.handleInput("at"); // schedules a debounced provider request (query "at")
+	pane.handleInput("\r"); // Enter immediately: onOpen → closeQuickOpen
+	await settle();
+	assert.equal(internals(app).quickOpenPane, undefined, "overlay closed on open");
+	await delay(180); // the full debounce window elapses
+	const late = client.requests.filter(
+		(entry) => entry.method === "workspace.quickOpen" && String(entry.params.query ?? "") === "at",
+	);
+	assert.equal(late.length, 0, "a chosen overlay leaves no pending provider request behind");
+	await app.exit();
+});
+
+test("P0-20 exit tears down an open Quick Open overlay with no late provider request", async () => {
+	const { app, tui, client } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	tui.press("\x10");
+	assert.ok(internals(app).quickOpenPane);
+	await settle();
+	const pane = internals(app).quickOpenPane as { handleInput(data: string): void };
+	pane.handleInput("b"); // debounce pending for query "b"
+	await app.exit();
+	assert.equal(internals(app).quickOpenPane, undefined, "exit closed the Quick Open overlay");
+	await delay(180);
+	const late = client.requests.filter(
+		(entry) => entry.method === "workspace.quickOpen" && String(entry.params.query ?? "") === "b",
+	);
+	assert.equal(late.length, 0, "and no late provider request runs after it");
+});
+
+test("MCH-012 a superseded workspace open never republishes its stale shell state", async () => {
+	const { app, client } = makeApp();
+	// The FIRST workspace.open (the boot open) is parked; the live root switch
+	// completes while it is still in flight. When the parked call finally
+	// resolves, the fenced app continuation must drop it: publishing it would
+	// repoint the pane at the previous root.
+	let openCalls = 0;
+	let releaseGate: () => void = () => {};
+	const gated = new Promise<Record<string, unknown>>((resolve) => {
+		releaseGate = () => resolve(workspaceIdentity());
+	});
+	client.handlers.set("workspace.open", () => {
+		openCalls += 1;
+		if (openCalls === 1) return gated;
+		return {
+			...workspaceIdentity(),
+			workspaceId: "ws2",
+			clientId: "cl2",
+			epoch: 2,
+			rootLabel: "other",
+			resolvedRoot: "/other",
+		};
+	});
+	await app.start();
+
+	// Seam check: the fence accessor exists and is generation-true.
+	const generation = internals(app).workspaceGeneration;
+	assert.ok(generation >= 1, "the background open bumped the workspace generation");
+	assert.equal(internals(app).isWorkspaceCurrent(generation), true, "the live generation is current");
+	assert.equal(internals(app).isWorkspaceCurrent(0), false, "a pre-open generation is not current");
+
+	// Switch the root while the boot open is parked.
+	const printed: string[] = [];
+	(app as unknown as { print(text: string): void }).print = (text: string) => printed.push(text);
+	await runCommand({ name: "workspace", args: "open /other" }, app);
+	assert.equal(openCalls, 2, "the switch issued its own open");
+	assert.equal(
+		internals(app).integration!.controller.identity?.resolvedRoot,
+		"/other",
+		"the live switch published the new root",
+	);
+
+	// The parked stale open resolves late: the fence must swallow it.
+	releaseGate();
+	await delay(120);
+	await settle();
+	const pane = internals(app).integration!.pane as unknown as { workspaceRoot?: string };
+	assert.equal(pane.workspaceRoot, "/other", "the stale continuation never republished the old root");
+	assert.equal(internals(app).exiting, false, "the app stays usable");
+	await app.exit();
+});
+
+test("contract C3 one fence: a continuation captured in workspace A cannot publish after switching to B", async () => {
+	const { app } = makeApp();
+	await app.start();
+	await waitForWorkspace(app);
+	const integration = internals(app).integration!;
+
+	// A save/continuation captures the fence before its await.
+	const fence = internals(app).captureWorkspaceFence();
+	const generationInA = integration.controller.generation;
+	assert.equal(internals(app).isWorkspaceCurrent(fence), true, "captured in the live workspace");
+
+	// Switching roots advances BOTH sources: the app epoch and the controller.
+	await internals(app).switchWorkspaceRoot("/other");
+	assert.notEqual(internals(app).workspaceGeneration, fence, "the app source moved");
+	assert.equal(integration.controller.isCurrent(generationInA), false, "the controller source moved");
+
+	// A save that was parked in A resolves after the switch: its publish step
+	// is denied (the fence requires both sources to agree).
+	let published = false;
+	await Promise.resolve("saved").then(() => {
+		if (internals(app).isWorkspaceCurrent(fence)) published = true;
+	});
+	assert.equal(published, false, "a save captured in A publishes nothing in B");
+
+	// A controller-only lifecycle advance (no app epoch bump) also denies: the
+	// fence is not app-local, so the controller source alone is authoritative.
+	const controllerOnlyFence = internals(app).captureWorkspaceFence();
+	const epoch = internals(app).workspaceGeneration;
+	await integration.controller.closeWorkspace();
+	assert.equal(internals(app).workspaceGeneration, epoch, "the app epoch did not move");
+	assert.equal(internals(app).isWorkspaceCurrent(controllerOnlyFence), false, "the controller source denies");
+
 	await app.exit();
 });
 

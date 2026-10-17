@@ -28,7 +28,8 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { ICONS } from "../design/icons.ts";
-import { sanitizeDisplay, truncateDisplay } from "../design/text.ts";
+import { truncateDisplay } from "../design/text.ts";
+import { sanitizeDisplay } from "./display.ts";
 import { selectionBar, surfaceLine, theme } from "../theme.ts";
 import type {
 	WorkspaceQuickOpenEntry,
@@ -75,11 +76,6 @@ const DEFAULT_MAX_VISIBLE = 10;
 const DEFAULT_DEBOUNCE_MS = 120;
 /** Mirrors the backend `workspace.quickOpen` query bound (MAX_QUICK_OPEN_QUERY_CHARS). */
 export const QUICK_OPEN_QUERY_MAX = 200;
-
-/** Single physical row per name: control sequences stripped, newlines collapse. */
-function singleLine(text: string): string {
-	return sanitizeDisplay(text).replace(/\n/g, " ");
-}
 
 /**
  * Fuzzy subsequence containment for the local as-you-type filter
@@ -213,11 +209,6 @@ export class QuickOpenPane implements Component {
 		};
 	}
 
-	/** Effective visible-row budget (constructor option; clamped to >= 1). */
-	getMaxVisible(): number {
-		return this.maxVisible;
-	}
-
 	invalidate(): void {}
 
 	render(width: number): string[] {
@@ -316,7 +307,7 @@ export class QuickOpenPane implements Component {
 		} catch (error) {
 			if (seq !== this.requestSeq) return;
 			this.status = "error";
-			this.errorText = singleLine(error instanceof Error ? error.message : String(error));
+			this.errorText = sanitizeDisplay(error instanceof Error ? error.message : String(error));
 			this.emit();
 		}
 	}
@@ -332,7 +323,7 @@ export class QuickOpenPane implements Component {
 		this.exclusions = Array.isArray(result.exclusions) ? result.exclusions : [];
 		this.status = result.refused ? "error" : "ready";
 		if (result.refused) {
-			this.errorText = singleLine(result.refused.message || result.refused.reason);
+			this.errorText = sanitizeDisplay(result.refused.message || result.refused.reason);
 		}
 		this.reconcileSelection();
 		this.emit();
@@ -451,15 +442,15 @@ export class QuickOpenPane implements Component {
 			case "header": {
 				// Finding 10: `Go to file: main` — a colon join, not a fragment.
 				const query = row.query
-					? theme.text(singleLine(row.query))
+					? theme.text(sanitizeDisplay(row.query))
 					: theme.dim("type to search");
 				return `${theme.accentBold(`${this.title}:`)} ${query}`;
 			}
 			case "entry": {
 				const prefix = row.selected ? SELECTED_PREFIX : PLAIN_PREFIX;
-				const name = theme.bold(singleLine(row.entry.name));
+				const name = theme.bold(sanitizeDisplay(row.entry.name));
 				const directory = row.entry.directory
-					? `  ${theme.dim(`${singleLine(row.entry.directory)}/`)}`
+					? `  ${theme.dim(`${sanitizeDisplay(row.entry.directory)}/`)}`
 					: "";
 				return `${prefix}${name}${directory}`;
 			}

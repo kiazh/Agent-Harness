@@ -19,39 +19,6 @@ export type SemanticSlotName =
 
 export type SemanticPalette = Record<SemanticSlotName, string>;
 
-/** Legacy skin base slots (preserved for compatibility; see design/theme.ts). */
-export type LegacyBaseSlot =
-	| "text"
-	| "muted"
-	| "dim"
-	| "accent"
-	| "secondary"
-	| "success"
-	| "warning"
-	| "error"
-	| "info"
-	| "neutral";
-
-export type LegacyBase = Record<LegacyBaseSlot, string>;
-
-/** Legacy style slots used by existing callers (theme.text, theme.toolBg, ...). */
-export type LegacyPaletteName =
-	| "text"
-	| "muted"
-	| "dim"
-	| "accent"
-	| "secondary"
-	| "success"
-	| "warning"
-	| "error"
-	| "info"
-	| "border"
-	| "userBg"
-	| "assistantBg"
-	| "toolBg"
-	| "toolOkBg"
-	| "toolErrBg";
-
 export interface Spacing {
 	blockGapRows: number;
 	chromeGapRows: number;
@@ -89,21 +56,6 @@ export const LIMITS = {
 	pickerVisibleRowsDefault: 10,
 	formMaxLengthPersona: 2000,
 	maxCellWidth: 48,
-} as const;
-
-/** Viewport classes (section 6.3). Full interactive target is 40x9+. */
-export const VIEWPORT = {
-	fullMinWidth: 40,
-	fullMinHeight: 9,
-	degradedMinWidth: 20,
-	degradedMinHeight: 6,
-	supportedHeights: {
-		fullFooterRows: 2,
-		compactFooterRows: 1,
-		chromeGapMinHeight: 16,
-		reducedChromeMaxHeight: 15,
-		compactMaxHeight: 8,
-	},
 } as const;
 
 /** Starting codex semantic values from the spec (section 6.1). */

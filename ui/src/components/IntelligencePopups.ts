@@ -23,7 +23,7 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import { sanitizeDisplay, truncateDisplay, wrapDisplay } from "../design/text.ts";
+import { normalizeWidth, sanitizeDisplay, truncateDisplay, wrapDisplay } from "../design/text.ts";
 import { selectionBar, theme } from "../design/theme.ts";
 
 /** Semantic result of one popup key press; the parent decides what to do. */
@@ -34,11 +34,6 @@ export type PopupKeyAction =
 	| { kind: "close" }
 	| { kind: "insert-text"; text: string }
 	| { kind: "unhandled" };
-
-function normalizeWidth(width: number): number {
-	if (!Number.isFinite(width)) return 0;
-	return Math.max(0, Math.floor(width));
-}
 
 function clampIndex(index: number, count: number): number {
 	if (count <= 0) return 0;
@@ -158,12 +153,6 @@ export class CompletionPopup implements Component {
 			omitted: Number.isFinite(model.omitted) ? Math.max(0, Math.floor(model.omitted)) : 0,
 		};
 		this.hoverIndex = undefined;
-	}
-
-	getModel(): CompletionPopupModel | undefined {
-		const model = this.modelValue;
-		if (!model) return undefined;
-		return { items: model.items, selectedIndex: model.selectedIndex, omitted: model.omitted };
 	}
 
 	isOpen(): boolean {

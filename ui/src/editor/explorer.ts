@@ -37,7 +37,8 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { ICONS } from "../design/icons.ts";
-import { displayWidth, sanitizeDisplay, truncateDisplay } from "../design/text.ts";
+import { displayWidth, truncateDisplay } from "../design/text.ts";
+import { sanitizeDisplay } from "./display.ts";
 import { selectionBar, surfaceLine, theme } from "../theme.ts";
 import type { WorkspaceListEntry, WorkspaceListResult } from "../workspace/protocol.ts";
 
@@ -465,9 +466,9 @@ type PaneRow =
 	| { type: "truncation"; hidden: number }
 	| { type: "footer"; label: string; value: string };
 
-/** Single physical row per name: control sequences are stripped, newlines collapse. */
+/** Single physical row per name: controls, bidi and line breaks are stripped. */
 function singleLineName(name: string): string {
-	return sanitizeDisplay(name).replace(/\n/g, " ");
+	return sanitizeDisplay(name);
 }
 
 function placeholderLabel(record: ExplorerDirectoryView | undefined): string {

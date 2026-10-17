@@ -164,6 +164,11 @@ export const keysCommand: Command = {
 			const key = rest.trim();
 			if (!key) throw new Error("Usage: /keys clear KEY");
 			const picked = await resolveKey(host, key);
+			// Destructive: removing a persisted secret must be an explicit
+			// choice (Cancel is the default), never a single typed command.
+			if (!(await confirm(host, `Clear ${picked}? This removes it from this session and .env.`, "Clear"))) {
+				return;
+			}
 			await clearKey(host, picked);
 			return;
 		}

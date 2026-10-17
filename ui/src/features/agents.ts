@@ -179,16 +179,44 @@ export const delegateCommand: Command = {
 			}
 		}
 		host.print(`Delegating to ${agent}…`, "plain");
-		const { results } = await host.request<{ results: DelegationResult[] }>("agents.run", {
+		// The reply is untrusted wire data: a child that fails before producing
+		// a result, a server-side short-circuit or a malformed frame can leave
+		// `results` empty or absent. Report that honestly instead of dereferencing
+		// a non-existent result (P0-22).
+		const reply = await host.request<{ results?: unknown } | undefined>("agents.run", {
 			sessionId: host.session()?.id,
 			steps: [{ agent, task }],
 		});
-		const r = results[0]!;
+		const results = Array.isArray(reply?.results) ? reply.results : [];
+		if (!results.length) {
+			host.print(
+				`Delegation returned no result. ${agent} may have failed before responding; try again, or inspect it with /agents history.`,
+				"error",
+			);
+			return;
+		}
+		const first: unknown = results[0];
+		if (!isDelegationResult(first)) {
+			host.print(
+				`Delegation returned an invalid result (missing status). Nothing was applied; check /agents history.`,
+				"error",
+			);
+			return;
+		}
+		const r = first;
 		if (r.status === "error") host.print(`${agent} failed: ${r.response}`, "error");
 		else if (r.status === "waiting_approval") await reportPausedDelegation(agent, r, host);
 		else host.printMarkdown(`**${agent}** (${r.tokens} tokens):\n\n${r.response}`);
 	},
 };
+
+/**
+ * Runtime shape check for one `agents.run` step result. The gateway can answer
+ * with a malformed frame; callers must not dereference an unvalidated object.
+ */
+function isDelegationResult(value: unknown): value is DelegationResult {
+	return typeof value === "object" && value !== null && typeof (value as { status?: unknown }).status === "string";
+}
 
 /**
  * Distinct paused state for a delegated approval (H24).

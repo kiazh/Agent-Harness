@@ -963,25 +963,6 @@ export function semanticPalette(name: string): SemanticPalette | undefined {
 	};
 }
 
-/** Legacy style-slot mapping for compatibility callers (section 5.2). */
-export const LEGACY_SLOT_TO_SEMANTIC: Record<PaletteName, keyof SemanticPalette | "secondary" | "info" | "surface"> = {
-	text: "text",
-	muted: "muted",
-	dim: "faint",
-	accent: "accent",
-	secondary: "secondary",
-	success: "success",
-	warning: "warning",
-	error: "danger",
-	info: "info",
-	border: "border",
-	userBg: "surface",
-	assistantBg: "surface",
-	toolBg: "surface",
-	toolOkBg: "success",
-	toolErrBg: "danger",
-};
-
 const skinColors: Record<string, Record<PaletteName, Color>> = Object.fromEntries(
 	Object.entries(SKINS).map(([name, def]) => {
 		const neutral = parseColor(def.base.neutral);

@@ -6,7 +6,7 @@
 import { Key, matchesKey, truncateToWidth, visibleWidth, type Component, type SelectItem, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { ICONS } from "../design/icons.ts";
 import { sanitizeDisplay } from "../design/text.ts";
-import { isSelectionRow, selectionBar, surfaceLine, theme } from "../theme.ts";
+import { selectionBar, surfaceLine, theme } from "../theme.ts";
 
 export type { SelectItem };
 
@@ -355,7 +355,3 @@ export class Menu implements Component {
 	invalidate(): void {}
 }
 
-/** A selected row is recognizable without color. */
-export function isMenuSelection(line: string): boolean {
-	return isSelectionRow(line);
-}

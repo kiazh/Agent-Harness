@@ -6,7 +6,7 @@
 // gateway (nowplaying.get / nowplaying.command); the UI never guesses state.
 
 import type { Command, FeatureHost, MusicHost } from "./types.ts";
-import { formatClock } from "../components/NowPlayingBar.ts";
+import { formatClock, nowPlayingProblem } from "../components/NowPlayingBar.ts";
 import { options } from "./types.ts";
 
 function requireMusic(host: FeatureHost): MusicHost {
@@ -20,8 +20,12 @@ function statusLine(music: MusicHost): string {
 	if (!status) {
 		return music.isEnabled() ? "Now playing: not checked yet." : "Music bar is off (/music on)";
 	}
-	if (status.error && !status.title) return `Now playing unavailable: ${status.error}`;
-	if (!status.title) return "Nothing playing right now.";
+	if (!status.title) {
+		const problem = nowPlayingProblem(status);
+		if (problem === "permission") return `Automation permission needed: ${status.error}`;
+		if (status.error) return `Now playing unavailable: ${status.error}`;
+		return "Nothing playing right now.";
+	}
 	const bits = [
 		status.state === "paused" ? "paused" : status.state === "playing" ? "playing" : "playing?",
 		status.artist ? `${status.artist} — ${status.title}` : status.title,

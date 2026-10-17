@@ -108,6 +108,64 @@ export function truncateDisplay(text: string, width: number): string {
 	return truncateToWidth(text, Math.max(0, width));
 }
 
+// Bidi embedding/override/isolate controls + LTR/RTL marks (all invisible).
+// A name like `\u202Egnp.exe` renders as `exe.png`; `\u2066...\u2069` can
+// reorder a path so a hostile label looks like a trusted one.
+const BIDI_CONTROLS_RE = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+/** SGR color runs (the terminal sanitizer's only allow-listed ESC form). */
+const SGR_SEQUENCE_RE = /\x1b\[[0-9;]*m/g;
+
+/** C0 + DEL + C1: every one is non-printing in a single-line label. */
+const LABEL_CONTROL_BYTES_RE = /[\x00-\x1f\x7f-\x9f]/g;
+
+/** Physical row breaks, flattened before the single-line pass. */
+const LABEL_LINE_BREAKS_RE = /\r\n|[\n\r\t\u2028\u2029]/g;
+
+/**
+ * Sanitize one single-line label/name (menu row, dialog title, status word):
+ * line breaks and tabs collapse to one space; SGR styling, C0/C1/DEL bytes
+ * and bidi/isolate controls are removed. Stripping (not replacing) keeps the
+ * honest byte order visible. This is the ONE label core; `editor/display.ts`
+ * re-exports it so chrome and menu labels cannot drift apart. Idempotent; pure.
+ */
+export function sanitizeLabelText(input: string): string {
+	const flattened = input.replace(LABEL_LINE_BREAKS_RE, " ");
+	// Drop SGR runs wholesale before delegating: a label carries no styling,
+	// and leaving the parameters behind would render literal `[31m` noise.
+	const terminalSafe = sanitizeDisplay(flattened.replace(SGR_SEQUENCE_RE, ""));
+	return terminalSafe.replace(LABEL_CONTROL_BYTES_RE, "").replace(BIDI_CONTROLS_RE, "");
+}
+
+/** True when `text` already carries no control/format character. */
+export function hasNoLabelControls(text: string): boolean {
+	return (
+		!/[\x00-\x1f\x7f-\x9f]/.test(text) &&
+		!/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(text)
+	);
+}
+
+/**
+ * Collapse text to one physical row: control sequences stripped (newlines
+ * become spaces) so a hostile label can never add rows or misroute layout.
+ */
+export function singleLine(text: string): string {
+	return sanitizeLabelText(text);
+}
+
+/** Floor a possibly non-finite width to a safe cell count (never negative). */
+export function normalizeWidth(width: number): number {
+	if (!Number.isFinite(width)) return 0;
+	return Math.max(0, Math.floor(width));
+}
+
+/** Right-pad an ANSI-bearing row to `width` visible cells (no-op when wider). */
+export function padRow(row: string, width: number): string {
+	const visible = visibleWidth(row);
+	if (visible >= width) return row;
+	return row + " ".repeat(width - visible);
+}
+
 /** Sanitize then wrap to physical rows of at most `width` cells. */
 export function wrapDisplay(text: string, width: number): string[] {
 	const safe = sanitizeDisplay(text);

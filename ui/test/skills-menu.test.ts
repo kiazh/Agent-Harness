@@ -1010,6 +1010,42 @@ test("SM-08 the delete action routes through the legacy confirmation and RPC", a
 	assert.deepEqual(deletes[0]!.params, { name: "local-skill" });
 });
 
+test("P0-23 delete-close stops the menu's live work (no late skills.search)", async (t) => {
+	const { app, client, type } = await boot();
+	t.after(() => app.exit());
+	client.candidates = [candidate({ skillId: "local-skill", name: "local-skill", sourceType: "learned", trust: "external" })];
+	client.showSkill = detailsSkill({ name: "local-skill", sourceType: "learned" });
+	type("/skills");
+	type("\r");
+	await settle();
+	type("loc"); // schedules a debounced skills.search
+	type("\r"); // details mode; the search timer is still pending
+	await settle();
+	type("d"); // closes the dialog through onDelete → close, never dismiss()
+	await settle();
+	assert.equal(skillsMenuOf(app), undefined, "the dialog closed");
+	await delay(180); // the scheduled debounce window elapses
+	const late = client.requests.filter(
+		(entry) => entry.method === "skills.search" && String(entry.params.query ?? "") === "loc",
+	);
+	assert.equal(late.length, 0, "delete-close leaves no pending search timer behind");
+});
+
+test("P0-23 exit stops the menu's live work (no late skills.search)", async () => {
+	const { app, client, type } = await boot();
+	client.candidates = [candidate({ skillId: "web-build", name: "web-build" })];
+	type("/skills");
+	type("\r");
+	await settle();
+	type("rent"); // schedules a debounced skills.search
+	await app.exit(); // dialog.cancel() funnels through openDialog close
+	await delay(180);
+	const late = client.requests.filter(
+		(entry) => entry.method === "skills.search" && String(entry.params.query ?? "") === "rent",
+	);
+	assert.equal(late.length, 0, "exit leaves no pending search timer behind");
+});
+
 test("SM-08 a typed /skills list opens the Menu dialog and browses the catalog (no wall of text)", async (t) => {
 	const { app, tui, client, type, screen } = await boot();
 	t.after(() => app.exit());

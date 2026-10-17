@@ -517,6 +517,47 @@ test("I06 secret values stay masked through edit, save, error and cancel", () =>
 	}
 });
 
+test("I06 F-31 clearSecret purges undo history and the kill ring (a secret cannot be resurrected)", () => {
+	const { term } = terminal(80, 24);
+	const tui = new TuiAltScreen(term);
+	// One alphabetic word so ctrl+w kills the whole value into the kill ring.
+	const sentinel = "SENTINELundo";
+	try {
+		// Submit path: any content retained by the editor's undo history leaks.
+		const saved: string[] = [];
+		const form = new SecretForm(tui, { title: "Set K" });
+		form.onSubmit = (value) => void saved.push(value);
+		for (const ch of sentinel) form.handleInput(ch);
+		form.handleInput("\x7f"); // snapshots the full secret into undo history, then deletes one char
+		form.handleInput(sentinel.slice(-1)!); // retype it: another undo unit
+		form.handleInput("\x1f"); // ctrl+-: pop the newest snapshot
+		assert.equal(
+			form.getValue(),
+			sentinel.slice(0, -1),
+			"pre-condition: undo is armed and the history holds secret content",
+		);
+		form.handleInput("\r"); // submit
+		assert.equal(form.getValue(), "");
+		let resurrected = "";
+		for (let index = 0; index < 8; index++) {
+			form.handleInput("\x1f");
+			if (form.getValue() !== "") resurrected = form.getValue();
+		}
+		assert.equal(resurrected, "", "undo never resurrects a submitted secret");
+		// Cancel path: the kill ring must die with the reference too.
+		const cancelForm = new SecretForm(tui, { title: "Set K" });
+		cancelForm.onCancel = () => void 0;
+		for (const ch of sentinel) cancelForm.handleInput(ch);
+		cancelForm.handleInput("\x17"); // ctrl+w: the whole value lands in the kill ring
+		assert.equal(cancelForm.getValue(), "", "ctrl+w deleted the value before cancel");
+		cancelForm.handleInput("\x1b"); // cancel clears the visible value
+		cancelForm.handleInput("\x19"); // ctrl+y yank
+		assert.equal(cancelForm.getValue(), "", "yank never resurrects a cancelled secret");
+	} finally {
+		tui.stop();
+	}
+});
+
 test("I07 text forms submit once while pending and unlock on error", () => {
 	const { term } = terminal(80, 24);
 	const tui = new TuiAltScreen(term);

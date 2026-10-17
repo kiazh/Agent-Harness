@@ -308,8 +308,11 @@ class FakeGateway implements WorkspaceGateway {
 class FakePersistence implements WorkspacePersistenceLike {
 	readonly saves: Array<{ rootKey: string; state: WorkspacePersistedState }> = [];
 	private readonly states = new Map<string, WorkspacePersistedState>();
+	/** Optional deferred-load override (lifecycle fence tests). */
+	loadHandler: ((rootKey: string) => Promise<WorkspacePersistedState | undefined>) | undefined;
 
 	async load(rootKey: string): Promise<WorkspacePersistedState | undefined> {
+		if (this.loadHandler) return this.loadHandler(rootKey);
 		return this.states.get(rootKey);
 	}
 
@@ -491,6 +494,183 @@ test("a failed workspace open notifies and leaves the controller usable", async 
 	assert.ok(h.notices.some((notice) => notice.kind === "error" && notice.text.includes("backend offline")));
 	assert.equal(h.controller.getLayoutInput().requestedMode, "split");
 	assert.equal((await h.controller.openUri(fileUri("a.ts"))).status, "no-workspace");
+	await h.controller.dispose();
+});
+
+// ─── lifecycle fences (MCH-012 / contract C3) ───────────────────────────────
+
+test("MCH-012 a read that resolves after close publishes no tab, buffer or mirror", async () => {
+	const h = build();
+	await openWorkspace(h);
+	const late = deferred<WorkspaceReadResult>();
+	h.gateway.readHandler = () => late.promise;
+	const pending = h.controller.openUri(fileUri("late.ts"));
+	await h.controller.closeWorkspace();
+	late.resolve(readResult(fileUri("late.ts")));
+	const outcome = await pending;
+	assert.equal(outcome.status, "no-workspace", "a superseded read reports no workspace");
+	assert.equal(h.tabs.count(), 0, "the closed workspace gained no tab");
+	assert.equal(h.store.documents().length, 0, "no buffer was published");
+	assert.equal(h.gateway.callsOf("workspace.documentOpen").length, 0, "no mirror open was sent");
+	assert.equal(h.controller.phase, "closed");
+	await h.controller.dispose();
+});
+
+test("MCH-012 a read that resolves after a root switch cannot join the new workspace", async () => {
+	const h = build();
+	await openWorkspace(h, "/ws-a");
+	const late = deferred<WorkspaceReadResult>();
+	h.gateway.readHandler = () => late.promise;
+	const pending = h.controller.openUri(fileUri("late.ts"));
+	await openWorkspace(h, "/ws-b");
+	late.resolve(readResult(fileUri("late.ts")));
+	const outcome = await pending;
+	assert.equal(outcome.status, "no-workspace");
+	assert.equal(h.controller.rootKey, "/ws-b");
+	assert.equal(h.controller.phase, "ready");
+	assert.equal(h.tabs.count(), 0, "the stale read never creates a tab in the switched root");
+	assert.equal(h.store.documents().length, 0);
+	await h.controller.dispose();
+});
+
+test("MCH-012 an open that resolves after dispose is ignored (no resurrected ready)", async () => {
+	const h = build();
+	const gate = deferred<WorkspaceOpenResult>();
+	h.gateway.openHandler = () => gate.promise;
+	const pending = h.controller.openWorkspace("/ws");
+	await Promise.resolve();
+	await h.controller.dispose();
+	gate.resolve({
+		workspaceId: "ws_late",
+		clientId: "cl_late",
+		epoch: 9,
+		rootLabel: "late",
+		resolvedRoot: "/ws",
+		trusted: true,
+		capabilities: [],
+	});
+	assert.equal(await pending, undefined, "the disposed controller returns no identity");
+	assert.equal(h.controller.phase, "closed", "the stale open never resurrects ready");
+	assert.equal(h.controller.identity, undefined);
+	assert.equal(h.controller.rootKey, undefined);
+});
+
+test("MCH-012 the newest open wins when an older open resolves last", async () => {
+	const h = build();
+	const first = deferred<WorkspaceOpenResult>();
+	const second = deferred<WorkspaceOpenResult>();
+	let call = 0;
+	h.gateway.openHandler = () => (++call === 1 ? first.promise : second.promise);
+	const older = h.controller.openWorkspace("/ws-a");
+	await Promise.resolve();
+	const newer = h.controller.openWorkspace("/ws-b");
+	await Promise.resolve();
+	second.resolve({
+		workspaceId: "ws_b",
+		clientId: "cl_b",
+		epoch: 2,
+		rootLabel: "ws-b",
+		resolvedRoot: "/ws-b",
+		trusted: true,
+		capabilities: [],
+	});
+	assert.ok(await newer);
+	first.resolve({
+		workspaceId: "ws_a",
+		clientId: "cl_a",
+		epoch: 1,
+		rootLabel: "ws-a",
+		resolvedRoot: "/ws-a",
+		trusted: true,
+		capabilities: [],
+	});
+	assert.equal(await older, undefined, "the superseded open returns no identity");
+	assert.equal(h.controller.rootKey, "/ws-b");
+	assert.equal(h.controller.identity?.workspaceId, "ws_b");
+	assert.equal(h.controller.phase, "ready");
+	await h.controller.dispose();
+});
+
+test("MCH-012 a restore that resolves after close publishes no state", async () => {
+	const h = build();
+	await openWorkspace(h);
+	const gate = deferred<WorkspacePersistedState | undefined>();
+	h.persistence.loadHandler = () => gate.promise;
+	const pending = h.controller.restore("/ws");
+	await h.controller.closeWorkspace();
+	gate.resolve({
+		version: WORKSPACE_STATE_VERSION,
+		requestedMode: "editor",
+		splitRatio: 0.5,
+		explorerRequested: true,
+		openUris: [],
+	});
+	assert.equal(await pending, undefined, "a restore owned by the closed lifetime is dropped");
+	await h.controller.dispose();
+});
+
+test("MCH-012 an open issued during a close waits for teardown, then opens", async () => {
+	const h = build();
+	await openWorkspace(h, "/ws-a");
+	const closeGate = deferred<{ closed: boolean }>();
+	h.gateway.close = () => closeGate.promise;
+	const closing = h.controller.closeWorkspace();
+	const opening = h.controller.openWorkspace("/ws-b");
+	closeGate.resolve({ closed: true });
+	await closing;
+	const identity = await opening;
+	assert.ok(identity, "the open is not dropped just because a close was in flight");
+	assert.equal(h.controller.rootKey, "/ws-b");
+	assert.equal(h.controller.phase, "ready");
+	await h.controller.dispose();
+});
+
+test("MCH-012 a stale gateway open never repoints the adapter identity", async () => {
+	const identity = (root: string): WorkspaceOpenResult => ({
+		workspaceId: `ws_${root.replaceAll("/", "_")}`,
+		clientId: "cl",
+		epoch: 1,
+		rootLabel: root,
+		resolvedRoot: root,
+		trusted: true,
+		capabilities: [],
+	});
+	const pending: Array<(value: WorkspaceOpenResult) => void> = [];
+	const adapter = new WorkspaceGatewayAdapter(
+		<T,>() => new Promise<WorkspaceOpenResult>((resolve) => pending.push(resolve)) as Promise<T>,
+	);
+	const older = adapter.open("/ws-a", true);
+	const newer = adapter.open("/ws-b", true);
+	pending[0]!(identity("/ws-a"));
+	await older;
+	assert.equal(adapter.identity(), undefined, "the superseded open never binds while the newer is in flight");
+	pending[1]!(identity("/ws-b"));
+	await newer;
+	assert.equal(adapter.identity()?.resolvedRoot, "/ws-b");
+
+	// A close issued while an open is in flight keeps the adapter unbound.
+	const pendingClose: Array<(value: WorkspaceOpenResult) => void> = [];
+	const closingAdapter = new WorkspaceGatewayAdapter(
+		<T,>() => new Promise<WorkspaceOpenResult>((resolve) => pendingClose.push(resolve)) as Promise<T>,
+	);
+	const opening = closingAdapter.open("/ws-c", true);
+	await closingAdapter.close();
+	pendingClose[0]!(identity("/ws-c"));
+	await opening;
+	assert.equal(closingAdapter.identity(), undefined, "a close during opening leaves no stale binding");
+});
+
+test("MCH-012 generation advances across open/close and a same-lifetime save still works", async () => {
+	const h = build();
+	await openWorkspace(h);
+	const generation = h.controller.generation;
+	assert.equal(h.controller.isCurrent(generation), true);
+	const { documentId } = await mustOpen(h, "a.ts", "hello\n");
+	h.store.insertText(documentId, "!");
+	const saved = await h.controller.save(documentId);
+	assert.equal(saved.status, "saved", "the fence never blocks a valid save in the same lifetime");
+	await h.controller.closeWorkspace();
+	assert.equal(h.controller.isCurrent(generation), false, "close invalidates the old generation");
 	await h.controller.dispose();
 });
 

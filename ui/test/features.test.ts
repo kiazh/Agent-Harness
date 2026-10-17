@@ -992,16 +992,33 @@ test("/keys set saves by default and --no-save stays session-only", async () => 
 	assert.match(host.last().text, /session only/);
 });
 
-test("/keys clear resolves a prefix", async () => {
+test("/keys clear resolves a prefix after confirmation", async () => {
 	const host = new FakeHost();
 	host.responses["secrets.list"] = {
 		secrets: [{ key: "COHERE_API_KEY", description: "Cohere", set: true, liveSet: true }],
 		envFile: "/tmp/.env",
 	};
 	host.responses["secrets.clear"] = { key: "COHERE_API_KEY", set: false };
+	host.picks.push("yes");
 	await run("/keys clear cohere", host);
 	assert.deepEqual(host.calls.at(-1), { method: "secrets.clear", params: { key: "COHERE_API_KEY" } });
 	assert.match(host.last().text, /cleared/);
+});
+
+test("/keys clear cancel keeps the persisted key", async () => {
+	const host = new FakeHost();
+	host.responses["secrets.list"] = {
+		secrets: [{ key: "COHERE_API_KEY", description: "Cohere", set: true, liveSet: true }],
+		envFile: "/tmp/.env",
+	};
+	host.picks.push("no");
+	await run("/keys clear cohere", host);
+	assert.ok(!host.calls.some((call) => call.method === "secrets.clear"), "cancel never deletes");
+	const confirmation = host.pickItems.at(-1);
+	assert.ok(confirmation, "a confirmation dialog was shown");
+	assert.equal(confirmation[0]?.label, "Cancel", "Cancel is the default choice");
+	assert.equal(confirmation[0]?.value, "no");
+	assert.equal(confirmation[1]?.label, "Clear");
 });
 
 test("/keys menu Set flow saves once with persist:true and never echoes the value", async () => {
@@ -1162,6 +1179,7 @@ test("/keys clear resolves a provider key by prefix", async () => {
 		],
 	};
 	host.responses["secrets.clear"] = { key: "MACHINA_PROVIDER_ACME_API_KEY", set: false };
+	host.picks.push("yes");
 	await run("/keys clear machina_provider_acme", host);
 	assert.deepEqual(host.calls.at(-1), { method: "secrets.clear", params: { key: "MACHINA_PROVIDER_ACME_API_KEY" } });
 	assert.match(host.last().text, /MACHINA_PROVIDER_ACME_API_KEY cleared/);

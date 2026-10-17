@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { ICONS } from "../src/design/icons.ts";
-import { AnimationCoordinator } from "../src/design/motion.ts";
+import { AnimationCoordinator, reducedMotionFromEnv } from "../src/design/motion.ts";
 import { Footer } from "../src/components/Footer.ts";
 import type { GatewayEvent } from "../src/protocol.ts";
 import { Transcript } from "../src/transcript.ts";
@@ -291,4 +291,35 @@ test("footer_keeps_right_edge_on_one_row", (t) => {
 	const narrow = stripTerminalSequences(footer.render(40)[0]!);
 	assert.match(narrow, /12,400 tokens/, "token count survives narrow widths");
 	assert.match(narrow, /[□▪■▣]$/, "square stays docked at 40 columns");
+});
+
+// F-23: one shared reader for the reduced-motion environment. The legacy
+// `AH_UI_REDUCED_MOTION` name keeps working, but an explicit
+// `MACHINA_UI_REDUCED_MOTION` value must always win over it.
+test("F-23 reducedMotionFromEnv: MACHINA_UI_REDUCED_MOTION wins; AH_UI_REDUCED_MOTION is the fallback", () => {
+	const previous = {
+		primary: process.env.MACHINA_UI_REDUCED_MOTION,
+		legacy: process.env.AH_UI_REDUCED_MOTION,
+	};
+	try {
+		delete process.env.MACHINA_UI_REDUCED_MOTION;
+		delete process.env.AH_UI_REDUCED_MOTION;
+		assert.equal(reducedMotionFromEnv(process.env), false, "nothing set means animated");
+		process.env.AH_UI_REDUCED_MOTION = "1";
+		assert.equal(reducedMotionFromEnv(process.env), true, "legacy name applies while primary unset");
+		assert.equal(reducedMotionFromEnv(process.env), true, "legacy accepts the truthy spellings");
+		process.env.AH_UI_REDUCED_MOTION = "off";
+		assert.equal(reducedMotionFromEnv(process.env), false, "legacy 0/false/off stays animated");
+		// Explicit primary beats every legacy value, including an affirmative one.
+		process.env.AH_UI_REDUCED_MOTION = "1";
+		process.env.MACHINA_UI_REDUCED_MOTION = "0";
+		assert.equal(reducedMotionFromEnv(process.env), false, "explicit MACHINA_UI_REDUCED_MOTION=0 blocks the legacy fallback");
+		process.env.MACHINA_UI_REDUCED_MOTION = "true";
+		assert.equal(reducedMotionFromEnv(process.env), true, "primary true applies");
+	} finally {
+		if (previous.primary === undefined) delete process.env.MACHINA_UI_REDUCED_MOTION;
+		else process.env.MACHINA_UI_REDUCED_MOTION = previous.primary;
+		if (previous.legacy === undefined) delete process.env.AH_UI_REDUCED_MOTION;
+		else process.env.AH_UI_REDUCED_MOTION = previous.legacy;
+	}
 });

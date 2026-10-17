@@ -44,7 +44,8 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import { sanitizeDisplay, truncateDisplay } from "../design/text.ts";
+import { normalizeWidth, padRow, truncateDisplay } from "../design/text.ts";
+import { sanitizeDisplay } from "../editor/display.ts";
 import { repairFill, selectListTheme, theme } from "../design/theme.ts";
 import type { DocumentRecord } from "../editor/model.ts";
 import type { EditorStore } from "../editor/model.ts";
@@ -116,12 +117,10 @@ interface TabHitArea {
 /**
  * Scheme-stripped, percent-decoded, sanitized display path for a document URI.
  * Sanitization runs AFTER decoding so encoded control bytes (`%1B`, `%07`, …)
- * are neutralized rather than reconstructed for the terminal; every consumer
- * (breadcrumb, tab strip, problems rows) renders this already-safe string.
- * Line breaks (`%0A`-decoded `\n`, plus `\r`/U+2028/U+2029) flatten to one
- * space after sanitization: this is single-line chrome (tab strip,
- * breadcrumb), and a preserved newline would skew the row layout. Only this
- * path flattens; `sanitizeDisplay` keeps newlines for multi-line callers.
+ * and encoded bidi overrides (`%E2%80%AE`) are neutralized rather than
+ * reconstructed for the terminal; every consumer (breadcrumb, tab strip,
+ * problems rows) renders this already-safe string. Line breaks decode to a
+ * single space (single-line chrome), so a `%0A` in a name cannot skew layout.
  */
 export function uriDisplayPath(uri: string): string {
 	let path = uri;
@@ -132,7 +131,7 @@ export function uriDisplayPath(uri: string): string {
 	} catch {
 		// Malformed percent-encoding: keep the raw path rather than throwing.
 	}
-	return sanitizeDisplay(path).replace(/[\n\r\u2028\u2029]/g, " ");
+	return sanitizeDisplay(path);
 }
 
 function pathSegments(path: string): string[] {
@@ -203,25 +202,14 @@ export function displayLanguageName(languageId: string): string {
 		typescriptreact: "TSX",
 		javascriptreact: "JSX",
 	};
-	const key = languageId.trim().toLowerCase();
+	const key = sanitizeDisplay(languageId).trim().toLowerCase();
 	if (key in known) return known[key] as string;
-	return key.length === 0 ? languageId : key[0]!.toUpperCase() + key.slice(1);
+	return key.length === 0 ? sanitizeDisplay(languageId) : key[0]!.toUpperCase() + key.slice(1);
 }
 
 function clampRows(rows: number): number {
 	if (!Number.isFinite(rows)) return EDITOR_PANE_DEFAULT_ROWS;
 	return Math.max(1, Math.floor(rows));
-}
-
-function normalizeWidth(width: number): number {
-	if (!Number.isFinite(width)) return 0;
-	return Math.max(0, Math.floor(width));
-}
-
-function padRow(row: string, width: number): string {
-	const visible = visibleWidth(row);
-	if (visible >= width) return row;
-	return row + " ".repeat(width - visible);
 }
 
 /**
@@ -697,10 +685,11 @@ export class EditorPane implements Component, Focusable {
 		const record = this.activeRecord();
 		if (!record) return "";
 		const position = this.view.cursorDisplayPosition();
+		const ending = sanitizeDisplay(record.lineEnding === "mixed" ? "mixed endings" : record.lineEnding);
 		const parts = [
 			theme.text(`Ln ${position.line}, Col ${position.column}`),
 			theme.dim("UTF-8"),
-			theme.dim(record.lineEnding === "mixed" ? "mixed endings" : record.lineEnding),
+			theme.dim(ending),
 			theme.dim(displayLanguageName(record.languageId)),
 		];
 		if (record.dirty) parts.push(theme.warning("●"));
@@ -708,7 +697,9 @@ export class EditorPane implements Component, Focusable {
 		if (record.conflict) parts.push(theme.error("!"));
 		const left = parts.join(theme.dim(" · "));
 		if (!this.lspStatus) return left;
-		const state = theme.dim(this.lspStatus);
+		const status = sanitizeDisplay(this.lspStatus);
+		if (status.length === 0) return left;
+		const state = theme.dim(status);
 		const room = width - visibleWidth(left) - visibleWidth(state);
 		if (room < 2) return left;
 		return `${left}${" ".repeat(room)}${state}`;

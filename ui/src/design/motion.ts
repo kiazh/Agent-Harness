@@ -8,6 +8,19 @@
 export const ACTIVITY_INTERVAL_MS = 200;
 
 /**
+ * F-23: one shared reader for the reduced-motion environment. The primary
+ * name is `MACHINA_UI_REDUCED_MOTION`; `AH_UI_REDUCED_MOTION` is the legacy
+ * name and applies only when the primary variable is unset or empty, so an
+ * explicit primary value (even "0") always wins over the fallback.
+ */
+export function reducedMotionFromEnv(env: NodeJS.ProcessEnv): boolean {
+	const primary = (env.MACHINA_UI_REDUCED_MOTION ?? "").trim();
+	if (primary.length > 0) return /^(1|true)$/i.test(primary);
+	const legacy = (env.AH_UI_REDUCED_MOTION ?? "").trim();
+	return /^(1|true)$/i.test(legacy);
+}
+
+/**
  * Focus-caret blink cadence. The block caret is painted only while the
  * coordinator's `cursor.blink` frame is on, so the two-frame phase flips once
  * per interval (500 ms on, 500 ms off). Reduced motion pins the caret static

@@ -17,7 +17,8 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import { displayWidth, sanitizeDisplay, truncateDisplay } from "../design/text.ts";
+import { displayWidth, normalizeWidth, padRow, truncateDisplay } from "../design/text.ts";
+import { sanitizeDisplay } from "../editor/display.ts";
 import { selectionBar, theme } from "../design/theme.ts";
 import { uriDisplayPath } from "./EditorPane.ts";
 import type { ProblemRow, ProblemsModel, SeverityCounts } from "../editor/intelligence.ts";
@@ -32,13 +33,6 @@ export const SEVERITY_MARKERS: Readonly<Record<number, string>> = {
 	3: "i",
 	4: "~",
 };
-
-/** Header counts, always in the same order: `✗ N · ! M · i K` (+ `~ H`). */
-export function problemsHeaderText(counts: SeverityCounts): string {
-	const parts = [`✗ ${counts.error}`, `! ${counts.warning}`, `i ${counts.info}`];
-	if (counts.hint > 0) parts.push(`~ ${counts.hint}`);
-	return parts.join(" · ");
-}
 
 /**
  * Display path for a diagnostic URI (finding 4): root-relative when the URI
@@ -78,17 +72,6 @@ export function formatProblemRow(row: ProblemRow, options: ProblemRowOptions = {
 	const room = Math.max(0, Math.floor(options.width) - displayWidth(head) - displayWidth(tail));
 	const shown = truncateToWidth(message, room, "…");
 	return `${head}${shown}${tail}`;
-}
-
-function normalizeWidth(width: number): number {
-	if (!Number.isFinite(width)) return 0;
-	return Math.max(0, Math.floor(width));
-}
-
-function padRow(row: string, width: number): string {
-	const visible = displayWidth(row);
-	if (visible >= width) return row;
-	return row + " ".repeat(width - visible);
 }
 
 export interface ProblemsPaneOptions {
@@ -158,10 +141,6 @@ export class ProblemsPane implements Component, Focusable {
 
 	selectedIndex(): number {
 		return this.selectionValue;
-	}
-
-	selectedRow(): ProblemRow | undefined {
-		return this.model.rows()[this.selectionValue];
 	}
 
 	/** Move the selection by `delta` with clamping; returns the new index. */

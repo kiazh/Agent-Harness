@@ -311,6 +311,11 @@ test("accept applies the textEdit plus additional edits as ONE undo group", asyn
 	if (!result.ok) return;
 	assert.equal(result.applied.length, 1);
 	assert.equal(store.getDocument(doc.id)?.text, "// hint\nconst xyz = 1;");
+	assert.equal(
+		store.getViewState(doc.id)?.cursorOffset,
+		17,
+		"the caret follows the main completion edit, not the additional auto-import",
+	);
 	assert.equal(store.getDocument(doc.id)?.version, 1);
 	assert.equal(store.undoDepth(doc.id), 1, "one transaction, one undo group");
 	assert.equal(session.state, "closed");

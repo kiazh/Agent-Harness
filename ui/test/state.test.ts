@@ -806,6 +806,82 @@ test("A03 a turn completed while hidden retires its unconsumed approval evidence
 	await app.exit();
 });
 
+async function drain(times = 60): Promise<void> {
+	for (let index = 0; index < times; index++) await new Promise((resolve) => setImmediate(resolve));
+}
+
+// F-30: approvals the hidden session never saw are parked server-side
+// (`approvals.list` = permission store rows only, public/redacted fields).
+// Returning to the session must re-read them and reopen the review cards;
+// a synthetic card is fully decision-capable (row turn_id = the live turn).
+test("A03 F-30 returning to a session rehydrates approvals the UI never saw", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	client.autoSubmit = { turnId: "t" };
+	await submitTurn(app, "go");
+	client.emit(ev(SESSION_A.id, "t", { type: "message.start" }));
+	const dialogs = (app as unknown as { approvalDialogs: Map<string, unknown> }).approvalDialogs;
+	// One approval is seen live (retained across navigation); one only exists
+	// server-side — the hidden frame never got its event.
+	client.emit(approvalEvent(SESSION_A.id, "t", "req-retained"));
+	client.responses.set("approvals.list", {
+		approvals: [
+			{
+				request_id: "req-hydrate",
+				session_id: SESSION_A.id,
+				turn_id: "t",
+				agent_id: "agent",
+				operation: "terminal",
+				target: "host",
+				digest: "deadbeef",
+				status: "pending",
+				proposal: { argv: ["ls"], capabilities: ["exec"], cwd: "/tmp", backend: "host" },
+			},
+		],
+	});
+	app.switchTo(SESSION_B, []);
+	assert.equal(dialogs.size, 0, "leaving closes the visible cards without deciding");
+	app.switchTo(SESSION_A, []);
+	await drain();
+	const lists = client.requests.filter((request) => request.method === "approvals.list");
+	assert.equal(lists.length >= 1, true, "the return re-read the gateway's pending rows");
+	assert.equal(lists.at(-1)?.params.sessionId, SESSION_A.id, "the re-read is bound to the returned session");
+	assert.equal(dialogs.size, 2, "the retained card and the rehydrated card are both open");
+	// The synthetic card is decision-capable: one deliberate resolve.
+	client.responses.set("approvals.resolve", {});
+	const entry = (
+		app as unknown as {
+			approvalDialogs: Map<string, { card: { handleInput(data: string): void } }>;
+		}
+	).approvalDialogs.get("req-hydrate");
+	assert.ok(entry, "the rehydrated card is keyed by the row's request_id");
+	entry.card.handleInput("\x1b[A");
+	entry.card.handleInput("\x1b[A");
+	entry.card.handleInput("\r");
+	entry.card.handleInput("\r");
+	await drain();
+	const resolves = client.requests.filter((request) => request.method === "approvals.resolve");
+	assert.deepEqual(
+		resolves.map((request) => request.params),
+		[{ requestId: "req-hydrate", sessionId: SESSION_A.id, verdict: "approved", grant: "once" }],
+		"the synthetic card resolves with the row's identity and binding",
+	);
+	// Re-returning must not duplicate cards: the consumed row is gone and the
+	// retained one re-opens exactly once.
+	client.responses.set("approvals.list", { approvals: [] });
+	app.switchTo(SESSION_B, []);
+	app.switchTo(SESSION_A, []);
+	await drain();
+	assert.equal(dialogs.size, 1, "no duplicate rehydrate, no double reopen of the consumed row");
+	// The re-read is session-scoped: a hidden session (never in flight) never
+	// gets a query or a card.
+	const otherQueries = client.requests.filter(
+		(request) => request.method === "approvals.list" && request.params.sessionId !== SESSION_A.id,
+	);
+	assert.deepEqual(otherQueries, [], "no row outside the returned session is ever consulted");
+	await app.exit();
+});
+
 test("A04 deliberate Allow sends one bound resolve, Deny is the safe default", async () => {
 	const { app, client } = makeApp();
 	await app.start();

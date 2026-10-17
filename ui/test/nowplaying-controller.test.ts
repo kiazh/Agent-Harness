@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { NowPlayingBar } from "../src/components/NowPlayingBar.ts";
-import { NowPlayingController } from "../src/nowplaying/controller.ts";
+import { NOWPLAYING_POLL_MS, NowPlayingController } from "../src/nowplaying/controller.ts";
 import { AnimationCoordinator } from "../src/design/motion.ts";
 
 function makeController(payloads: Record<string, unknown | (() => unknown)> = {}) {
@@ -292,4 +292,102 @@ test("an older overlapping poll never overwrites a newer reading", async () => {
 		error: null,
 	});
 	controller.stop();
+});
+
+/** Resolve mock-timer microtasks without advancing the mocked clock. */
+async function drainMicrotasks(): Promise<void> {
+	for (let index = 0; index < 8; index++) await Promise.resolve();
+}
+
+test("MCH-006 a stale off resolving after a newer on cannot stop or clear the enabled bar", async (t) => {
+	t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
+	const bar = new NowPlayingBar(new AnimationCoordinator(() => {}));
+	bar.setBudget(1);
+	let fetches = 0;
+	const writes: Array<(value: unknown) => void> = [];
+	const controller = new NowPlayingController({
+		bar,
+		request: async <T,>(method: string) => {
+			if (method === "nowplaying.get") {
+				fetches += 1;
+				return PLAYING as T;
+			}
+			if (method === "config.set") {
+				return new Promise((resolve) => {
+					writes.push(resolve as (value: unknown) => void);
+				}) as Promise<T>;
+			}
+			throw new Error(`unexpected request ${method}`);
+		},
+	});
+	await controller.initialize({ nowplaying_enabled: true });
+	const before = fetches;
+
+	const off = controller.setEnabled(false);
+	const on = controller.setEnabled(true);
+	assert.equal(writes.length, 2, "both transitions issued their persistence write");
+	// The newer transition (on) settles first; the stale off settles last.
+	writes[1]!({ ok: true });
+	await on;
+	writes[0]!({ ok: true });
+	await off;
+	await drainMicrotasks();
+
+	assert.equal(controller.isEnabled(), true, "the newest intent is enabled");
+	assert.equal(bar.visible, true);
+	assert.ok(bar.state, "the stale off did not clear the reading");
+	// Polling is still live for the newest transition.
+	t.mock.timers.tick(NOWPLAYING_POLL_MS);
+	await drainMicrotasks();
+	assert.ok(fetches > before + 1, "the poll timer survived the stale off");
+	// The stale write was compensated so the persisted gate agrees with the UI.
+	assert.ok(writes.length >= 3, "compensation issued for the clobbered write");
+	writes.at(-1)!({ ok: true });
+	await drainMicrotasks();
+	controller.stop();
+});
+
+test("MCH-006 a stale on resolving after a newer off cannot resurrect visibility or polling", async (t) => {
+	t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
+	const bar = new NowPlayingBar(new AnimationCoordinator(() => {}));
+	bar.setBudget(1);
+	let fetches = 0;
+	const writes: Array<(value: unknown) => void> = [];
+	const controller = new NowPlayingController({
+		bar,
+		request: async <T,>(method: string) => {
+			if (method === "nowplaying.get") {
+				fetches += 1;
+				return PLAYING as T;
+			}
+			if (method === "config.set") {
+				return new Promise((resolve) => {
+					writes.push(resolve as (value: unknown) => void);
+				}) as Promise<T>;
+			}
+			throw new Error(`unexpected request ${method}`);
+		},
+	});
+	await controller.initialize({ nowplaying_enabled: true });
+
+	const on = controller.setEnabled(true);
+	const off = controller.setEnabled(false);
+	assert.equal(writes.length, 2);
+	// The newer transition (off) settles first; the stale on settles last.
+	writes[1]!({ ok: true });
+	await off;
+	writes[0]!({ ok: true });
+	await on;
+	await drainMicrotasks();
+
+	assert.equal(controller.isEnabled(), false, "the newest intent is disabled");
+	assert.equal(bar.visible, false, "the stale on never re-showed the bar");
+	assert.equal(bar.state, undefined, "the stale on never republished a reading");
+	const before = fetches;
+	t.mock.timers.tick(NOWPLAYING_POLL_MS * 3);
+	await drainMicrotasks();
+	assert.equal(fetches, before, "polling stayed stopped");
+	assert.ok(writes.length >= 3, "the stale write was compensated with the newest value");
+	writes.at(-1)!({ ok: true });
+	await drainMicrotasks();
 });

@@ -4,7 +4,6 @@
 // "./design/text.ts" directly. Do not add a second registry here.
 
 export {
-	LEGACY_SLOT_TO_SEMANTIC,
 	REQUIRED_THEME_IDS,
 	SKIN_NAMES,
 	editorTheme,

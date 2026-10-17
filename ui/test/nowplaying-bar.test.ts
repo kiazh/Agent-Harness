@@ -94,6 +94,31 @@ test("an error line replaces the meta row while a title survives", () => {
 	assert.match(lines[1]!, /blocked automation/);
 });
 
+test("a denied Automation permission reads as needs-permission, never as Nothing playing", () => {
+	const denied = {
+		available: false,
+		state: null,
+		title: null,
+		artist: null,
+		album: null,
+		source: null,
+		elapsed: null,
+		duration: null,
+		error:
+			"macOS blocked automation for Spotify — allow it in System Settings → Privacy & Security → Automation",
+	};
+	const full = plainLines(bar(denied, 3), 90);
+	assert.equal(full.length, 1, "the denied state stays one honest line");
+	assert.match(full[0]!, /Automation permission needed/);
+	assert.match(full[0]!, /blocked automation for Spotify/);
+	assert.doesNotMatch(full.join("\n"), /Nothing playing/);
+	for (const rows of [1, 2]) {
+		const lines = plainLines(bar(denied, rows), 90);
+		assert.doesNotMatch(lines.join("\n"), /Nothing playing/);
+		assert.match(lines.join("\n"), /automation/i);
+	}
+});
+
 test("paused shows the paused glyph; the animation only runs while playing", () => {
 	const paused = plainLines(bar({ state: "paused" }, 3), 90);
 	assert.match(paused[0]!, /⏸/);

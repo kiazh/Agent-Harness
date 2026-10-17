@@ -121,6 +121,12 @@ export function isWorkspaceRefusal(value: unknown): value is WorkspaceReadRefusa
 export class WorkspaceGatewayAdapter implements WorkspaceGateway {
 	private readonly request: WorkspaceRequestFn;
 	private currentIdentity: WorkspaceOpenResult | undefined;
+	/**
+	 * Orders overlapping opens/closes: only the newest open may bind. A close
+	 * also bumps it so an open that resolves after the close leaves no stale
+	 * adapter identity behind (controller-level fencing is separate).
+	 */
+	private openGeneration = 0;
 
 	constructor(request: WorkspaceRequestFn) {
 		this.request = request;
@@ -131,8 +137,9 @@ export class WorkspaceGatewayAdapter implements WorkspaceGateway {
 	}
 
 	async open(root: string, trust: boolean): Promise<WorkspaceOpenResult> {
+		const generation = ++this.openGeneration;
 		const identity = await this.request<WorkspaceOpenResult>("workspace.open", { root, trust });
-		this.currentIdentity = identity;
+		if (generation === this.openGeneration) this.currentIdentity = identity;
 		return identity;
 	}
 
@@ -237,6 +244,9 @@ export class WorkspaceGatewayAdapter implements WorkspaceGateway {
 	}
 
 	async close(): Promise<WorkspaceCloseResult | WorkspaceReadRefusal> {
+		// Any open still in flight is stale from here on: it must not bind a
+		// new identity after the user (or controller) closed the workspace.
+		this.openGeneration += 1;
 		const identity = this.currentIdentity;
 		if (!identity) return { closed: false };
 		const result = await this.request<WorkspaceCloseResult | WorkspaceReadRefusal>(

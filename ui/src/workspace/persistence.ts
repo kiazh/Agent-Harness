@@ -46,6 +46,12 @@ export interface ParsedWorkspaceState {
 	migrated: boolean;
 }
 
+/** Optional observability for bounded persistence warnings. */
+export interface WorkspacePersistenceOptions {
+	/** Called at most once per save when an entry had to be dropped for size. */
+	onWarning?: (message: string) => void;
+}
+
 /** The controller binds this to `config.get`/`config.set` for `workspace_ui_state`. */
 export interface WorkspacePersistenceStore {
 	get(): Promise<string | undefined>;
@@ -222,9 +228,11 @@ function documentByteLength(byRoot: Record<string, unknown>): number {
  */
 export class WorkspacePersistence {
 	private readonly store: WorkspacePersistenceStore;
+	private readonly options: WorkspacePersistenceOptions;
 
-	constructor(store: WorkspacePersistenceStore) {
+	constructor(store: WorkspacePersistenceStore, options: WorkspacePersistenceOptions = {}) {
 		this.store = store;
+		this.options = options;
 	}
 
 	/**
@@ -258,29 +266,63 @@ export class WorkspacePersistence {
 		const byRoot = document.byRoot;
 		delete byRoot[rootKey];
 		byRoot[rootKey] = serialized;
-		this.evictToFit(byRoot, rootKey);
+		const warning = this.evictToFit(byRoot, rootKey);
 		await this.store.set(
 			JSON.stringify({ version: PERSISTENCE_DOCUMENT_VERSION, byRoot }),
 		);
+		if (warning !== undefined) {
+			// The write succeeded without the oversized entry (so future saves
+			// are never wedged); report the loss once to the caller's notice path.
+			try {
+				this.options.onWarning?.(warning);
+			} catch {
+				// A warning observer must never break persistence.
+			}
+			throw new Error(warning);
+		}
 	}
 
 	/**
 	 * Evict least-recently-saved roots until the document fits both the root
-	 * count cap and the backend byte bound (minus a safety margin). The root
-	 * being saved is kept even when it alone is oversized: that write is still
-	 * attempted, and the backend rejection surfaces to the caller.
+	 * count cap and the backend byte bound (minus a safety margin). When only
+	 * the root being saved remains and it alone is oversized, compact it
+	 * (cursors first, then the URI list) before giving up. Returns a bounded
+	 * warning when even the compacted entry cannot fit; the entry is then
+	 * dropped so one oversized save cannot permanently block all persistence.
 	 */
-	private evictToFit(byRoot: Record<string, unknown>, keepRootKey: string): void {
+	private evictToFit(byRoot: Record<string, unknown>, keepRootKey: string): string | undefined {
 		for (;;) {
 			const keys = Object.keys(byRoot);
 			const overCount = keys.length > MAX_PERSISTED_ROOTS;
 			const overBytes =
 				documentByteLength(byRoot) > MAX_PERSISTED_DOCUMENT_BYTES - PERSISTED_DOCUMENT_SAFETY_MARGIN_BYTES;
-			if (!overCount && !overBytes) return;
+			if (!overCount && !overBytes) return undefined;
 			const oldest = keys.find((key) => key !== keepRootKey);
-			if (oldest === undefined) return;
-			delete byRoot[oldest];
+			if (oldest !== undefined) {
+				delete byRoot[oldest];
+				continue;
+			}
+			if (this.compactEntry(byRoot, keepRootKey)) continue;
+			// Compaction is exhausted: keep the rest of the document writable
+			// rather than failing every future save forever.
+			delete byRoot[keepRootKey];
+			return "workspace state is too large to persist (64 KiB limit); the latest layout was not remembered";
 		}
+	}
+
+	/** Shed non-essential fields one step at a time; false when nothing is left to shed. */
+	private compactEntry(byRoot: Record<string, unknown>, rootKey: string): boolean {
+		const entry = byRoot[rootKey];
+		if (!isRecord(entry)) return false;
+		if ("cursorByUri" in entry) {
+			delete entry.cursorByUri;
+			return true;
+		}
+		if (Array.isArray(entry.openUris) && entry.openUris.length > 0) {
+			entry.openUris = entry.openUris.slice(0, Math.floor(entry.openUris.length / 2));
+			return true;
+		}
+		return false;
 	}
 
 	/** Best-effort read: a throwing store read is "nothing stored". */

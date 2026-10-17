@@ -10,6 +10,7 @@ import {
 	hasNoTerminalControls,
 	sanitizeDisplay,
 	shapePreview,
+	singleLine,
 	truncateDisplay,
 	truncateUtf8ByBytes,
 	wrapDisplay,
@@ -197,6 +198,28 @@ test("C1 controls never survive sanitization or validation; safe SGR does", () =
 	const cleared = sanitizeDisplay("x\x9b2Jy");
 	assert.ok(!/[\u0080-\u009f]/.test(cleared), "unsafe C1 CSI survives");
 	assert.equal(hasNoTerminalControls("x\x9b2Jy"), false, "raw 8-bit CSI accepted");
+});
+
+test("singleLine strips control bytes and bidi/isolate overrides from labels", () => {
+	// Bidi overrides/isolates are invisible ordering instructions: a skill name
+	// or menu label must render as its honest byte order, never reordered.
+	assert.equal(singleLine("safe\u202Egnp.exe"), "safegnp.exe", "bidi override stripped");
+	assert.equal(singleLine("\u2066a\u2069b\u200Fc\u200Ed"), "abcd", "isolates and marks stripped");
+	assert.equal(singleLine("route \u202A left \u202C end"), "route  left  end");
+
+	// Percent-encoded ESC (a URI-decoded hostile name) never survives.
+	assert.equal(singleLine(decodeURIComponent("evil%1B%5D52%3Bx%07.py")), "evil.py");
+
+	// Control bytes: C0, DEL and C1 are removed rather than rendered.
+	assert.equal(singleLine("a\u0000b\u0007c\u007Fd\u009Be"), "abcde");
+	assert.equal(singleLine("a\x1b]0;owned\x1b\\b"), "ab", "OSC title payload stripped");
+
+	// Styling is not meaningful inside a single-line label; the parameters must
+	// never leak as literal text and the row stays one physical line.
+	const styled = singleLine("a\x1b[31mred\x1b[0m\nb\tc");
+	assert.equal(styled, "ared b c");
+	assert.ok(!styled.includes("\n"), "one physical row");
+	assert.ok(!styled.includes("\x1b"), "no escape survives");
 });
 
 test("unicode_rendering_stays_inside_width", () => {

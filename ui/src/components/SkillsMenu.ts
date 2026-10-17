@@ -28,7 +28,7 @@ import {
 	type TUI,
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
-import { sanitizeDisplay, wrapDisplay } from "../design/text.ts";
+import { singleLine, wrapDisplay } from "../design/text.ts";
 import { Menu, type MenuOptions, type MenuSectionItem } from "./Menu.ts";
 
 // ─── gateway contract types (mirror machina/gateway/features/skills.py) ─────
@@ -337,10 +337,6 @@ const FILTER_SLOTS = ["family", "capability", "source", "state"] as const;
 type FilterSlot = (typeof FILTER_SLOTS)[number];
 
 /** Single physical row: control sequences stripped, newlines collapse. */
-function singleLine(text: string): string {
-	return sanitizeDisplay(text).replace(/\n/g, " ");
-}
-
 function sectionRow(label: string): MenuSectionItem {
 	return { value: SECTION_VALUE, label, section: true };
 }
@@ -498,6 +494,8 @@ export class SkillsMenu implements Component {
 	private previewSeq = 0;
 	private sectionSeq = 0;
 	private timer: ReturnType<typeof setTimeout> | null = null;
+	/** P0-23: once stopLiveWork runs, late async continuations are dropped until activate. */
+	private stopped = false;
 
 	private menu: ResultMenu | Menu;
 
@@ -517,6 +515,7 @@ export class SkillsMenu implements Component {
 
 	/** Open the dialog: reset state, then immediately request the query. */
 	activate(): void {
+		this.stopped = false;
 		this.clearTimer();
 		this.mode = "results";
 		this.candidates = [];
@@ -546,12 +545,29 @@ export class SkillsMenu implements Component {
 
 	/** Close the dialog; in-flight responses are dropped. */
 	dismiss(): void {
+		// P0-23: dismiss is the same funnel as close — stop live work first so
+		// no pending provider timer or in-flight continuation survives the
+		// dismissal, then report the close.
+		this.stopLiveWork();
+		this.onClose?.();
+	}
+
+	/**
+	 * P0-23: kill every piece of live work ([the] debounce timer plus all
+	 * request sequences: pending and in-flight search/preview/section
+	 * continuations see a stale sequence or the stopped flag and drop).
+	 * Idempotent; `activate()` revives. The host runs this from its one
+	 * close funnel (including delete-close and exit `dialog.cancel()`),
+	 * which do not reach `dismiss()`.
+	 */
+	stopLiveWork(): void {
+		if (this.stopped) return;
+		this.stopped = true;
 		this.clearTimer();
 		this.requestSeq += 1;
 		this.previewSeq += 1;
 		this.sectionSeq += 1;
 		this.focused = false;
-		this.onClose?.();
 	}
 
 	/** Update the row budget (terminal resize); selection stays by skill ID. */
@@ -586,11 +602,6 @@ export class SkillsMenu implements Component {
 			previewError: this.previewError,
 			notice: this.notice,
 		};
-	}
-
-	/** Candidates in provider order (the backend ranked them; never re-sorted). */
-	visibleCandidates(): SkillsCandidate[] {
-		return [...this.candidates];
 	}
 
 	render(width: number): string[] {
@@ -1168,11 +1179,11 @@ export class SkillsMenu implements Component {
 	private async loadDetails(skillId: string): Promise<void> {
 		try {
 			const skill = await this.providers.details(skillId);
-			if (this.detailsSkillId !== skillId) return;
+			if (this.stopped || this.detailsSkillId !== skillId) return;
 			this.details = skill;
 			this.detailsStatus = "ready";
 		} catch (error) {
-			if (this.detailsSkillId !== skillId) return;
+			if (this.stopped || this.detailsSkillId !== skillId) return;
 			this.detailsStatus = "error";
 			this.detailsError = singleLine(message(error));
 		}
@@ -1199,11 +1210,11 @@ export class SkillsMenu implements Component {
 		const seq = ++this.previewSeq;
 		try {
 			const preview = await this.providers.preview(request);
-			if (seq !== this.previewSeq || this.mode !== "preview") return;
+			if (this.stopped || seq !== this.previewSeq || this.mode !== "preview") return;
 			this.preview = preview;
 			this.previewStatus = "ready";
 		} catch (error) {
-			if (seq !== this.previewSeq || this.mode !== "preview") return;
+			if (this.stopped || seq !== this.previewSeq || this.mode !== "preview") return;
 			this.previewStatus = "error";
 			this.previewError = singleLine(message(error));
 		}
@@ -1246,12 +1257,12 @@ export class SkillsMenu implements Component {
 	private async loadSection(seq: number, params: SkillsSectionParams): Promise<void> {
 		try {
 			const result = await this.providers.section(params);
-			if (seq !== this.sectionSeq || this.sectionSkillId !== params.skillId) return;
+			if (this.stopped || seq !== this.sectionSeq || this.sectionSkillId !== params.skillId) return;
 			this.section = result;
 			this.sectionStatus = "ready";
 			this.detailsAnchor = result.stale ? "detail:section-stale" : "detail:section-head";
 		} catch (error) {
-			if (seq !== this.sectionSeq || this.sectionSkillId !== params.skillId) return;
+			if (this.stopped || seq !== this.sectionSeq || this.sectionSkillId !== params.skillId) return;
 			this.sectionStatus = "error";
 			this.sectionError = singleLine(message(error));
 		}

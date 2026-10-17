@@ -231,3 +231,22 @@ test("the disabled bar says so and points at /music on", async () => {
 	await musicCommand.run("status", host);
 	assert.equal(printed[1]!.text, "Now playing: not checked yet.");
 });
+
+test("a denied Automation permission is reported as needs-permission, not Nothing playing", async () => {
+	const music = new FakeMusic();
+	music.current = reading({
+		available: false,
+		state: null,
+		title: null,
+		artist: null,
+		source: null,
+		elapsed: null,
+		duration: null,
+		error:
+			"macOS blocked automation for Spotify — allow it in System Settings → Privacy & Security → Automation",
+	});
+	const { host, printed } = fakeHost(music);
+	await musicCommand.run("status", host);
+	assert.match(printed.at(-1)!.text, /Automation permission needed/);
+	assert.doesNotMatch(printed.at(-1)!.text, /Nothing playing/);
+});

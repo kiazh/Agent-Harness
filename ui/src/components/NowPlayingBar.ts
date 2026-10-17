@@ -45,6 +45,22 @@ export interface SoundAnimationSource {
 	frame(frames: readonly string[], intervalMs?: number, startedAtMs?: number): string;
 }
 
+/**
+ * Why a reading has no track. macOS Automation denial is a needs-permission
+ * state, distinct from "nothing is playing" and from a missing API.
+ */
+export type NowPlayingProblem = "permission" | "unavailable";
+
+export function nowPlayingProblem(state: NowPlayingState | undefined): NowPlayingProblem | undefined {
+	if (!state || state.title) return undefined;
+	const error = (state.error ?? "").trim().toLowerCase();
+	if (!error) return undefined;
+	if (error.includes("automation") || error.includes("permission") || error.includes("not authorized")) {
+		return "permission";
+	}
+	return "unavailable";
+}
+
 export interface PinnedBarBudget {
 	setBudget(rows: number): void;
 }
@@ -106,7 +122,11 @@ export class NowPlayingBar implements PinnedBarBudget {
 
 	private identity(): string {
 		const state = this.state;
-		if (!state?.title) return "Nothing playing";
+		if (!state?.title) {
+			// A denied Automation permission is actionable and must never read
+			// as the same empty state as "nothing is playing".
+			return nowPlayingProblem(state) === "permission" ? "Automation permission needed" : "Nothing playing";
+		}
 		return state.title;
 	}
 
@@ -167,7 +187,12 @@ export class NowPlayingBar implements PinnedBarBudget {
 	private compactLine(width: number): string {
 		const state = this.state;
 		if (!state?.title) {
-			const message = state?.error ? theme.warning(state.error) : theme.dim("♪ Nothing playing");
+			const message =
+				nowPlayingProblem(state) === "permission"
+					? theme.warning(`♪ Automation permission needed — ${state?.error ?? "check System Settings"}`)
+					: state?.error
+						? theme.warning(state.error)
+						: theme.dim("♪ Nothing playing");
 			return truncateToWidth(message, width);
 		}
 		const artist = state.artist ? ` — ${state.artist}` : "";
@@ -181,10 +206,12 @@ export class NowPlayingBar implements PinnedBarBudget {
 	render(width: number): string[] {
 		if (!this.visible || width <= 0 || this.rows <= 0) return [];
 		const state = this.state;
-		if (!state || (!state.title && state.error && this.rows === 1)) {
+		if (!state?.title) {
+			// No track: one honest line. A denied Automation permission keeps
+			// its needs-permission wording (with the actionable error), never
+			// the "Nothing playing" empty line.
 			return [this.compactLine(width)];
 		}
-		if (!state?.title) return [this.compactLine(width)];
 		if (this.rows >= 3) {
 			return [this.titleLine(width), this.metaLine(width), this.transportLine(width)];
 		}
