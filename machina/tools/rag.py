@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+import weakref
+from dataclasses import dataclass
+from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -32,8 +35,18 @@ def _execution_workspace() -> Path:
 # Global RAG pipeline instance (lazy-initialized)
 _rag_pipeline: RAGPipeline | None = None
 _rag_pipeline_lock = asyncio.Lock()
+# Lifecycle state is keyed by a per-generation token, never by id(pipeline):
+# CPython may reuse an object address after GC, which made a stale release
+# decrement (or close) an unrelated newer generation. ``_pipeline_users`` is
+# generation-key -> live lease count; ``_pipeline_leases`` is lease-token ->
+# (pipeline, generation-key); ``_retired_pipelines`` is generation-key ->
+# pipeline awaiting its last release.
 _pipeline_users: dict[int, int] = {}
+_pipeline_leases: dict[int, tuple[RAGPipeline, int]] = {}
 _retired_pipelines: dict[int, RAGPipeline] = {}
+_pipeline_generation_counter = count(1)
+_pipeline_lease_counter = count(1)
+_pipeline_key_fallback: weakref.WeakKeyDictionary[Any, int] = weakref.WeakKeyDictionary()
 # IDENTITY of the shared instance: (reranker selection identity,
 # resolved embedding selection identity, (keyword RRF weight, dense RRF
 # weight)). Rotation of any component — a different reranker
@@ -142,6 +155,53 @@ def _build_shared_pipeline() -> RAGPipeline:
     return RAGPipeline(reranker=reranker)
 
 
+@dataclass(frozen=True)
+class RAGLease:
+    """One retained use of a shared RAG generation.
+
+    The token, not the pipeline object, is the lifecycle key: releasing the
+    same lease twice is a no-op, and a stale lease can never decrement a newer
+    generation that happens to reuse the pipeline's address.
+    """
+
+    pipeline: RAGPipeline
+    token: int
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.pipeline, name)
+
+
+def _pipeline_generation_key(pipeline: RAGPipeline) -> int:
+    """Stable generation key; never ``id(pipeline)``.
+
+    Attach a monotonic token to the instance. For an exotic object that
+    refuses attributes, use a weak-keyed fallback; both remain stable while
+    the object lives and are never reused after GC.
+    """
+    key = getattr(pipeline, "_rag_generation_key", None)
+    if type(key) is int:
+        return key
+    key = next(_pipeline_generation_counter)
+    try:
+        setattr(pipeline, "_rag_generation_key", key)
+    except (AttributeError, TypeError):
+        try:
+            return _pipeline_key_fallback[pipeline]
+        except (KeyError, TypeError):
+            _pipeline_key_fallback[pipeline] = key
+    return key
+
+
+def _lease_token_for(lease: RAGLease | RAGPipeline) -> int | None:
+    """Resolve a lease token, accepting a raw pipeline for compatibility."""
+    if isinstance(lease, RAGLease):
+        return lease.token
+    for token, (pipeline, _key) in reversed(_pipeline_leases.items()):
+        if pipeline is lease:
+            return token
+    return None
+
+
 async def _close_pipeline_quietly(pipeline: RAGPipeline) -> None:
     """Close a replaced or released pipeline's owned clients (F08, H19).
 
@@ -149,8 +209,16 @@ async def _close_pipeline_quietly(pipeline: RAGPipeline) -> None:
     generation; without this the superseded instances — and the credential
     they bound — were never released. Each close is isolated so one failure
     cannot abort the rebuild/release or mask the other, and a failure is only
-    logged (never surfaced), matching the shared-embedder close seam.
+    logged (never surfaced), matching the shared-embedder close seam. The
+    closed marker makes every close path idempotent: a retired generation can
+    be reached by both a rebuild and a release, and must close only once.
     """
+    if getattr(pipeline, "_rag_closed", False):
+        return
+    try:
+        setattr(pipeline, "_rag_closed", True)
+    except (AttributeError, TypeError):
+        pass
     for name in ("_embedder", "_reranker"):
         component = getattr(pipeline, name, None)
         close = getattr(component, "close", None)
@@ -162,6 +230,47 @@ async def _close_pipeline_quietly(pipeline: RAGPipeline) -> None:
             logger.warning("failed to close replaced RAG %s: %s", name, e, exc_info=True)
 
 
+async def _select_pipeline_locked() -> RAGPipeline:
+    """Return the current generation, rebuilding when its identity changes.
+
+    The caller must hold ``_rag_pipeline_lock``. Selection and the subsequent
+    lease increment happen in the same critical section; otherwise a rebuild
+    could observe zero users after the caller selected the old pipeline but
+    before it retained it, and close the pipeline the caller is about to use.
+    """
+    global _rag_pipeline, _rag_pipeline_identity
+    current = _current_pipeline_identity()
+    if _rag_pipeline is None or _rag_pipeline_identity != current:
+        previous = _rag_pipeline
+        _rag_pipeline = _build_shared_pipeline()
+        # Record the identity the reranker actually bound to. When the
+        # build fell back to passthrough without binding a backend,
+        # keep the configured identity so a failing runtime is not
+        # retried on every request; a real config/key change changes
+        # `current` and still forces the rebuild. Embedding and weight
+        # identity stay resolved-config-derived: build_embedder
+        # degrades to keyword-only without changing it, and the
+        # resolved embedding identity already carries the effective
+        # availability (F08).
+        built = _built_reranker_identity(_rag_pipeline)
+        _rag_pipeline_identity = (
+            built if built is not None else current[0],
+            current[1],
+            current[2],
+        )
+        if previous is not None:
+            previous_key = _pipeline_generation_key(previous)
+            if _pipeline_users.get(previous_key, 0):
+                _retired_pipelines[previous_key] = previous
+            else:
+                await _core_symbol("machina.core.background_tasks", "await_joined")(
+                    _close_pipeline_quietly(previous)
+                )
+    pipeline = _rag_pipeline
+    assert pipeline is not None
+    return pipeline
+
+
 async def get_rag_pipeline() -> RAGPipeline:
     """Get or create the global RAG pipeline instance.
 
@@ -170,62 +279,52 @@ async def get_rag_pipeline() -> RAGPipeline:
     the resolved embedding selection (backend/model/endpoint, a rotated or
     newly supplied embedding credential, or a keyword-only <-> dense
     availability change), or the RRF fusion weights. Reuses when unchanged;
-    the superseded pipeline's owned clients are closed.
+    the superseded pipeline's owned clients are closed only after every
+    outstanding lease is released.
     """
-    global _rag_pipeline, _rag_pipeline_identity
-    current = _current_pipeline_identity()
-    if _rag_pipeline is None or _rag_pipeline_identity != current:
-        async with _rag_pipeline_lock:
-            # Double-check after acquiring lock
-            if _rag_pipeline is None or _rag_pipeline_identity != current:
-                previous = _rag_pipeline
-                _rag_pipeline = _build_shared_pipeline()
-                # Record the identity the reranker actually bound to. When the
-                # build fell back to passthrough without binding a backend,
-                # keep the configured identity so a failing runtime is not
-                # retried on every request; a real config/key change changes
-                # `current` and still forces the rebuild. Embedding and weight
-                # identity stay resolved-config-derived: build_embedder
-                # degrades to keyword-only without changing it, and the
-                # resolved embedding identity already carries the effective
-                # availability (F08).
-                built = _built_reranker_identity(_rag_pipeline)
-                _rag_pipeline_identity = (
-                    built if built is not None else current[0],
-                    current[1],
-                    current[2],
-                )
-                if previous is not None:
-                    if _pipeline_users.get(id(previous), 0):
-                        _retired_pipelines[id(previous)] = previous
-                    else:
-                        await _core_symbol("machina.core.background_tasks", "await_joined")(
-                            _close_pipeline_quietly(previous)
-                        )
-    return _rag_pipeline
+    async with _rag_pipeline_lock:
+        return await _select_pipeline_locked()
 
 
-async def acquire_rag_pipeline() -> RAGPipeline:
-    """Retain the shared generation until its consumer releases it."""
-    pipeline = await get_rag_pipeline()
-    key = id(pipeline)
-    _pipeline_users[key] = _pipeline_users.get(key, 0) + 1
-    return pipeline
+async def acquire_rag_pipeline() -> RAGLease:
+    """Retain the shared generation and return a release token for it."""
+    async with _rag_pipeline_lock:
+        pipeline = await _select_pipeline_locked()
+        key = _pipeline_generation_key(pipeline)
+        _pipeline_users[key] = _pipeline_users.get(key, 0) + 1
+        token = next(_pipeline_lease_counter)
+        _pipeline_leases[token] = (pipeline, key)
+        return RAGLease(pipeline=pipeline, token=token)
 
 
-async def release_rag_pipeline(pipeline: RAGPipeline) -> None:
-    """Release a consumer and close an unused retired generation."""
-    key = id(pipeline)
-    users = _pipeline_users.get(key, 0)
-    if users > 1:
-        _pipeline_users[key] = users - 1
-    elif users == 1:
-        del _pipeline_users[key]
-        retired = _retired_pipelines.pop(key, None)
-        if retired is not None:
-            await _core_symbol("machina.core.background_tasks", "await_joined")(
-                _close_pipeline_quietly(retired)
-            )
+async def release_rag_pipeline(lease: RAGLease | RAGPipeline) -> None:
+    """Release one lease; close a retired generation after its last user.
+
+    The token makes this idempotent: a duplicate release is ignored instead of
+    stealing a later consumer's count. A raw pipeline is accepted for
+    compatibility and releases its most recent outstanding lease.
+    """
+    token = _lease_token_for(lease)
+    if token is None:
+        return
+    retired: RAGPipeline | None = None
+    async with _rag_pipeline_lock:
+        entry = _pipeline_leases.pop(token, None)
+        if entry is None:
+            return
+        _pipeline, key = entry
+        users = _pipeline_users.get(key, 0)
+        if users > 1:
+            _pipeline_users[key] = users - 1
+        elif users == 1:
+            del _pipeline_users[key]
+            retired = _retired_pipelines.pop(key, None)
+        # users == 0 means the lifecycle state was reset while this token was
+        # outstanding; do not close an unrelated generation on a stale token.
+    if retired is not None:
+        await _core_symbol("machina.core.background_tasks", "await_joined")(
+            _close_pipeline_quietly(retired)
+        )
 
 
 async def close_active_rag_pipeline() -> None:
@@ -239,12 +338,21 @@ async def close_active_rag_pipeline() -> None:
     same isolated per-component close used for replaced generations, and the
     recorded generation identity is reset so the next request builds fresh
     clients instead of reusing the released ones.
+
+    If leases are still outstanding, retire the generation instead of closing
+    it under its users; the last release closes it.
     """
     global _rag_pipeline, _rag_pipeline_identity
+    pipeline: RAGPipeline | None
     async with _rag_pipeline_lock:
         pipeline = _rag_pipeline
         _rag_pipeline = None
         _rag_pipeline_identity = None
+        if pipeline is not None:
+            key = _pipeline_generation_key(pipeline)
+            if _pipeline_users.get(key, 0):
+                _retired_pipelines[key] = pipeline
+                pipeline = None
     if pipeline is not None:
         await _close_pipeline_quietly(pipeline)
 
