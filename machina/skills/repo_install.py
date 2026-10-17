@@ -20,8 +20,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -177,6 +179,78 @@ def _abort_clone(parent: Path, message: str, cause: BaseException | None = None)
     raise RepoInstallError(message) from cause
 
 
+def _tree_size(path: Path, limit: int) -> int:
+    """Bounded recursive byte count; returns early once *limit* is exceeded."""
+    total = 0
+    if not path.exists():
+        return 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                candidate = os.path.join(root, name)
+                info = os.lstat(candidate)
+                if stat.S_ISREG(info.st_mode):
+                    total += info.st_size
+            except OSError:
+                continue
+            if total > limit:
+                return total
+    return total
+
+
+def _clone_with_size_limit(args: list[str], *, parent: Path, target: Path) -> None:
+    """Run git clone while enforcing MAX_CLONE_BYTES during the transfer.
+
+    The old path waited for a complete checkout before measuring it, so a
+    hostile repository could fill the disk far beyond the advertised cap
+    (combined #22 / original #45). Poll the growing tree and kill the clone as
+    soon as the cap is crossed; the timeout is enforced by the same loop.
+    """
+    try:
+        process = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_git_env(),
+        )
+    except OSError as exc:
+        _abort_clone(parent, "could not clone that repository", exc)
+    deadline = time.monotonic() + CLONE_TIMEOUT
+    try:
+        while True:
+            returncode = process.poll()
+            if returncode is not None:
+                _stdout, stderr = process.communicate()
+                if returncode != 0:
+                    _abort_clone(
+                        parent,
+                        "could not clone that repository",
+                        subprocess.CalledProcessError(returncode, args, stderr=stderr),
+                    )
+                return
+            if time.monotonic() > deadline:
+                process.kill()
+                process.communicate()
+                _abort_clone(
+                    parent,
+                    "clone timed out",
+                    subprocess.TimeoutExpired(args, CLONE_TIMEOUT),
+                )
+            if _tree_size(target, MAX_CLONE_BYTES) > MAX_CLONE_BYTES:
+                process.kill()
+                process.communicate()
+                _abort_clone(parent, "repository exceeds the clone size limit")
+            time.sleep(0.1)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            try:
+                process.wait(timeout=5)
+            except Exception:
+                pass
+
+
 def clone_repo(source: RepoSource, *, _allow_file: bool = False) -> tuple[Path, str]:
     """Shallow-clone into a fresh temp dir; return (dir, revision).
 
@@ -184,8 +258,8 @@ def clone_repo(source: RepoSource, *, _allow_file: bool = False) -> tuple[Path, 
     network access; production callers must leave it False. The caller
     owns the temp parent and must remove it after staging (see repo_stage).
 
-    Size is enforced after checkout: a hostile HEAD is fully fetched
-    before refusal, bounded by the clone timeout and the size cap below.
+    Size is enforced during the transfer (and re-checked after checkout): a
+    hostile HEAD is killed as soon as the working tree crosses the cap.
     """
     if _allow_file:
         clone_url = source.url
@@ -202,18 +276,7 @@ def clone_repo(source: RepoSource, *, _allow_file: bool = False) -> tuple[Path, 
     if source.ref and not _allow_file:
         args += ["--branch", source.ref]
     args += [clone_url, str(target)]
-    try:
-        subprocess.run(
-            args,
-            check=True,
-            capture_output=True,
-            timeout=CLONE_TIMEOUT,
-            env=_git_env(),
-        )
-    except subprocess.TimeoutExpired as exc:
-        _abort_clone(parent, "clone timed out", exc)
-    except subprocess.CalledProcessError as exc:
-        _abort_clone(parent, "could not clone that repository", exc)
+    _clone_with_size_limit(args, parent=parent, target=target)
     try:
         revision = _git(["rev-parse", "HEAD"], cwd=target).strip()
     except RepoInstallError as exc:
