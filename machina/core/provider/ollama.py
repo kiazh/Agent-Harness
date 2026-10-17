@@ -81,9 +81,6 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         _validate_messages(messages)
         _validate_params(temperature, max_tokens)
 
-        # Rate limiting
-        await self._rate_limiter.acquire()
-
         payload: dict[str, Any] = {
             "model": model or self.model,
             "messages": ollama_messages(messages),
@@ -112,6 +109,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         if cached is not None:
             logger.debug("cache hit for ollama model=%s", model or self.model)
             return cached
+        await self._rate_limiter.acquire()
 
         audit_log(
             "llm_call_start",

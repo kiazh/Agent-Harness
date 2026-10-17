@@ -105,9 +105,6 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         _validate_messages(messages)
         _validate_params(temperature, max_tokens)
 
-        # Rate limiting
-        await self._rate_limiter.acquire()
-
         model = model or self.model
         tool_payload = _tools_payload(tools) if tools else None
         wire_messages, tool_payload, marks = openrouter_cache_wiring(messages, tool_payload, model)
@@ -140,6 +137,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         if cached is not None:
             logger.debug("cache hit for model=%s", model)
             return cached
+        await self._rate_limiter.acquire()
 
         audit_log("llm_call_start", provider="openrouter", model=model, message_count=len(messages))
 

@@ -102,7 +102,6 @@ class DirectProvider(LLMProvider, RateLimitBinding):
     ) -> LLMResponse:
         _validate_messages(messages)
         _validate_params(temperature, max_tokens)
-        await self._rate_limiter.acquire()
 
         model = model or self.model
         payload: dict[str, Any] = {
@@ -122,6 +121,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
         if cached is not None:
             logger.debug("cache hit for %s model=%s", self.spec.name, model)
             return cached
+        await self._rate_limiter.acquire()
 
         audit_log(
             "llm_call_start", provider=self.spec.name, model=model, message_count=len(messages)

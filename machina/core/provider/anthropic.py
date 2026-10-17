@@ -263,7 +263,6 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
     ) -> LLMResponse:
         _validate_messages(messages)
         _validate_params(temperature, max_tokens)
-        await self._rate_limiter.acquire()
 
         model = model or self.model
         payload = self._payload(
@@ -281,6 +280,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
         if cached is not None:
             logger.debug("cache hit for anthropic model=%s", model)
             return cached
+        await self._rate_limiter.acquire()
 
         audit_log(
             "llm_call_start", provider=self.PROVIDER_NAME, model=model, message_count=len(messages)

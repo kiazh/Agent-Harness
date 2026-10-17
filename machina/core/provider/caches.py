@@ -75,6 +75,7 @@ def _copy_cached_response(value: Any) -> Any:
             usage=dict(value.usage or {}),
             raw=copy.deepcopy(value.raw or {}),
             tool_calls=copy.deepcopy(value.tool_calls or []),
+            cache_hit=value.cache_hit,
         )
     return copy.deepcopy(value)
 
@@ -84,7 +85,10 @@ def _cache_get(key: str) -> Any | None:
     value = _RESPONSE_CACHE.get(key)
     if value is None:
         return None
-    return _copy_cached_response(value)
+    result = _copy_cached_response(value)
+    if isinstance(result, LLMResponse):
+        result.cache_hit = True
+    return result
 
 
 def _cache_put(key: str, value: Any) -> None:
