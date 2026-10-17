@@ -326,7 +326,12 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
 
         content, tool_calls = self._from_response_blocks(data.get("content", []))
         usage = parse_anthropic_usage(data.get("usage", {}))
-        _record_llm_call(data.get("model", model), duration_ms, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
+        _record_llm_call(
+            data.get("model", model),
+            duration_ms,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
         await settlement.settle(usage, model=data.get("model", model))
         audit_log(
             "llm_call_complete",
@@ -545,7 +550,12 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
         # placeholder in message_start.
         stream_usage["output_tokens"] = output_tokens
         usage = parse_anthropic_usage(stream_usage)
-        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
+        _record_llm_call(
+            resolved_model,
+            (time.monotonic() - start) * 1000,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
         await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete",

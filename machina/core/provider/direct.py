@@ -167,7 +167,12 @@ class DirectProvider(LLMProvider, RateLimitBinding):
         tool_calls = message.get("tool_calls", []) or []
         usage = parse_openai_usage(data.get("usage", {}))
 
-        _record_llm_call(data.get("model", model), duration_ms, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
+        _record_llm_call(
+            data.get("model", model),
+            duration_ms,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
         await settlement.settle(usage, model=data.get("model", model))
         audit_log(
             "llm_call_complete",
@@ -322,7 +327,12 @@ class DirectProvider(LLMProvider, RateLimitBinding):
                 "estimated": True,
             }
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, prompt_tokens=usage["prompt_tokens"], completion_tokens=usage["completion_tokens"],)
+        _record_llm_call(
+            resolved_model,
+            (time.monotonic() - start) * 1000,
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+        )
         await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete", provider=self.spec.name, model=model, tool_calls=len(tool_calls)

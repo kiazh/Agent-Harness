@@ -300,7 +300,6 @@ def record_llm_call(
     )
 
 
-
 @contextmanager
 def timed(operation: str) -> Generator[None, None, None]:
     """Context manager to time an operation and record metrics."""

@@ -937,15 +937,11 @@ class MCPConnection:
                 if room > 0:
                     prefix = text + ("\n" if text else "")
                     text = (
-                        prefix
-                        + structured_text[:room].decode("utf-8", "ignore")
-                        + marker.decode()
+                        prefix + structured_text[:room].decode("utf-8", "ignore") + marker.decode()
                     )
                 else:
                     text = (
-                        encoded[: self.config.result_limit - len(marker)].decode(
-                            "utf-8", "ignore"
-                        )
+                        encoded[: self.config.result_limit - len(marker)].decode("utf-8", "ignore")
                         + marker.decode()
                     )
             else:

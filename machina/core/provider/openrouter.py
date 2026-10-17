@@ -265,7 +265,12 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         tool_calls = message.get("tool_calls", []) or []
         usage = parse_openai_usage(data.get("usage", {}))
 
-        _record_llm_call(data.get("model", model), duration_ms, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
+        _record_llm_call(
+            data.get("model", model),
+            duration_ms,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
 
         # Finish usage reservation
         await settlement.settle(usage, model=data.get("model", model))
@@ -449,7 +454,9 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                     # Account-wide daily quota exhausted: no free candidate can
                     # succeed, so stop now instead of sleeping through the rest
                     # of the chain and burning more of the quota.
-                    _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, is_error=True)
+                    _record_llm_call(
+                        resolved_model, (time.monotonic() - start) * 1000, is_error=True
+                    )
                     await settlement.fail()
                     audit_log(
                         "llm_stream_rate_limited",
@@ -477,7 +484,9 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                     except BaseException:
                         # Cancel/close while waiting for the next fallback
                         # candidate must settle the shared reservation.
-                        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, is_error=True)
+                        _record_llm_call(
+                            resolved_model, (time.monotonic() - start) * 1000, is_error=True
+                        )
                         await settlement.fail()
                         raise
                     continue
@@ -574,7 +583,12 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
             usage["prompt_tokens"] + usage["completion_tokens"],
         )
 
-        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
+        _record_llm_call(
+            resolved_model,
+            (time.monotonic() - start) * 1000,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
         # Finish usage reservation
         await settlement.settle(usage, model=resolved_model)
 

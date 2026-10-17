@@ -160,7 +160,12 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         tool_calls = message.get("tool_calls", []) or []
         usage = parse_ollama_usage(data.get("prompt_eval_count"), data.get("eval_count"))
 
-        _record_llm_call(data.get("model", model or self.model), duration_ms, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
+        _record_llm_call(
+            data.get("model", model or self.model),
+            duration_ms,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
 
         # Finish usage reservation
         await settlement.settle(usage, model=data.get("model", model or self.model))
@@ -335,7 +340,12 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         # exist for local models; the ledger still labels the basis).
         usage = parse_ollama_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
 
-        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
+        _record_llm_call(
+            resolved_model,
+            (time.monotonic() - start) * 1000,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
         # Finish usage reservation
         await settlement.settle(usage, model=resolved_model)
 

@@ -508,10 +508,7 @@ async def search_documents(
             )
         # Include headers, newlines and truncation markers in the total budget.
         remaining = (
-            MAX_SEARCH_RESPONSE_CHARS
-            - len(lines[0])
-            - sum(map(len, headers))
-            - 100 * len(results)
+            MAX_SEARCH_RESPONSE_CHARS - len(lines[0]) - sum(map(len, headers)) - 100 * len(results)
         )
         passage_limit = min(2000, max(0, remaining // len(results)))
         if passage_limit <= 0:

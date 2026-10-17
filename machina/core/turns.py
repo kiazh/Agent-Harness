@@ -66,9 +66,7 @@ _mutation_locks: dict[str, asyncio.Lock] = {}
 # running is never stale, even when the durable claim is not visible yet (the
 # holder may be awaiting _db_claim). Only a finished/unknown holder may be
 # recovered as a leaked lock.
-_lock_holders: weakref.WeakKeyDictionary[asyncio.Lock, asyncio.Task] = (
-    weakref.WeakKeyDictionary()
-)
+_lock_holders: weakref.WeakKeyDictionary[asyncio.Lock, asyncio.Task] = weakref.WeakKeyDictionary()
 
 _guard = _threading.Lock()
 

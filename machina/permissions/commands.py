@@ -66,6 +66,8 @@ def _strip_git_pager_flags(args: list[str]) -> list[str]:
     while args and args[0] in {"--no-pager", "-P"}:
         args = args[1:]
     return args
+
+
 _WORKFLOWS = frozenset({"test", "build", "lint", "typecheck", "check", "format"})
 _ESCAPE_ARGS = frozenset(
     {

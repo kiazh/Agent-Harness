@@ -667,9 +667,7 @@ def _create_skill_file_contained(
             try:
                 skill_fd = os.open(safe_name, dflags | nofollow, dir_fd=root_fd)
             except OSError:
-                raise ValueError(
-                    f"skill '{display_name}' directory traverses a symlink"
-                ) from None
+                raise ValueError(f"skill '{display_name}' directory traverses a symlink") from None
         except OSError:
             raise ValueError(f"skill '{display_name}' directory traverses a symlink") from None
 
