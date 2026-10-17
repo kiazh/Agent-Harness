@@ -568,8 +568,11 @@ def bind_section_anchors(
     for section in metadata.sections:
         key = _heading_key(section.heading)
         matches = index.get(key, ())
-        anchor = matches[0] if matches else None
-        if anchor is None:
+        already_claimed = key in claimed
+        # Ambiguous bindings are refused rather than silently pointing every
+        # declaration at the first occurrence (combined #48 / original #61).
+        anchor = matches[0] if len(matches) == 1 and not already_claimed else None
+        if not matches:
             diags.append(
                 MetadataDiagnostic(
                     code=CODE_SECTION_MISSING_ANCHOR,
@@ -586,18 +589,19 @@ def bind_section_anchors(
                     code=CODE_SECTION_DUPLICATE_HEADING,
                     message=(
                         f"heading {section.heading!r} appears {len(matches)} times; "
-                        f"section {section.id!r} bound to the first occurrence (line {anchor.line})"
+                        f"section {section.id!r} is left unbound as ambiguous"
                     ),
                     skill_id=metadata.skill_id,
                 )
             )
-        if key in claimed:
+        elif already_claimed:
             diags.append(
                 MetadataDiagnostic(
                     code=CODE_SECTION_DUPLICATE_HEADING,
                     message=(
                         f"heading {section.heading!r} is declared by sections "
-                        f"{claimed[key]!r} and {section.id!r}; both bind to the first occurrence"
+                        f"{claimed[key]!r} and {section.id!r}; both are left unbound "
+                        "because the binding is ambiguous"
                     ),
                     skill_id=metadata.skill_id,
                 )
