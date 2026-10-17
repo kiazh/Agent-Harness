@@ -27,6 +27,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: machina_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MACHINA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/machina_test
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -72,6 +90,23 @@ jobs:
 
       - name: Check wheel contents and isolated imports
         run: python tools/check_release_artifacts.py dist/*
+
+      # Checkout after packaging so the external suite cannot enter artifacts.
+      - name: Checkout backend regression suite
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: kiazh/Machina-DevTools
+          ref: 7c8b00ab56a8d8610696cfe95b3d8eec8b2ecc54
+          path: .ci-devtools
+          persist-credentials: false
+
+      - name: Run backend regression suite against this checkout
+        env:
+          MACHINA_REPO: ${{ github.workspace }}
+          PYTHON: python
+        run: |
+          bash .ci-devtools/bootstrap-links.sh "$MACHINA_REPO"
+          bash .ci-devtools/run-tests.sh tests/ -q -p no:cacheprovider -m "not ui_integration and not workflow_trial"
 
       - name: Upload distributions
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
