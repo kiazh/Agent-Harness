@@ -57,6 +57,28 @@ def _require_managed_key(key: str) -> str:
     return key
 
 
+def _credential_names(key: str) -> tuple[str, ...]:
+    from machina.core.config import LEGACY_ENV_VARS, SECRET_KEYS
+
+    setting = key.lower()
+    if setting in SECRET_KEYS:
+        return tuple(
+            dict.fromkeys((f"MACHINA_{setting.upper()}", LEGACY_ENV_VARS.get(setting, key)))
+        )
+    return (key,)
+
+
+def _sync_config_secret(key: str, value: str) -> None:
+    from machina.core.config import SECRET_KEYS, get_config
+
+    setting = key.lower()
+    if setting in SECRET_KEYS:
+        cfg = get_config()
+        cfg.set(setting, value)
+        if setting in cfg._session_overrides:
+            cfg._session_overrides[setting] = value
+
+
 def _effective_state(key: str, *, expected: str | None = None) -> dict[str, Any]:
     """Describe the credential actually selected without exposing its value."""
     from machina.core.config import SECRET_KEYS, get_config
@@ -64,7 +86,7 @@ def _effective_state(key: str, *, expected: str | None = None) -> dict[str, Any]
 
     setting = key.lower()
     cfg = get_config()
-    names = (f"MACHINA_{key}", key) if setting in SECRET_KEYS else (key,)
+    names = _credential_names(key)
     source = "configuration"
     if setting in getattr(cfg, "_session_overrides", {}):
         source = "session override"
@@ -141,21 +163,32 @@ async def secrets_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     if not value:
         raise RpcError(INVALID_PARAMS, "value must not be blank")
     env_file: str | None = None
+    stored = read_env_values()
+    updates = {key: value}
+    for name in _credential_names(key):
+        if os.environ.get(name, "").strip() or stored.get(name, "").strip():
+            updates[name] = value
     if persist:
         try:
-            env_file = str(set_env_values({key: value}))
+            env_file = str(set_env_values(updates))
         except (OSError, ValueError) as e:
             logger.warning("secrets.set: .env write failed for %s (%s)", key, type(e).__name__)
             raise RpcError(
                 INVALID_PARAMS, "could not write .env; live secret was not changed"
             ) from None
-    os.environ[key] = value
+    os.environ.update(updates)
+    _sync_config_secret(key, value)
     from machina.security.secrets import invalidate_secret_cache
 
     invalidate_secret_cache()
     logger.info("secrets.set: %s updated (persist=%s)", key, persist)
-    return {"key": key, "set": True, "persisted": persist, "envFile": env_file,
-            **await asyncio.to_thread(_effective_state, key, expected=value)}
+    return {
+        "key": key,
+        "set": True,
+        "persisted": persist,
+        "envFile": env_file,
+        **await asyncio.to_thread(_effective_state, key, expected=value),
+    }
 
 
 async def secrets_clear(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -171,22 +204,24 @@ async def secrets_clear(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     except ValueError as e:
         raise RpcError(INVALID_PARAMS, str(e)) from None
     _require_managed_key(key)
+    names = _credential_names(key)
+    references = (*names, *(f"{name}_FILE" for name in names))
     # Persist first: a failed write must not report durable removal.
     try:
         if find_env_file().is_file():
             stored = read_env_values()
-            if key in stored:
-                set_env_values({key: ""})
+            updates = {name: "" for name in references if name in stored}
+            if updates:
+                set_env_values(updates)
     except (OSError, ValueError) as error:
         logger.warning("secrets.clear: .env blank failed for %s (%s)", key, type(error).__name__)
         raise RpcError(
             INVALID_PARAMS, "could not clear .env; live secret was not changed"
         ) from None
-    os.environ.pop(key, None)
-    from machina.core.config import SECRET_KEYS, get_config
+    for name in references:
+        os.environ.pop(name, None)
+    _sync_config_secret(key, "")
     from machina.security.secrets import invalidate_secret_cache
 
-    if key.lower() in SECRET_KEYS:
-        get_config().set(key.lower(), "")
     invalidate_secret_cache()
     return {"key": key, "set": False, **await asyncio.to_thread(_effective_state, key, expected="")}
