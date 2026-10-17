@@ -231,6 +231,18 @@ test("forget confirmation reports the revocation outcome", async () => {
 
 test("OAuthProgress sanitizes provider text and stays usable when narrow", async () => {
 	assert.equal(sanitizeStatus("Title\x1b[31m"), "Title");
+	// F33: the real source carries ESC/control bytes (the pasted literal
+	// spaces were an export artifact); ordinary spaces must survive all three
+	// passes, and OSC titles must be stripped without eating text around them.
+	assert.equal(sanitizeStatus("Preparing authorization…"), "Preparing authorization…");
+	assert.equal(sanitizeStatus("Authorizing docs"), "Authorizing docs");
+	assert.equal(sanitizeStatus("keep  two  spaces"), "keep  two  spaces");
+	assert.equal(sanitizeStatus("a\x1b]0;window title\x07b"), "ab");
+	// C1 CSI (0x9b) is a control even without ESC.
+	assert.equal(sanitizeStatus("a\x9bb"), "a");
+	assert.equal(sanitizeStatus("a\x9b31mb"), "ab");
+	assert.equal(sanitizeStatus("a\x9b?25lb"), "ab");
+	assert.equal(sanitizeStatus("a\x9b1 qz"), "az");
 	const progress = new OAuthProgress("Title\x1b[31m", "Status\x00with\x1bcontrols", {
 		onOpen: () => {},
 		onCancel: () => {},

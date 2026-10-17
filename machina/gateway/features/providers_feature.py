@@ -41,7 +41,7 @@ from machina.core.config import (
 from machina.core.exceptions import ValidationError
 from machina.core.provider import catalog
 from machina.core.provider.reasoning import supported_reasoning_efforts
-from machina.core.provider.specs import PROVIDER_SPECS
+from machina.core.provider.specs import PROVIDERS
 from machina.core.session import session_manager
 from machina.gateway.errors import INVALID_PARAMS, RpcError
 from machina.gateway.features._common import _bool, _str
@@ -52,10 +52,6 @@ if TYPE_CHECKING:
     from machina.gateway.server import Gateway
 
 logger = logging.getLogger(__name__)
-
-#: Bound-in-family names treated as built-in providers by ``models.list``
-#: (no discovery endpoint of their own; the UI falls back to its curated list).
-_BUILTIN_WITHOUT_CATALOG = ("openrouter", "anthropic", "custom", "ollama")
 
 
 def _catalog_model_view(models: list[Any]) -> list[dict[str, Any]]:
@@ -168,7 +164,7 @@ async def models_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         return await _named_models(provider, refresh)
     # Built-in direct families have no discovery endpoint this surface owns;
     # the UI falls back to its curated list for them.
-    if provider in PROVIDER_SPECS or provider in _BUILTIN_WITHOUT_CATALOG:
+    if provider in PROVIDERS:
         return _models_payload(provider, source="none", models=[])
     raise RpcError(INVALID_PARAMS, f"unknown provider: {provider}")
 
@@ -260,7 +256,7 @@ async def providers_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
     selected = str(gw.provider or "").strip().lower()
     rows: list[dict[str, Any]] = []
-    for name in ("openrouter", *tuple(PROVIDER_SPECS), "anthropic", "chatgpt", "custom", "ollama"):
+    for name in PROVIDERS:
         rows.append({"name": name, "kind": "builtin", "selected": name == selected})
     for name in store.provider_names():
         entry = store.get_provider_entry(name) or {}
@@ -307,11 +303,12 @@ async def providers_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         raise RpcError(INVALID_PARAMS, f"could not save provider ({type(exc).__name__})") from None
     key = store.resolve_provider_key(store.get_provider_entry(name) or entry)
     fetch_error: str | None = None
-    models: list[dict[str, Any]] = []
+    models: list[dict[str, Any]] = list(entry.get("models") or [])
     try:
         pulled = await asyncio.to_thread(store.fetch_models, entry["base_url"], api_key=key)
-        if pulled:
-            models = await asyncio.to_thread(store.save_models, name, pulled)
+        if not pulled and models:
+            raise store.ProviderStoreError("empty model discovery; keeping cached catalog")
+        models = await asyncio.to_thread(store.save_models, name, pulled)
     except Exception as exc:
         fetch_error = str(exc) or type(exc).__name__
     return {

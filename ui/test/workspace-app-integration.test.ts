@@ -616,7 +616,7 @@ test("a direct viewport click restores the caret with no key input (item 1)", as
 
 // ─── keys ───────────────────────────────────────────────────────────────────
 
-test("Ctrl+Right maximizes chat from the editor; hiding reconciles focus and the split returns via the command", async () => {
+test("Ctrl+Right maximizes chat from the editor; hiding reconciles focus and Ctrl+Left restores the split", async () => {
 	const { app, tui } = makeApp();
 	await app.start();
 	await waitForWorkspace(app);
@@ -642,12 +642,11 @@ test("Ctrl+Right maximizes chat from the editor; hiding reconciles focus and the
 
 	tui.press("\x1b[1;5C");
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat", "chat maximized");
-	// Hiding the editor reconciles focus to the composer (review finding: keys
-	// must never keep flowing into an unmounted pane), so Ctrl+Left is word
-	// motion again; the toggle back is the workspace command.
+	// Hiding the editor reconciles focus to the composer. Ctrl+Left remains
+	// available to restore the split from maximized chat.
 	assert.equal(internals(app).activeRegion, "chat-composer", "focus follows the hidden editor");
 	tui.press("\x1b[1;5D");
-	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat", "composer Ctrl+Left is word motion");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "composer Ctrl+Left restores the split from maximized chat");
 	await runCommand({ name: "workspace", args: "split" }, app);
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "the split stays reachable via the command");
 	assert.equal(internals(app).integration?.controller.getLayoutInput().requestedMode, "split");
@@ -663,7 +662,7 @@ test("Ctrl+Right maximizes chat from the editor; hiding reconciles focus and the
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat");
 	assert.equal(internals(app).activeRegion, "chat-composer", "the hidden editor never keeps the keys");
 	tui.press("\x1b[1;5D");
-	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat", "composer Ctrl+Left is word motion");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "composer Ctrl+Left restores the split from maximized chat");
 	await runCommand({ name: "workspace", args: "split" }, app);
 	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "the 50/50 split stays reachable");
 	assert.equal(internals(app).integration?.controller.getLayoutInput().requestedMode, "split");

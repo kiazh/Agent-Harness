@@ -143,6 +143,7 @@ async def prepare_connect(service, connector_id: str, session_id: str, agent_id:
 async def connect_authorized(
     service, connector_id: str, session_id: str, agent_id: str, expected_digest: str
 ) -> dict:
+    """Connect a human-reviewed configuration after rechecking its digest under the lock."""
     from machina.permissions import broker, store
 
     request = await _connect_request(service, connector_id, session_id, agent_id)
@@ -170,6 +171,10 @@ async def connect_authorized(
         async with service._configuration_lock:
             if service.store is not None:
                 await service._refresh_locked()
+            if service.oauth is not None:
+                await service.oauth.refresh_auth_cache(
+                    connector_id, config=service._config(connector_id), wait_for_refresh=False
+                )
             current = await _connect_request(
                 service, connector_id, session_id, agent_id, refresh=False
             )
@@ -185,10 +190,12 @@ async def connect_authorized(
             outcome = "completed"
             return {**config.public_view(), **service.manager.status(connector_id)}
     finally:
-        if request.approval_id:
-            await broker.permission_broker.complete(request.approval_id, outcome)
-        for variable, token in reversed(tokens):
-            variable.reset(token)
+        try:
+            if request.approval_id:
+                await broker.permission_broker.complete(request.approval_id, outcome)
+        finally:
+            for variable, token in reversed(tokens):
+                variable.reset(token)
 
 
 async def execute_call(service, name: str, arguments: dict, *, session_id: str, agent_id: str):

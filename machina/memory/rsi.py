@@ -353,6 +353,7 @@ async def finish(
 
 
 async def evaluate_trial(conn, agent_id: str) -> None:
+    """Stabilize or roll back a trial after three completed human ratings, based on mean reward."""
     profile = await ensure(conn, agent_id)
     trial = profile["trial_revision"]
     if trial is None:
@@ -368,9 +369,12 @@ async def evaluate_trial(conn, agent_id: str) -> None:
         return
     if score["mean"] >= 0:
         await conn.execute(
-            "UPDATE rsi_revisions SET status = 'stable' WHERE agent_id = $1 AND revision = $2",
+            "UPDATE rsi_revisions SET status = 'stable', "
+            "policy = (SELECT policy FROM agent_growth WHERE agent_id = $1), "
+            "policy_episodes = $3::jsonb WHERE agent_id = $1 AND revision = $2",
             agent_id,
             trial,
+            json.dumps(await pending_policy_episodes(conn, agent_id)),
         )
         await conn.execute(
             "UPDATE rsi_profiles SET stable_revision = revision, trial_revision = NULL WHERE agent_id = $1",

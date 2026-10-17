@@ -117,6 +117,7 @@ def approval_fields(card: dict[str, Any]) -> dict[str, Any]:
 
 
 def canonical_http_event(data: dict[str, Any], session_id: str, turn_id: str) -> dict[str, Any]:
+    """Convert an HTTP stream event to the canonical wire envelope, preserving approval fields."""
     name = data["type"]
     if name == "text":
         return wire_event("message.delta", session_id, turn_id, text=data["content"])
@@ -154,17 +155,16 @@ def canonical_http_event(data: dict[str, Any], session_id: str, turn_id: str) ->
             fields["needsApproval"] = data["needsApproval"]
         return wire_event("message.complete", session_id, turn_id, **fields)
     if name == "needs_approval" and "proposal" in data:
+        # The stream payload can be a complete card or a material proposal.
+        # Preserve its metadata instead of wrapping it in another proposal.
+        card = dict(data["proposal"])
+        card.update(request_id=data["requestId"], operation=data["operation"])
+        card["turn_id"] = card.get("turn_id") or turn_id
         return wire_event(
             name,
             session_id,
             turn_id,
-            **approval_fields(
-                {
-                    "requestId": data["requestId"],
-                    "operation": data["operation"],
-                    "proposal": data["proposal"],
-                }
-            ),
+            **approval_fields(card),
         )
     fields = {
         key: value

@@ -91,6 +91,7 @@ class OAuthSettings:
 
     @classmethod
     def from_dict(cls, fields: dict[str, Any] | None) -> OAuthSettings | None:
+        """Parse optional OAuth settings, raising OAuthConfigError for invalid fields."""
         if fields is None:
             return None
         if not isinstance(fields, dict):
@@ -143,7 +144,11 @@ class OAuthSettings:
             if not metadata_url:
                 raise OAuthConfigError("metadata_document mode requires client_metadata_url")
         if metadata_url:
-            parts = urlparse(metadata_url)
+            try:
+                parts = urlparse(metadata_url)
+                _ = parts.port
+            except ValueError:
+                raise OAuthConfigError("invalid client_metadata_url authority or port") from None
             if (
                 parts.scheme != "https"
                 or not parts.hostname
@@ -158,12 +163,14 @@ class OAuthSettings:
                 )
         elif mode == "metadata_document":
             raise OAuthConfigError("metadata_document mode requires client_metadata_url")
-        if mode != "metadata_document" and metadata_url and mode == "auto":
-            # Allowed: operator may pre-supply a document URL in auto mode? No:
-            # auto must not carry a document URL to keep selection explicit.
+        if mode != "metadata_document" and metadata_url:
             raise OAuthConfigError("client_metadata_url requires metadata_document mode")
         if issuer:
-            iparts = urlparse(issuer)
+            try:
+                iparts = urlparse(issuer)
+                _ = iparts.port
+            except ValueError:
+                raise OAuthConfigError("invalid issuer authority or port") from None
             if iparts.scheme != "https" or not iparts.hostname:
                 # Explicit literal-loopback fixture exception handled by network
                 # layer; config-level issuer must be https.
@@ -172,8 +179,8 @@ class OAuthSettings:
                     and iparts.hostname in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
                 ):
                     raise OAuthConfigError("issuer must be an https URL")
-            if iparts.username or iparts.password or iparts.fragment:
-                raise OAuthConfigError("issuer must not embed userinfo or fragments")
+            if iparts.username or iparts.password or iparts.query or iparts.fragment:
+                raise OAuthConfigError("issuer must not embed userinfo, query, or fragments")
         if not isinstance(scopes, list) or any(not isinstance(s, str) for s in scopes):
             raise OAuthConfigError("scope_allowlist must be a list of strings")
         if len(scopes) > OAUTH_MAX_SCOPES:

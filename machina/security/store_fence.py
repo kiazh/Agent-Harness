@@ -16,11 +16,8 @@ One authoritative implementation of the mechanics idiom established by
 * ``store_fingerprint`` — a raw-content digest so a publish can detect an
   out-of-band store change (e.g. a removal) that did not go through the
   generation counter.
-* ``fenced_logout`` — bump-then-unlink. Deliberately does NOT take
-  ``store_lock``: refreshes hold that lock across the provider round trip,
-  and a logout must not block behind a slow (or hung) token endpoint. The
-  atomic bump lands first, so a refresh finishing afterwards observes it and
-  leaves the store removed.
+* ``fenced_logout`` — bump-then-unlink under ``store_lock`` so a new
+  generation cannot publish credentials between the bump and removal.
 
 Store formats, token normalization and typed errors stay in each provider
 module (``chatgpt_auth``, ``copilot_auth``); this module holds only the
@@ -229,16 +226,15 @@ def fenced_logout(path: str | Path) -> bool:
     from the unlink propagates (callers translate it to their own error
     surface).
 
-    Deliberately does NOT acquire ``store_lock``: refreshes hold that lock
-    across their token-endpoint call, so blocking here would wedge a logout
-    behind a slow (or hung) provider round trip. Ordering the bump first is
-    what fences; a refresh that raced the bump between its publish gate and
-    its save re-checks afterwards and undoes its own write.
+    The bump and unlink share the publication lock. A later generation's
+    login can publish only after this removal finishes. Acquisition is bounded
+    by the same timeout as refresh and credential publication.
     """
     target = Path(path)
-    invalidate_credentials(target)
-    try:
-        target.unlink()
-        return True
-    except FileNotFoundError:
-        return False
+    with store_lock(target):
+        invalidate_credentials(target)
+        try:
+            target.unlink()
+            return True
+        except FileNotFoundError:
+            return False

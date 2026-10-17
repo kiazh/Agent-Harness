@@ -70,9 +70,8 @@ class _CallbackServer:
     """One-shot loopback listener for the OAuth callback.
 
     The authorization code and state travel only in the browser's request
-    line, so the handler never logs requests. The first request carrying a
-    code (or an OAuth error / state mismatch) settles the flow; every other
-    request gets a 404.
+    line, so the handler never logs requests. Only a callback with the
+    expected state can settle the flow; invalid requests leave it pending.
     """
 
     def __init__(self, redirect_uri: str, state: str) -> None:
@@ -82,6 +81,7 @@ class _CallbackServer:
         self.host = "127.0.0.1" if host == "localhost" else host
         self.port = parsed.port or chatgpt_auth.CALLBACK_PORT
         self.path = parsed.path or chatgpt_auth.CALLBACK_PATH
+        self._authority = parsed.netloc.lower()
         self.done = Event()
         self.code: str | None = None
         self.error: str | None = None
@@ -126,28 +126,29 @@ class _CallbackServer:
         return _Handler
 
     def _handle(self, request: BaseHTTPRequestHandler) -> None:
+        """Settle sign-in only after validating the callback path, host, and OAuth state."""
         parsed = urlparse(request.path)
         if parsed.path != self.path:
             self._respond(request, 404, "Not found.")
             return
+        hosts = [host.lower() for host in request.headers.get_all("Host", [])]
+        if parsed.netloc or hosts != [self._authority]:
+            self._respond(request, 400, "Invalid callback host.")
+            return
         query = parse_qs(parsed.query)
+        state = (query.get("state") or [""])[0]
+        if not hmac.compare_digest(state.encode("utf-8"), self._state.encode("utf-8")):
+            self._respond(request, 400, "Sign-in state did not match.")
+            return
         error = (query.get("error") or [""])[0]
         if error:
-            self.error = error
+            self.error = "oauth_error"
             self._respond(request, 200, "Sign-in was not completed. You can close this tab.")
             self.done.set()
             return
         code = (query.get("code") or [""])[0]
-        state = (query.get("state") or [""])[0]
         if not code:
             self._respond(request, 400, "Missing authorization code.")
-            return
-        if not hmac.compare_digest(state.encode("utf-8"), self._state.encode("utf-8")):
-            self.error = "state_mismatch"
-            self._respond(
-                request, 400, "Sign-in state did not match. Run `machina auth login` again."
-            )
-            self.done.set()
             return
         self.code = code
         self._respond(request, 200, "Signed in to ChatGPT. You can close this tab.")

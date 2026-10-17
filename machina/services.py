@@ -142,20 +142,17 @@ async def _effective_session_route(
     global route rather than failing the operation (compression is auxiliary).
     """
     definition = None
-    provider_name = provider or getattr(session, "provider", None)
-    model_name = model or getattr(session, "model", None)
-    if not provider_name or not model_name:
+    if not provider or not model:
         try:
             from machina.core.agent_def import agent_registry
 
             definition = await agent_registry.get(session.agent_id or "harness")
         except Exception:
             definition = None
-        provider_name = provider_name or getattr(definition, "provider", None)
-        model_name = model_name or getattr(definition, "model", None)
-    return (
-        provider_name or config.get("provider"),
-        model_name or config.get("model"),
+    from machina.core.agent_factory import resolve_provider_model
+
+    return resolve_provider_model(
+        session, definition, provider_override=provider, model_override=model
     )
 
 
@@ -164,6 +161,21 @@ async def session_context_window(session: Session) -> int:
     from machina.core.context_windows import context_window_for
 
     provider, model = await _effective_session_route(session)
+    if isinstance(provider, str) and provider.lower() == "chatgpt":
+        # The string route carries no provider instance, so resolve the
+        # configured account exactly once here (compaction/session budgets).
+        try:
+            from machina.core.provider.chatgpt import ChatGPTProvider, chatgpt_auth
+
+            account_id = str(chatgpt_auth.status().get("account_id") or "")
+            base_url = ChatGPTProvider.BASE_URL
+        except Exception:
+            account_id, base_url = "", ""
+        return context_window_for(
+            model, provider, account_id=account_id, base_url=base_url
+        )
+    # Keep the historical call shape for every other provider (patch targets
+    # and custom providers override the two-argument form).
     return context_window_for(model, provider)
 
 

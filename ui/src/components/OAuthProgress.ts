@@ -15,7 +15,7 @@ export interface OAuthProgressCallbacks {
 const MAX_STATUS_CHARS = 500;
 
 // eslint-disable-next-line no-control-regex
-const ANSI_SEQUENCE = /\[[0-9;]*[A-Za-z]/g;
+const ANSI_SEQUENCE = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g;
 // eslint-disable-next-line no-control-regex
 const OSC_SEQUENCE = /\][^\x07]*\x07/g;
 // eslint-disable-next-line no-control-regex

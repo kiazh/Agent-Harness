@@ -33,7 +33,6 @@ import json
 import os
 import secrets
 import tempfile
-import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -96,78 +95,15 @@ def auth_path() -> Path:
 # Store locking + authentication generation (round-3 review R3-2/R3-3)
 # ---------------------------------------------------------------------------
 
-_generation_lock = threading.Lock()
-#: In-process fallback bumps for stores whose generation file is unwritable.
-_generations: dict[str, int] = {}
-
-
-def _store_target(path: str | Path | None = None) -> Path:
-    """Resolved store identity used for keys, locks, and generation files."""
-    target = Path(path) if path is not None else auth_path()
-    try:
-        return target.expanduser().resolve()
-    except (OSError, ValueError):
-        return target.expanduser()
-
-
-def _generation_path(target: Path) -> Path:
-    return target.with_name(target.name + ".generation")
-
-
-def _read_generation(target: Path) -> int:
-    try:
-        return int(_generation_path(target).read_text(encoding="ascii").strip() or "0")
-    except (OSError, ValueError):
-        return 0
-
 
 def credential_generation(path: str | Path | None = None) -> int:
-    """Current authentication generation for a store.
-
-    A login flow or refresh captures this before doing work and refuses to
-    publish when it changed: any logout in between invalidates the work. The
-    durable component (a small file next to the store) fences callbacks that
-    arrive in OTHER processes; the in-process fallback covers stores whose
-    directory is not writable when logout runs.
-    """
-    target = _store_target(path)
-    with _generation_lock:
-        local = _generations.get(str(target), 0)
-    return _read_generation(target) + local
+    """Current shared authentication generation for this credential store."""
+    return store_fence.credential_generation(Path(path) if path is not None else auth_path())
 
 
 def invalidate_credentials(path: str | Path | None = None) -> int:
-    """Bump a store's authentication generation; returns the new value.
-
-    Called by logout paths before removing the store. Failing to persist the
-    durable counter still fences every in-process caller.
-    """
-    target = _store_target(path)
-    file = _generation_path(target)
-    durable = _read_generation(target) + 1
-    persisted = False
-    try:
-        file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(prefix=file.name + ".", suffix=".tmp", dir=str(file.parent))
-        try:
-            store_fence.chmod_temp_file(fd, tmp_name, 0o600)
-            with os.fdopen(fd, "w", encoding="ascii") as handle:
-                handle.write(f"{durable}\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(tmp_name, file)
-        except BaseException:
-            with suppress(OSError):
-                os.unlink(tmp_name)
-            raise
-        persisted = True
-    except OSError:
-        durable = _read_generation(target)
-    with _generation_lock:
-        if not persisted:
-            _generations[str(target)] = _generations.get(str(target), 0) + 1
-        local = _generations.get(str(target), 0)
-    return durable + local
+    """Invalidate in-flight authentication through the shared durable fence."""
+    return store_fence.invalidate_credentials(Path(path) if path is not None else auth_path())
 
 
 @contextmanager
@@ -395,26 +331,16 @@ def import_from_codex(
         if not force and load_tokens(target) is not None:
             return None
         save_tokens(tokens, target)
+        if credential_generation(target) != generation:
+            target.unlink(missing_ok=True)
+            return None
         return load_tokens(target)
 
 
 def logout(*, path: str | Path | None = None) -> bool:
-    """Remove the Machina token store and invalidate pending authentication work.
-
-    The generation is bumped under the store lock BEFORE the unlink, so any
-    login exchange or refresh already in flight can no longer publish
-    credentials after this point. Returns True when a store existed and was
-    removed. ``OSError`` from the unlink propagates (callers translate it to
-    their own error surface).
-    """
+    """Invalidate and remove credentials under the credential publication lock."""
     target = Path(path) if path is not None else auth_path()
-    with _store_lock(target):
-        invalidate_credentials(target)
-        try:
-            target.unlink()
-            return True
-        except FileNotFoundError:
-            return False
+    return store_fence.fenced_logout(target)
 
 
 def status(
@@ -621,10 +547,8 @@ def refresh(
         normalized = _normalize_store(updated)
         assert normalized is not None  # access_token is non-empty by construction above
         if credential_generation(target) != generation:
-            # A logout invalidated this store while the exchange was in
-            # flight: hand the caller the fresh in-memory pair (the running
-            # call may use it) but never republish revoked credentials.
-            return normalized
+            # Logout invalidates in-memory credentials as well as publication.
+            raise _cancelled_error()
         if _store_fingerprint(target) != snapshot:
             # The store changed under us without a generation bump (e.g. a
             # raw file removal): adopt a usable peer pair, otherwise keep the
@@ -634,6 +558,9 @@ def refresh(
                 return latest
             return normalized
         save_tokens(normalized, target)
+        if credential_generation(target) != generation:
+            target.unlink(missing_ok=True)
+            raise _cancelled_error()
         return normalized
 
 
@@ -824,4 +751,7 @@ def exchange_code(
         if was_present and not now_present:
             raise _cancelled_error()
         save_tokens(normalized, target)
+        if generation is not None and credential_generation(target) != generation:
+            target.unlink(missing_ok=True)
+            raise _cancelled_error()
     return normalized

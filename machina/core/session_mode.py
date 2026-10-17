@@ -196,13 +196,19 @@ def _cache_turn_mode(session_id: str, mode: str, *, durable: bool) -> None:
             _implicit_modes[(turn, sid)] = mode
 
 
-def set_session_mode(session_id: str, mode: str) -> None:
-    """Record an explicit per-session mode (does not touch global config)."""
+def _cache_session_mode(session_id: str, mode: str) -> str:
+    """Populate the display/DB-less cache without invalidating active turns."""
     normalized = str(mode or "").strip().lower()
     if normalized not in MODES:
         raise ValueError("mode must be ask|workspace|sandbox|full")
     with _lock:
         _session_modes[str(session_id)] = normalized
+    return normalized
+
+
+def set_session_mode(session_id: str, mode: str) -> None:
+    """Record an explicit per-session mode (does not touch global config)."""
+    _cache_session_mode(session_id, mode)
     invalidate_turn_mode(session_id)
 
 
@@ -276,8 +282,7 @@ async def resolve_effective_mode(session_id: str | None = None) -> str:
     )
     if row is None:
         raise ValueError("session not found while resolving execution mode")
-    mode = row["execution_mode"]
-    set_session_mode(str(session_id), mode)
+    mode = _cache_session_mode(str(session_id), row["execution_mode"])
     _cache_turn_mode(str(session_id), mode, durable=True)
     return mode
 

@@ -38,6 +38,7 @@ import httpx
 from machina.core.config import config
 from machina.core.exceptions import ProviderError
 from machina.security import store_fence
+from machina.security.secrets import remember_secret_value
 
 # VS Code's public GitHub App client id (device flow; no secret).
 COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
@@ -151,13 +152,17 @@ def load_tokens(path: str | Path | None = None) -> dict[str, Any] | None:
         raw = json.loads(target.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
-    return _normalize_store(raw)
+    normalized = _normalize_store(raw)
+    if normalized is not None:
+        remember_secret_value(normalized["token"])
+    return normalized
 
 
 def save_tokens(tokens: dict[str, Any], path: str | Path | None = None) -> Path:
     """Atomically write the token store with 0600 permissions."""
     target = Path(path) if path is not None else auth_path()
     normalized = _normalize_store(tokens) or {}
+    remember_secret_value(normalized.get("token", ""))
     for field in _STORE_FIELDS:
         normalized.setdefault(field, None)
     if not normalized.get("last_refresh"):

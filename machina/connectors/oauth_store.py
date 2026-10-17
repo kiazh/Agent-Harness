@@ -33,6 +33,7 @@ from machina.connectors.oauth_models import (
     OAuthBinding,
     OAuthCredentialRecord,
 )
+from machina.security.secrets import remember_secret_value
 
 _WINDOWS = os.name == "nt"
 if _WINDOWS:  # pragma: no cover - platform branch
@@ -350,6 +351,7 @@ class OAuthCredentialStore:
 
     # ── public API ────────────────────────────────────────────────
     async def load(self, binding: OAuthBinding) -> OAuthCredentialRecord | None:
+        """Decrypt a bound grant and register its tokens for redaction; return None if absent."""
         key = _safe_name(binding.credential_key)
         await self._master()
         for attempt in range(3):
@@ -380,7 +382,10 @@ class OAuthCredentialStore:
                 if latest["grants"].get(key) == entry or attempt == 2:
                     raise
                 continue
-            return await self._decrypt(raw, expected_key=key)
+            record = await self._decrypt(raw, expected_key=key)
+            for token in (record.access_token, record.refresh_token):
+                remember_secret_value(token)
+            return record
         raise ValueError("oauth credential changed during read")  # pragma: no cover
 
     async def public_identity(self, binding: OAuthBinding) -> dict[str, Any] | None:
@@ -404,6 +409,9 @@ class OAuthCredentialStore:
         expected_generation: int,
         fence: PublicationFence | None = None,
     ) -> OAuthCredentialRecord:
+        """Publish an encrypted grant under the store lock with generation and fence checks."""
+        for token in (record.access_token, record.refresh_token):
+            remember_secret_value(token)
         key = _safe_name(record.credential_key)
         _ensure_dirs(self.root)
         await self._master()

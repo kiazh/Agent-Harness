@@ -27,6 +27,7 @@ __all__ = [
     "STREAM_TAIL_CHARS",
     "redact_secrets",
     "redact_value",
+    "redact_diagnostic",
 ]
 
 
@@ -506,6 +507,18 @@ _default_redactor = SecretRedactor()
 def redact_secrets(text: str) -> RedactionResult:
     """Convenience function to redact secrets using the default redactor."""
     return _default_redactor.redact(text)
+
+
+def redact_diagnostic(text: object) -> str:
+    """Redact diagnostic text, failing closed to an explicit placeholder.
+
+    Used by persistence/return surfaces (delegation errors, history, gateway
+    frames) so a redactor failure can never emit the raw text.
+    """
+    try:
+        return redact_secrets(str(text)).text
+    except Exception:
+        return "[redaction unavailable]"
 
 
 # Streaming redaction policy (5.1 corrective rewrite).

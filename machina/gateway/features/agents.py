@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError
 from machina.gateway.features._common import _int, _str, _uuid
+from machina.memory.redaction import redact_diagnostic
 
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
@@ -26,12 +27,21 @@ async def agents_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 async def agents_save(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Save a new agent."""
     gw.require_db()
-    from machina.core.agent_def import BUILTIN_AGENTS, AgentDef, agent_registry
+    from machina.core.agent_def import (
+        BUILTIN_AGENTS,
+        AgentDef,
+        agent_registry,
+        validate_agent_name,
+    )
 
     tools = params.get("tools", [])
     if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
         raise RpcError(INVALID_PARAMS, "tools must be a list of strings")
     name = _str(params, "name", max_len=100)
+    try:
+        validate_agent_name(name)
+    except ValueError as exc:
+        raise RpcError(INVALID_PARAMS, str(exc)) from None
     if name in BUILTIN_AGENTS:
         raise RpcError(INVALID_PARAMS, f"{name!r} is a built-in agent and cannot be saved")
     saved = await agent_registry.save(
@@ -61,12 +71,15 @@ async def agents_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _delegation(r: Any) -> dict[str, Any]:
+    """Serialize a delegation result, redacting failure diagnostics and summarizing approvals."""
     from machina.protocol import approval_summary
 
     return {
         "agent": r.agent,
         "task": r.task,
-        "response": r.response,
+        "response": (
+            redact_diagnostic(r.response) if r.status in ("error", "failed") else r.response
+        ),
         "sessionId": str(r.session_id),
         "tokens": r.tokens,
         "iterations": r.iterations,
@@ -118,7 +131,7 @@ async def agents_run(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
                 {
                     "agent": agent,
                     "task": task,
-                    "response": f"{type(result).__name__}: {result}",
+                    "response": f"{type(result).__name__}: {redact_diagnostic(result)}",
                     "sessionId": None,
                     "tokens": 0,
                     "iterations": 0,

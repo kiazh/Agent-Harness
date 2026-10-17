@@ -24,11 +24,26 @@ from machina.core.context import context_manager
 from machina.core.exceptions import DelegationAccountingError
 from machina.core.session import session_manager
 from machina.db.connection import db
+from machina.memory.redaction import redact_diagnostic
 from machina.observability.diagnostics import record_failure
 
 __all__ = ["DelegationResult", "Orchestrator", "AgentNotFoundError"]
 
 logger = logging.getLogger(__name__)
+
+
+def _redacted(text: str) -> str:
+    """Redact secrets from diagnostic text before persistence or display.
+
+    Delegated-child exceptions can echo bearer tokens, API keys, or DSNs.
+    Every path that stores or returns ``str(exc)`` must pass through the same
+    redaction registry as the other transcript surfaces; if redaction itself
+    fails, emit an explicit placeholder rather than the raw text.
+    """
+    try:
+        return redact_diagnostic(text)
+    except Exception:
+        return "[redaction unavailable]"
 delegation_depth: ContextVar[int] = ContextVar("delegation_depth", default=0)
 delegation_deadline: ContextVar[float | None] = ContextVar("delegation_deadline", default=None)
 
@@ -276,11 +291,14 @@ class Orchestrator:
                     )
                     break
 
+        from machina.core.agent_factory import resolve_provider_model
+
+        child_provider, child_model = resolve_provider_model(definition=definition)
         child = await session_manager.create(
             title=f"{agent_name}: {task[:50]}",
             agent_id=agent_name,
-            model=definition.model or config.get("model"),
-            provider=definition.provider or config.get("provider"),
+            model=child_model,
+            provider=child_provider,
             context_budget=config.get("context_budget"),
             execution_mode=parent_mode,
             parent_session_id=parent_session_id,
@@ -364,7 +382,8 @@ class Orchestrator:
                 # never ran; re-raise so the finally archives/closes cleanly.
                 raise
             logger.exception("Delegation to %s failed", agent_name)
-            detail = "delegation timed out" if isinstance(e, TimeoutError) else str(e)
+            raw_detail = "delegation timed out" if isinstance(e, TimeoutError) else str(e)
+            detail = _redacted(raw_detail)
             try:
                 tokens = await self._charged_child_tokens(child.id, agent_name)
             except DelegationAccountingError as accounting_error:
@@ -449,6 +468,11 @@ class Orchestrator:
             if not _ok:
                 status = "error"
                 final_content = _reason
+        if status == "error":
+            # Typed child failure (not a raised exception): the same redaction
+            # contract applies to the durable row, the parent chunk, and the
+            # returned result.
+            final_content = _redacted(final_content)
         await self._record_end(message_id, status=status, response=final_content, tokens=tokens)
         if parent_session_id is not None:
             await context_manager.add_chunk(
@@ -601,6 +625,7 @@ class Orchestrator:
     async def _record_end(
         self, message_id: uuid.UUID, *, status: str, response: str, tokens: int | None
     ) -> None:
+        """Persist delegation completion with a redacted response and usage count."""
         await db.execute(
             """
             UPDATE agent_messages
@@ -609,11 +634,12 @@ class Orchestrator:
             """,
             message_id,
             status,
-            response,
+            _redacted(response),
             tokens,
         )
 
     async def history(self, session_id: uuid.UUID, limit: int = 50) -> list[dict]:
+        """Return session delegations in chronological order with redacted responses."""
         rows = await db.fetch(
             """
             SELECT id, from_agent, to_agent, task, response, status, tokens_used, created_at, completed_at
@@ -628,7 +654,7 @@ class Orchestrator:
                 "fromAgent": r["from_agent"],
                 "toAgent": r["to_agent"],
                 "task": r["task"],
-                "response": r["response"],
+                "response": _redacted(r["response"]) if r["response"] is not None else None,
                 "status": r["status"],
                 "tokens": r["tokens_used"],
                 "createdAt": r["created_at"].isoformat() if r["created_at"] else None,

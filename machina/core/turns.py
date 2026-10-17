@@ -30,7 +30,8 @@ import hashlib
 import logging
 import threading as _threading
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from machina.core.metrics import metrics
@@ -48,6 +49,7 @@ def _owner_hash(token: str | None) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
     except Exception:
         return ""
+
 
 TURN_TTL_SECONDS = 360
 MUTATION_TTL_SECONDS = 120
@@ -742,6 +744,17 @@ async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SEC
             _note_lock_contention("begin_mutation_error_cleanup")
         _local_release(session_id, owner)
         raise
+
+
+@asynccontextmanager
+async def mutation_scope(session_id: uuid.UUID) -> AsyncIterator[str | None]:
+    """Own a short session mutation; callers reject a None token as busy."""
+    token = await begin_mutation(session_id)
+    try:
+        yield token
+    finally:
+        if token is not None:
+            await end_mutation(session_id, token)
 
 
 @instrumented("turns", "mutation_release")

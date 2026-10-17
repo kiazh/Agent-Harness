@@ -219,7 +219,7 @@ async function settle(times = 40): Promise<void> {
 }
 
 interface Integration {
-	controller: { phase: string; getLayoutInput(): { requestedMode: string; explorerRequested: boolean } };
+	controller: { phase: string; noteFocus(region: "chat-composer"): void; getLayoutInput(): { requestedMode: string; explorerRequested: boolean } };
 	store: {
 		insertText(id: string, text: string): unknown;
 		getDocument(id: string): { text: string; version: number; dirty: boolean } | undefined;
@@ -326,10 +326,9 @@ test("maximizing chat while the editor owns focus reconciles the region to the c
 	tui.press(CTRL_W);
 	assert.equal(integration.tabs.count(), 1, "Ctrl+W in the composer does not close the hidden editor's tab");
 
-	// Ctrl+Left now keeps the composer's word motion too: the layout stays
-	// maximized until the editor region (or a command) asks for the split.
+	// Ctrl+Left restores the split even after focus moves to the composer.
 	tui.press(CtrlLeft);
-	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat", "composer Ctrl+Left never restores the split");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "composer Ctrl+Left restores the split from maximized chat");
 	await app.exit();
 });
 
@@ -838,4 +837,29 @@ test("startup creates the session before music detection resolves", async () => 
 	releaseMusic?.();
 	await started;
 	await app.exit();
+});
+
+test("Ctrl+Left keeps composer word motion when a requested split renders as chat", async () => {
+	const { app, tui } = makeApp();
+	await app.start();
+	try {
+		await waitForWorkspace(app);
+		await openEditorFile(app);
+		const state = internals(app);
+		tui.setFocus(state.editor);
+		state.noteRegionFocus("chat-composer");
+		state.integration!.controller.noteFocus("chat-composer");
+		tui.terminal = { columns: 60, rows: 48 } as TUI["terminal"];
+		const keys = app as unknown as {
+			syncWorkspaceShell(): void;
+			handleWorkspaceKey(data: string): { consume: boolean } | undefined;
+		};
+		keys.syncWorkspaceShell();
+		assert.equal(state.integration!.controller.getLayoutInput().requestedMode, "split");
+		assert.equal(state.workspaceLayout?.effectiveMode, "chat");
+		assert.equal(state.activeRegion, "chat-composer");
+		assert.equal(keys.handleWorkspaceKey(CtrlLeft), undefined, "word-left reaches the composer");
+	} finally {
+		await app.exit();
+	}
 });

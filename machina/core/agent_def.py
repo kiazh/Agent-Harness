@@ -28,6 +28,19 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+RESERVED_AGENT_NAMES = frozenset(
+    {"tui", "http", "headless", "mcp-management", "mcp-oauth-management"}
+)
+
+
+def validate_agent_name(name: str) -> None:
+    """Keep agent identities distinct from human approval transport principals."""
+    if not isinstance(name, str) or not name.strip() or len(name) > 100:
+        raise ValueError("name must be a non-empty string of at most 100 characters")
+    if name in RESERVED_AGENT_NAMES:
+        raise ValueError(f"{name!r} is reserved for an approval transport")
+
+
 def agents_directory() -> Path:
     """Directory containing local YAML agent definitions."""
     return Path(os.environ.get("MACHINA_AGENTS_DIR") or _PROJECT_ROOT / "agents")
@@ -181,6 +194,7 @@ class AgentRegistry:
         self._file_definitions_cache_time: float = 0.0
 
     def _file_definitions(self) -> dict[str, AgentDef]:
+        """Load and cache valid YAML and SoulSpec agents, logging and skipping invalid files."""
         now = time.monotonic()
         if (
             self._file_definitions_cache is not None
@@ -203,8 +217,7 @@ class AgentRegistry:
                     raise ValueError("expected a YAML mapping")
                 name = data.get("name", path.stem)
                 tools = data.get("tools", [])
-                if not isinstance(name, str) or not name.strip() or len(name) > 100:
-                    raise ValueError("name must be a non-empty string of at most 100 characters")
+                validate_agent_name(name)
                 for key in ("description", "system_prompt"):
                     if not isinstance(data.get(key, ""), str):
                         raise ValueError(f"{key} must be a string")
@@ -331,6 +344,8 @@ class AgentRegistry:
     async def save_on_connection(
         self, agent: AgentDef, connection, *, identity_only: bool = False
     ) -> AgentDef:
+        """Validate and upsert an agent, preserving existing runtime fields if identity_only."""
+        validate_agent_name(agent.name)
         query = """
             INSERT INTO agents (name, description, system_prompt, tools, model, provider, source, soul_spec)
             VALUES ($1, $2, $3, $4, $5, $6, 'db', $7::jsonb)

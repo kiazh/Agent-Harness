@@ -10,6 +10,7 @@ from contextvars import ContextVar
 
 from machina.core.exceptions import DelegationAccountingError, ToolError
 from machina.db.connection import db
+from machina.memory.redaction import redact_diagnostic
 from machina.observability.diagnostics import record_failure
 from machina.tools.base import registry
 
@@ -193,7 +194,7 @@ async def delegate(
         raise
     except Exception as e:
         logger.exception("delegate tool failed")
-        raise ToolError(f"delegation failed: {e}") from None
+        raise ToolError(f"delegation failed: {redact_diagnostic(e)}") from None
     finally:
         delegation_deadline.reset(deadline_token)
 

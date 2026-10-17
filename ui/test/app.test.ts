@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
 import { JsonRpcChannel } from "../src/gateway.ts";
 import type { GatewayClient } from "../src/gateway.js";
@@ -600,3 +600,47 @@ test("interop.run without a reply still stops waiting on the client clock (H22)"
 	const error = await rejection;
 	assert.match((error as Error).message, /interop\.run/);
 });
+
+for (const command of ["/settings", "/config"]) {
+	test(`${command} cannot change gateway defaults until the active turn stops`, async () => {
+		const { app, client } = makeApp(SESSION_A);
+		client.responses.set("prompt.cancel", {});
+		client.responses.set("config.set", { key: "model", value: "new-model", model: "new-model", provider: "openrouter" });
+		client.responses.set("session.setModel", {});
+		await app.start();
+		try {
+			const actions = app as unknown as {
+				submit(text: string): Promise<void>;
+				submitTurn(text: string): Promise<void>;
+				cancel(): void;
+				pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined>;
+			};
+			let menuCalls = 0;
+			actions.pick = async (_title, items) => {
+				menuCalls++;
+				if (menuCalls === 1) return items.find((item) => item.value === "cat-chat");
+				if (menuCalls === 2) return items.find((item) => item.value === "model");
+				if (menuCalls === 3) return items[0];
+				return undefined;
+			};
+			await actions.submitTurn("hello");
+			await actions.submit(command);
+			assert.equal(menuCalls, 0, "the settings menu stays closed during the turn");
+			assert.ok(!client.requests.some((entry) => entry.method === "config.set"));
+
+			actions.cancel();
+			await actions.submit(command);
+			assert.equal(menuCalls, 0, "a cancel request alone does not finish the turn");
+			assert.ok(!client.requests.some((entry) => entry.method === "config.set"));
+
+			client.emit(ev({ type: "message.complete", text: "", tokens: 0, iterations: 0, toolCalls: 0, cancelled: true }));
+			await actions.submit(command);
+			const writes = client.requests.filter((entry) => entry.method === "config.set");
+			assert.deepEqual(writes.map((entry) => entry.params.key), ["provider", "model"]);
+			assert.ok(writes.every((entry) => entry.params.persist === true));
+			assert.ok(client.requests.some((entry) => entry.method === "session.setModel"));
+		} finally {
+			await app.exit();
+		}
+	});
+}

@@ -2,6 +2,10 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+# Export with --group build in CI, including the backend's transitive pins.
+build = ["hatchling==1.32.4", "editables==0.5"]
+
 [project]
 name = "Machina"
 version = "0.2.0"

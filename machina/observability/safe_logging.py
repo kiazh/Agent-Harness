@@ -1,5 +1,6 @@
 """Prevent exception messages/source lines from entering application logs."""
 
+import importlib
 import logging
 import sys
 
@@ -21,6 +22,7 @@ class _RedactionFailed(Exception):
 
 
 def install() -> None:
+    """Idempotently install a log factory that redacts Machina records and masks failures."""
     previous = logging.getLogRecordFactory()
     if getattr(previous, "_ah_sanitized", False):
         return
@@ -29,13 +31,14 @@ def install() -> None:
         if isinstance(item, BaseException):
             return type(item).__name__
         if isinstance(item, str):
-            # Avoid importing the memory graph while modules initialize.
             redaction = sys.modules.get("machina.memory.redaction")
-            if redaction is not None and hasattr(redaction, "redact_secrets"):
-                try:
-                    return redaction.redact_secrets(item).text
-                except Exception as exc:
-                    raise _RedactionFailed from exc
+            try:
+                if redaction is None:
+                    redaction = importlib.import_module("machina.memory.redaction")
+                # A partially initialized module also fails closed here.
+                return redaction.redact_secrets(item).text
+            except Exception as exc:
+                raise _RedactionFailed from exc
         elif isinstance(item, (dict, list, tuple)):
             if depth >= _MAX_STRUCTURE_DEPTH:
                 # Cyclic/absurdly deep args are masked rather than walked;
@@ -60,6 +63,10 @@ def install() -> None:
                     record.args = {key: value(item) for key, item in record.args.items()}
                 else:
                     record.args = tuple(value(item) for item in record.args)
+                # Objects may reveal credentials only when logging formats
+                # %s/%r. Redact that final text and prevent later conversion.
+                record.msg = value(record.getMessage())
+                record.args = ()
                 if record.exc_info:
                     # Exceptions can contain echoed provider prompts or credentials.
                     # Keep class and source locations, never source text/message.
