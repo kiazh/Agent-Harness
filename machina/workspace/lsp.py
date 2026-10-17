@@ -995,10 +995,16 @@ class LspConnection:
     async def _writer_loop(self) -> None:
         stdin = self._stdin
         assert stdin is not None
+        # The frame currently being written is no longer in _outbox, so the
+        # queue drain below cannot reach it. Track it explicitly and settle it
+        # on cancellation/unexpected failure, or a request awaiting this write
+        # can hang forever even after the transport is torn down.
+        active: tuple[bytes, asyncio.Future[None]] | None = None
         try:
             while True:
                 if self._outbox:
                     data, future = self._outbox.popleft()
+                    active = (data, future)
                     try:
                         stdin.write(data)
                         await stdin.drain()
@@ -1010,17 +1016,31 @@ class LspConnection:
                         raise
                     if not future.done():
                         future.set_result(None)
+                    active = None
                     continue
                 if self._closing:
                     return
                 self._write_event.clear()
                 await self._write_event.wait()
         except asyncio.CancelledError:
+            self._settle_active_write(active, "language server write queue was cancelled")
             self._drain_outbox_with_error("language server write queue was cancelled")
             raise
         except Exception as exc:  # pragma: no cover - defensive containment
+            self._settle_active_write(active, "language server write queue failed")
             self._drain_outbox_with_error("language server write queue failed")
             self._fail_connection(f"write to language server failed: {type(exc).__name__}")
+
+    @staticmethod
+    def _settle_active_write(
+        active: tuple[bytes, asyncio.Future[None]] | None, reason: str
+    ) -> None:
+        """Reject the popped frame's completion future exactly once."""
+        if active is None:
+            return
+        _data, future = active
+        if not future.done():
+            future.set_exception(LspUnavailableError(reason))
 
     # -- reader loops --------------------------------------------------------
 
