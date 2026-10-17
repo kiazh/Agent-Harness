@@ -15,6 +15,7 @@ import copy
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from machina.core.assembler import get_token_count
@@ -47,9 +48,19 @@ logger = logging.getLogger(__name__)
 
 
 def _checkpoint_chunk(
-    session_id: uuid.UUID, agent_id: str, checkpoint: dict[str, Any]
+    session_id: uuid.UUID,
+    agent_id: str,
+    checkpoint: dict[str, Any],
+    *,
+    created_at: datetime | None = None,
 ) -> ContextChunk:
-    """Build a bounded checkpoint chunk for non-LLM compression paths."""
+    """Build a bounded checkpoint chunk for non-LLM compression paths.
+
+    ``created_at`` must be the newest timestamp among the chunks this checkpoint
+    replaces. ContextChunk defaults to ``now()``, which would place the summary
+    after the preserved recent turns instead of before them (the LLM path
+    already inherits max(old stamps)).
+    """
     validated = validate_checkpoint(checkpoint)
     lines = [
         f"objective: {validated['objective']}",
@@ -64,6 +75,7 @@ def _checkpoint_chunk(
     lines.append(f"next: {validated['next_action']}")
     lines.append("Latest explicit user instruction overrides this checkpoint.")
     content = "\n".join(lines)
+    stamp_kwargs = {"created_at": created_at} if created_at is not None else {}
     return ContextChunk(
         id=uuid.uuid4(),
         session_id=session_id,
@@ -77,6 +89,7 @@ def _checkpoint_chunk(
             "checkpoint_version": CHECKPOINT_VERSION,
         },
         token_count=get_token_count(content),
+        **stamp_kwargs,
     )
 
 
@@ -352,8 +365,14 @@ class ContextCompressor:
         """
         all_compressed = compressed + recent_chunks
         if checked_checkpoint is not None and method != "llm_summarize":
+            old_stamps = [c.created_at for c in old_chunks if c.created_at is not None]
             all_compressed = [
-                _checkpoint_chunk(session_id, agent_id, checked_checkpoint)
+                _checkpoint_chunk(
+                    session_id,
+                    agent_id,
+                    checked_checkpoint,
+                    created_at=max(old_stamps) if old_stamps else None,
+                )
             ] + all_compressed
         compressed_tokens = sum(c.token_count for c in all_compressed)
         if compressed_tokens == 0:
