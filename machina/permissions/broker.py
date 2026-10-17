@@ -312,6 +312,19 @@ class PermissionBroker:
             )
         except TimeoutError:
             return await self._approval_deadline(req, approval, principal)
+        except asyncio.CancelledError:
+            # The turn was cancelled while the card was open. The durable row
+            # must not survive as a pending approval: a later turn would
+            # short-circuit on find_pending and never show a card.
+            try:
+                await _store.resolve_decision(req.request_id, "cancelled", principal)
+            except Exception as _boundary_error:
+                logger.warning(
+                    "failed to cancel approval %s after turn cancellation: %s",
+                    req.request_id,
+                    _boundary_error,
+                )
+            raise
         # The transport recorded the decision; read it back (never re-resolve:
         # the record is already consumed and a second resolve must fail).
         rec = await _store.get_approval(req.request_id)
