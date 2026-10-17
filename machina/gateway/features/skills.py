@@ -177,8 +177,10 @@ async def skills_show(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     skill = _registry().get(_str(params, "name", max_len=200))
     if skill is None:
         raise RpcError(NOT_FOUND, f"skill {params.get('name')!r} not found")
+    registry = _registry()
+    registry.record_view(skill.name)
     result = _skill(skill, content=True)
-    result["content"] = _registry().get_skill_content(skill.name)
+    result["content"] = registry.get_skill_content(skill.name)
     return {"skill": result}
 
 
@@ -800,5 +802,6 @@ async def skills_section(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         result = _content_offset_read(
             skill, content, expected_revision=expected_revision, offset=offset, limit=budget
         )
+    registry.record_view(skill.name)
     _record_browse_activity("section", skill=skill.name, section=section, stale=result.stale)
     return _section_payload(result, budget)
