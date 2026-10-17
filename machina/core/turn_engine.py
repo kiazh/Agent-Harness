@@ -405,7 +405,11 @@ class TurnEngine:
         if self._agent is not None:
             tasks.extend(getattr(self._agent, "_consolidation_tasks", ()))
             tasks.extend(getattr(self._agent, "_learning_tasks", ()))
-        return {task for task in tasks if isinstance(task, asyncio.Future) and task is not current and not task.done()}
+        return {
+            task
+            for task in tasks
+            if isinstance(task, asyncio.Future) and task is not current and not task.done()
+        }
 
     def _defer_close(self, *, cancelled: bool, timed_out: bool) -> None:
         """Keep renewal/resources until every still-owned operation retires."""
@@ -426,7 +430,9 @@ class TurnEngine:
         task = asyncio.create_task(retire())
         self._deferred_close_task = task
         task.add_done_callback(self._observe_release)
-        runtime_services.track(task)
+        # Essential owner cleanup: if shutdown is already in progress, this
+        # close must still run (provider + claim release), not be cancelled.
+        runtime_services.track(task, essential=True)
 
     def _translate(self, event: Any) -> TurnEvent | None:
         """Map one agent ``StreamEvent`` to its semantic counterpart."""
@@ -569,7 +575,10 @@ class TurnEngine:
     # ─── cleanup ───────────────────────────────────────────────────────────
 
     async def close(
-        self, *, cancelled: bool = False, timed_out: bool = False,
+        self,
+        *,
+        cancelled: bool = False,
+        timed_out: bool = False,
         retirement_task: asyncio.Task | None = None,
     ) -> TurnClose:
         """Bound foreground cleanup; never release ahead of owned effects.
@@ -604,9 +613,13 @@ class TurnEngine:
                         try:
                             await _agent_factory.close_agent_provider(agent)
                         except (TimeoutError, asyncio.CancelledError):
-                            logger.warning("Provider close timed out for session %s", self.spec.session_id)
+                            logger.warning(
+                                "Provider close timed out for session %s", self.spec.session_id
+                            )
                         except Exception:
-                            logger.exception("Could not close turn provider for session %s", self.spec.session_id)
+                            logger.exception(
+                                "Could not close turn provider for session %s", self.spec.session_id
+                            )
                 finally:
                     release_failed = await self._release_claim()
         return TurnClose(
@@ -660,7 +673,9 @@ class TurnEngine:
     async def _await_release(self, release: asyncio.Task) -> bool:
         """Bounded wait(s) on the shielded release; True = ownership unproven."""
         try:
-            released = await asyncio.wait_for(asyncio.shield(release), timeout=self._release_timeout_s)
+            released = await asyncio.wait_for(
+                asyncio.shield(release), timeout=self._release_timeout_s
+            )
             return released is not True
         except asyncio.CancelledError:
             # Cancellation delivered mid-release (RF4-C1): consume it once and
@@ -668,7 +683,9 @@ class TurnEngine:
             # cancellation is uncertainty too: fail closed instead of
             # continuing cleanup as if the claim were released.
             try:
-                released = await asyncio.wait_for(asyncio.shield(release), timeout=self._release_timeout_s)
+                released = await asyncio.wait_for(
+                    asyncio.shield(release), timeout=self._release_timeout_s
+                )
                 return released is not True
             except asyncio.CancelledError:
                 return self._retain_release(release, "cancelled again")

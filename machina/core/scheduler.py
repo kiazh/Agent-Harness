@@ -20,7 +20,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from machina.core.background_tasks import join_agent_background_tasks
@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_HEARTBEAT_PROMPT = "Continue working toward your current goal. If it is done, say so."
 MIN_INTERVAL_SECONDS = 10
 RUN_LEASE_SECONDS = 300
+# P0-5: bounded retry window for cron jobs that cannot be rescheduled.
+CRON_RESCHEDULE_RETRY_SECONDS = 300
 
 
 def _pause_request_id(exc: PermissionError) -> str | None:
@@ -114,13 +116,34 @@ def _finish_status(error: str | None, paused_for: str | None) -> str:
 
 
 def _finish_next_run(kind: str, expr: str | None, db_now) -> Any:
-    """Canonical cron rescheduling (None for non-cron or unparseable)."""
+    """Canonical cron rescheduling: NULL only for non-cron kinds.
+
+    A cron job whose expression cannot be rescheduled must never write
+    ``next_run_at = NULL`` (P0-5): ``claim_due`` matches on
+    ``next_run_at <= now()`` and ``NULL <= now()`` is unknown, so the job
+    would silently stop firing forever. Instead the unusable expression is
+    surfaced via ``record_failure`` and the job is parked on a bounded retry
+    from the database clock so it re-runs and the row's ``last_error``/run
+    history keeps moving.
+    """
+    if kind != "cron":
+        return None
+    base = db_now or datetime.now(UTC)
+    if not (expr and str(expr).strip()):
+        record_failure(
+            "scheduler._finish_next_run",
+            ValueError(f"cron job has unusable cron_expression {expr!r}"),
+        )
+        return base + timedelta(seconds=CRON_RESCHEDULE_RETRY_SECONDS)
     try:
-        if kind == "cron" and expr:
-            return next_cron_time(expr, db_now)
-    except Exception:
-        pass
-    return None
+        next_run = next_cron_time(expr, base)
+    except Exception as error:
+        record_failure("scheduler._finish_next_run", error)
+        next_run = None
+    if next_run is None:
+        # No future fire time (or parser returned nothing): bounded retry.
+        return base + timedelta(seconds=CRON_RESCHEDULE_RETRY_SECONDS)
+    return next_run
 
 
 def _finish_fencing_ok(status: str, current: Any, claim_token: Any) -> bool:
@@ -418,8 +441,6 @@ class JobStore:
                 expr = getattr(job_row, "cron_expression", None) if job_row else None
             # Fallback path used by test_review_scheduler_clock mock.
             db_now = await db.fetchval("SELECT now()") if hasattr(db, "fetchval") else None
-            from datetime import UTC, datetime
-
             db_now = db_now or datetime.now(UTC)
             next_run = _finish_next_run(kind, expr, db_now)
             paused_status = _finish_status(error, paused_for)

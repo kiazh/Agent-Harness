@@ -662,6 +662,18 @@ class LspConnection:
         return STOP_OUTCOME_CLEANUP_PENDING
 
     async def _stop_locked(self) -> str:
+        try:
+            return await self._stop_locked_body()
+        except asyncio.CancelledError:
+            # A cancelled stop must not leave the process group behind: the
+            # synchronous sweep is the last chance before the task unwinds.
+            self.force_kill()
+            raise
+        except Exception:
+            self.force_kill()
+            raise
+
+    async def _stop_locked_body(self) -> str:
         failed = self.state == STATE_FAILED
         if self.state != STATE_STOPPING:
             self._set_state(STATE_STOPPING)
@@ -1254,6 +1266,35 @@ class LspConnection:
         except Exception:  # pragma: no cover - defensive containment
             return False
 
+    def force_kill(self) -> None:
+        """Best-effort synchronous SIGKILL sweep for a timed-out/shutdown stop.
+
+        Called after the bounded asynchronous stop could not observe an exit
+        (or when the owning task is cancelled during shutdown). It never
+        raises: a failure to signal is logged, and ``cleanup_pending`` stays
+        truthful until the process is actually reaped.
+        """
+        process = self._process
+        if process is None:
+            return
+        try:
+            kill_tree(self._process_handle(), self._pgid)
+        except Exception:
+            logger.warning("language-server force-kill sweep failed", exc_info=True)
+        if process.returncode is None:
+            try:
+                process.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            except Exception:
+                logger.warning("language-server process kill failed", exc_info=True)
+        try:
+            self.cleanup_pending = process.returncode is None or self._group_has_members()
+        except Exception:
+            # Cannot observe the group: keep claiming cleanup pending rather
+            # than asserting a clean stop that was not verified.
+            self.cleanup_pending = True
+
     def _signal_group(self, sig: int) -> None:
         process = self._process
         if process is None or process.returncode is not None:
@@ -1483,11 +1524,35 @@ class LspManager:
         self._closed = True
         for task in list(self._restart_tasks.values()):
             task.cancel()
-        await asyncio.gather(
-            *(connection.stop() for connection in self._connections.values()),
-            return_exceptions=True,
-        )
+        try:
+            await asyncio.gather(
+                *(connection.stop() for connection in self._connections.values()),
+                return_exceptions=True,
+            )
+        except asyncio.CancelledError:
+            # The stop itself was cancelled (shutdown/loop teardown): sweep
+            # every process group synchronously before unwinding.
+            self.force_kill_all()
+            raise
         self._restart_tasks.clear()
+
+    def force_kill_all(self) -> None:
+        """Best-effort synchronous kill of every owned connection.
+
+        Shutdown escalation for a stop that exceeded its bound (or whose task
+        was cancelled). Synchronous by design: it must still run while the
+        event loop is being torn down. Never raises.
+        """
+        for connection in list(self._connections.values()):
+            force_kill = getattr(connection, "force_kill", None)
+            if not callable(force_kill):
+                continue
+            try:
+                force_kill()
+            except Exception:
+                logger.warning("language-server force kill failed", exc_info=True)
+        for task in list(self._restart_tasks.values()):
+            task.cancel()
 
     # -- restart bookkeeping -------------------------------------------------
 

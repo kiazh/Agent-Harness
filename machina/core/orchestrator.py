@@ -286,20 +286,6 @@ class Orchestrator:
             parent_session_id=parent_session_id,
             delegation_authority=child_authority,
         )
-        if inherited_grant is not None:
-            await permission_store.save_grant(
-                {
-                    "session_id": str(child.id),
-                    "agent_id": agent_name,
-                    "mode": "full",
-                    "capability": "session",
-                    "scope_path": None,
-                    "scope_type": "file",
-                    "grant_kind": "session",
-                    "digest": "full-mode-session",
-                    "expires_at": inherited_grant.get("expires_at"),
-                }
-            )
         # Phase 4.5/6 + LP-08: same factory/accounting/cancellation pipeline
         # as normal turns. Child authority = definition ∩ parent caps, and the
         # broker enforces it at execution (not just on the stored agent).
@@ -309,7 +295,9 @@ class Orchestrator:
         # the child session + owned provider exist — it also covers recording
         # the start row. A build failure, a DB error in ``_record_start``, or
         # cancellation during that insert closes the owned provider and
-        # archives the fresh child instead of leaking/orphaning them.
+        # archives the fresh child instead of leaking/orphaning them. The
+        # inherited-grant copy is inside the scope too: a failure there has the
+        # same orphan risk and needs the same archive-before-raise contract.
         # ``message_id`` stays None until the child actually ran; only then is
         # the (now durable) child session kept.
         agent = None
@@ -318,6 +306,20 @@ class Orchestrator:
         deadline_token = None
         authority_token = None
         try:
+            if inherited_grant is not None:
+                await permission_store.save_grant(
+                    {
+                        "session_id": str(child.id),
+                        "agent_id": agent_name,
+                        "mode": "full",
+                        "capability": "session",
+                        "scope_path": None,
+                        "scope_type": "file",
+                        "grant_kind": "session",
+                        "digest": "full-mode-session",
+                        "expires_at": inherited_grant.get("expires_at"),
+                    }
+                )
             if self._agent_factory is not None:
                 agent = self._agent_factory(definition)
             else:

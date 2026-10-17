@@ -15,24 +15,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from machina.core.background_tasks import drain_background_tasks
+from machina.core.cleanup import bounded_cleanup
 from machina.core.cleanup import cancel_and_join as _bounded_join
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from machina.connectors.service import ConnectorService
-
-
-async def _bounded_cleanup(cleanup: Coroutine[Any, Any, None], timeout: float, label: str) -> None:
-    from machina.core.cleanup import bounded_cleanup
-
-    await bounded_cleanup(cleanup, timeout, label)
 
 
 @dataclass
@@ -50,6 +44,7 @@ class RuntimeServices:
     _started: bool = False
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _background: set[asyncio.Task] = field(default_factory=set)
+    _essential_background: set[asyncio.Task] = field(default_factory=set)
     _shutting_down: bool = False
     capabilities: list[Capability] = field(default_factory=list)
     _connector_service: ConnectorService | None = field(default=None, repr=False)
@@ -79,14 +74,14 @@ class RuntimeServices:
             oauth = getattr(self._connector_service, "oauth", None)
             if oauth is not None:
                 try:
-                    await _bounded_cleanup(
+                    await bounded_cleanup(
                         oauth.shutdown(deadline=min(5.0, timeout)),
                         min(5.0, timeout),
                         "oauth shutdown",
                     )
                 except Exception:
                     logger.exception("oauth shutdown failed")
-            await _bounded_cleanup(
+            await bounded_cleanup(
                 self._connector_service.manager.shutdown_all(), timeout, "connector shutdown"
             )
 
@@ -193,10 +188,13 @@ class RuntimeServices:
         background tasks get a bounded join, then leftovers are quarantined
         (logged + dropped from tracking) instead of awaited forever — a
         cancellation-resistant task cannot exceed the outer deadline. DB
-        closure runs after the join with its own bound. New tasks created
-        during shutdown are rejected. Caller cancellation still attempts
-        remaining service cleanup (100ms per stage), then propagates, so
-        restarting cannot acquire audit ownership a second time.
+        closure runs after the join with its own bound. New maintenance work
+        created during shutdown is rejected; essential owner cleanup
+        (``track(..., essential=True)``) is exempt and drained bounded so a
+        deferred provider close + claim release still executes. Caller
+        cancellation still attempts remaining service cleanup (100ms per
+        stage), then propagates, so restarting cannot acquire audit ownership
+        a second time.
 
         Ordering: background work is drained *before* the audit writer is
         stopped (mirroring the gateway), so consolidation/learning tasks that
@@ -206,6 +204,8 @@ class RuntimeServices:
         async with self._lock:
             self._shutting_down = True
             cancellation: asyncio.CancelledError | None = None
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
             try:
                 try:
                     leftovers = await _bounded_join(
@@ -221,6 +221,14 @@ class RuntimeServices:
                     cancellation = e
                 finally:
                     self._background.clear()
+                try:
+                    # Deferred owner cleanup (provider close + claim release)
+                    # registered via track(..., essential=True) must EXECUTE:
+                    # it is never cancelled before its first step. Wait for it
+                    # within the remaining shutdown budget instead.
+                    await self._drain_essential(timeout=max(0.0, deadline - loop.time()))
+                except asyncio.CancelledError as e:
+                    cancellation = e
                 try:
                     await self.shutdown_connectors(
                         timeout=min(0.1 if cancellation is not None else 5, timeout)
@@ -246,7 +254,7 @@ class RuntimeServices:
                 try:
                     from machina.observability.audit import audit_persistence
 
-                    await _bounded_cleanup(
+                    await bounded_cleanup(
                         audit_persistence.stop(),
                         timeout=min(0.1 if cancellation is not None else 5, timeout),
                         label="audit stop",
@@ -258,7 +266,7 @@ class RuntimeServices:
                 try:
                     from machina.rag.embedder import close_shared_embedder
 
-                    await _bounded_cleanup(
+                    await bounded_cleanup(
                         close_shared_embedder(),
                         timeout=min(0.1 if cancellation is not None else 5, timeout),
                         label="embedder close",
@@ -269,7 +277,7 @@ class RuntimeServices:
                     # across shutdown and kept the released generation cached.
                     from machina.tools.rag import close_active_rag_pipeline
 
-                    await _bounded_cleanup(
+                    await bounded_cleanup(
                         close_active_rag_pipeline(),
                         timeout=min(0.1 if cancellation is not None else 5, timeout),
                         label="rag pipeline close",
@@ -281,7 +289,7 @@ class RuntimeServices:
                 try:
                     from machina.db.connection import db
 
-                    await _bounded_cleanup(
+                    await bounded_cleanup(
                         db.close(),
                         timeout=min(0.1 if cancellation is not None else 5, timeout),
                         label="database close",
@@ -296,14 +304,51 @@ class RuntimeServices:
                 self._started = False
                 self._shutting_down = False
 
-    def track(self, task: asyncio.Task) -> asyncio.Task:
-        """Register a maintenance task for bounded shutdown joining."""
+    def track(self, task: asyncio.Task, *, essential: bool = False) -> asyncio.Task:
+        """Register a maintenance task for bounded shutdown joining.
+
+        ``essential=True`` marks owner cleanup (a deferred provider close +
+        claim release). Essential cleanup registered while shutdown is already
+        in progress is NOT cancelled: killing it before its first step leaks
+        the provider and strands the session claim until TTL expiry. It is
+        drained bounded by :meth:`shutdown` instead. Non-essential work keeps
+        the documented reject policy: new background work scheduled during
+        shutdown is cancelled immediately.
+        """
+        if essential:
+            self._essential_background.add(task)
+            task.add_done_callback(self._essential_background.discard)
+            return task
         if getattr(self, "_shutting_down", False):
             task.cancel()
             return task
         self._background.add(task)
         task.add_done_callback(self._background.discard)
         return task
+
+    async def _drain_essential(self, *, timeout: float) -> None:
+        """Wait (never cancel) for owner cleanup registered during shutdown.
+
+        Deferred closes release the session claim and close the owned provider;
+        cancelling one mid-flight leaks the provider and falls back to claim
+        TTL expiry. A close that outlives the shutdown budget is left running
+        (its claim still expires via TTL) and reported — never cancelled here.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            pending = [task for task in self._essential_background if not task.done()]
+            if not pending:
+                return
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                logger.warning(
+                    "runtime shutdown: %d essential cleanup task(s) still pending; "
+                    "their claims fall back to TTL expiry",
+                    len(pending),
+                )
+                return
+            await asyncio.wait(pending, timeout=remaining)
 
 
 def _detect_providers() -> dict[str, Any]:

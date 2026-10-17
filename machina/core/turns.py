@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 TURN_TTL_SECONDS = 360
 MUTATION_TTL_SECONDS = 120
 
+#: Bounded budget for the shielded reconciliation of a durable claim whose
+#: acquisition was cancelled (MCH-002): longest bounded wait allowed before
+#: ownership is treated as ambiguous and left to stale-claim recovery.
+CLAIM_RECONCILE_TIMEOUT_SECONDS = 5.0
+
 _locks: dict[str, asyncio.Lock] = {}
 _mutation_locks: dict[str, asyncio.Lock] = {}
 
@@ -248,6 +253,63 @@ async def _db_renew(session_id: uuid.UUID, owner: str, ttl_s: int) -> bool:
     return parse_command_count(result) > 0
 
 
+def _observe_reconcile_task(task: asyncio.Task) -> None:
+    """Consume a detached reconciliation release so it is never a silent orphan."""
+    if not task.cancelled():
+        error = task.exception()
+        if error is not None:
+            record_failure("turns.cancel_reconcile.detached", error)
+
+
+async def _reconcile_cancelled_claim(session_id: uuid.UUID, owner: str, kind: str) -> None:
+    """Shielded, bounded cleanup for a claim whose acquisition was cancelled.
+
+    MCH-002: cancellation can strike *after* the durable claim committed but
+    before any caller received the owner token. The claim is released ONLY
+    when it is provably still owned by this call's token (``_db_release``
+    matches ``claim_owner = owner`` exactly, so a successor's claim can never
+    be released). When ownership cannot be proven (timeout, database error,
+    or a second cancellation), the durable claim is LEFT for stale-claim
+    recovery rather than released blind, and the uncertainty is recorded.
+    A second cancellation propagates; it is never converted to an error.
+    """
+    release = asyncio.ensure_future(_db_release(session_id, owner))
+    try:
+        async with asyncio.timeout(CLAIM_RECONCILE_TIMEOUT_SECONDS):
+            released = await asyncio.shield(release)
+    except asyncio.CancelledError:
+        # A stop delivered mid-reconciliation is ownership uncertainty too:
+        # keep the token-matched release observed (it may still clear our own
+        # claim) and propagate the requested cancellation instead of masking.
+        release.add_done_callback(_observe_reconcile_task)
+        raise
+    except (TimeoutError, Exception) as error:
+        release.add_done_callback(_observe_reconcile_task)
+        # Unresolved ownership (bounded budget spent or database error):
+        # leave the durable claim for stale-claim recovery (expiry), and
+        # record enough to make the ambiguity auditable.
+        record_failure(f"turns.{kind}.cancel_reconcile", error)
+        logger.warning(
+            "Cancelled %s acquisition for session %s: release outcome unknown; "
+            "durable claim left for stale-claim recovery",
+            kind,
+            session_id,
+        )
+        return
+    if released:
+        logger.info(
+            "Cancelled %s acquisition for session %s; released the still-owned claim",
+            kind,
+            session_id,
+        )
+    else:
+        logger.info(
+            "Cancelled %s acquisition for session %s; claim was already released or taken",
+            kind,
+            session_id,
+        )
+
+
 async def renew_turn(
     session_id: uuid.UUID, token: str | None, ttl_s: int = TURN_TTL_SECONDS
 ) -> bool:
@@ -349,6 +411,20 @@ async def try_begin_turn(
                 _note_lock_contention("begin_turn_local_busy")
             return None
         return owner
+    except asyncio.CancelledError:
+        # MCH-002: cancellation during acquisition must reconcile acquisition
+        # state — a durable claim may have committed without any caller ever
+        # receiving this token. Bounded, token-matched release only; a
+        # successor's claim is never released (see _reconcile_cancelled_claim).
+        try:
+            await _reconcile_cancelled_claim(session_id, owner, "turn")
+        finally:
+            try:
+                lock.release()
+            except RuntimeError:
+                _note_lock_contention("begin_turn_cancelled")
+            _local_release(session_id, owner)
+        raise
     except Exception:
         try:
             lock.release()
@@ -465,6 +541,18 @@ async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SEC
                 _note_lock_contention("begin_mutation_local_busy")
             return None
         return owner
+    except asyncio.CancelledError:
+        # MCH-002 (mutation twin): same token-matched, bounded, shielded
+        # reconciliation as the turn path before the cancellation propagates.
+        try:
+            await _reconcile_cancelled_claim(session_id, owner, "mutation")
+        finally:
+            try:
+                lock.release()
+            except RuntimeError:
+                _note_lock_contention("begin_mutation_cancelled")
+            _local_release(session_id, owner)
+        raise
     except Exception:
         try:
             lock.release()

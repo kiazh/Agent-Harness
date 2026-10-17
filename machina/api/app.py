@@ -153,47 +153,61 @@ class _RpcGateway:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Single shared lifecycle: the runtime graph owns DB/audit/scheduler."""
+    """Single shared lifecycle: the runtime graph owns DB/audit/scheduler.
+
+    Every initialized resource is cleaned up on ordinary *and* exceptional
+    exits (MCH-005): the yielded lifetime is wrapped in ``try/finally`` with
+    each stage independently guarded, so one failing (or cancelled) cleanup
+    cannot skip the rest or replace the primary exception.
+    """
     from machina.core.runtime import runtime_services
     from machina.plugins.loader import load_plugins
 
     load_plugins()
     runner = None
     rpc_gw = None
+    primary_error: BaseException | None = None
     try:
-        report = await runtime_services.startup()
-        if report.get("db") == "ready":
-            from machina.core.scheduler import JobRunner
+        try:
+            report = await runtime_services.startup()
+            if report.get("db") == "ready":
+                from machina.core.scheduler import JobRunner
 
-            runner = JobRunner()
-            runner.start()
-        # Create a single _RpcGateway for all RPC dispatches
-        rpc_gw = _RpcGateway()
-        app.state._rpc_gateway = rpc_gw
-    except Exception as e:
-        logger.warning("Runtime startup degraded: %s", e, exc_info=True)
-    yield
-    # AH-AUDIT-024: bounded shutdown — no stage awaits cancellation-
-    # resistant work indefinitely.
-    if runner is not None:
-        try:
-            await asyncio.wait_for(runner.stop(), timeout=10)
-        except asyncio.CancelledError:
-            raise
-        except (TimeoutError, Exception):
-            logger.warning("API job runner stop exceeded its bound; continuing")
-    if rpc_gw is not None:
-        try:
-            await asyncio.wait_for(rpc_gw.close(), timeout=10)
-        except asyncio.CancelledError:
-            raise
-        except (TimeoutError, Exception):
-            logger.warning("API gateway close exceeded its bound; continuing")
-    try:
-        await asyncio.wait_for(runtime_services.shutdown(), timeout=15)
-    except (TimeoutError, asyncio.CancelledError, Exception) as _boundary_error:
-        # Optional fallback preserves the primary outcome; report no payload.
-        record_failure("app.lifespan", _boundary_error)
+                runner = JobRunner()
+                runner.start()
+            # Create a single _RpcGateway for all RPC dispatches
+            rpc_gw = _RpcGateway()
+            app.state._rpc_gateway = rpc_gw
+        except Exception as e:
+            logger.warning("Runtime startup degraded: %s", e, exc_info=True)
+        yield
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        # AH-AUDIT-024: bounded shutdown — no stage awaits cancellation-
+        # resistant work indefinitely. Failures are reported, never raised
+        # over the primary outcome.
+        cleanup_cancelled: asyncio.CancelledError | None = None
+
+        async def _cleanup_stage(label: str, cleanup: Any, timeout: float) -> None:
+            nonlocal cleanup_cancelled
+            try:
+                await asyncio.wait_for(cleanup(), timeout=timeout)
+            except asyncio.CancelledError as error:
+                cleanup_cancelled = cleanup_cancelled or error
+                logger.warning("API %s cleanup was cancelled; continuing", label)
+            except Exception as error:
+                logger.warning("API %s cleanup failed: %s", label, error, exc_info=True)
+                record_failure(f"app.lifespan.{label}", error)
+
+        if runner is not None:
+            await _cleanup_stage("job_runner_stop", runner.stop, 10)
+        if rpc_gw is not None:
+            await _cleanup_stage("gateway_close", rpc_gw.close, 10)
+        await _cleanup_stage("runtime_shutdown", runtime_services.shutdown, 15)
+        if cleanup_cancelled is not None and primary_error is None:
+            raise cleanup_cancelled
 
 
 # ─── app factory ───────────────────────────────────────────────────────────

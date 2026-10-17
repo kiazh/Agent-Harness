@@ -12,12 +12,28 @@ import asyncpg
 import msgpack
 from cachetools import TTLCache
 
+from machina.core.exceptions import MachinaError
 from machina.core.models import Session
 from machina.db.connection import db
 
-__all__ = ["Session", "SessionManager", "session_manager"]
+__all__ = [
+    "CorruptSessionStateError",
+    "Session",
+    "SessionManager",
+    "session_manager",
+]
 
 logger = logging.getLogger(__name__)
+
+
+class CorruptSessionStateError(MachinaError, RuntimeError):
+    """Session state could not be decoded, so a partial update was refused.
+
+    F-29: merging new fields into ``{}`` and writing the row back would erase
+    every other key in ``sessions.state`` (notably ``mem_consolidated_up_to``).
+    The row is left untouched instead; an operator can inspect the original
+    blob and repair or clear it explicitly.
+    """
 
 
 class SessionManager:
@@ -179,9 +195,11 @@ class SessionManager:
         The row is locked (SELECT ... FOR UPDATE) so concurrent writers
         updating independent fields serialize instead of clobbering each
         other — emotion, watermark, and compaction-state writes all survive.
-        Unrelated existing keys are preserved; legacy non-dict state is
-        treated as empty. Returns the merged state. Never relies on a
-        cached snapshot for the write.
+        Unrelated existing keys are preserved. A blob that cannot be decoded
+        as a mapping fails closed (F-29): the row is not written, because
+        merging into ``{}`` would erase every other key (including
+        ``mem_consolidated_up_to``). Returns the merged state. Never relies on
+        a cached snapshot for the write.
         """
         if not isinstance(fields, dict):
             raise ValueError("fields must be a dict")
@@ -198,25 +216,20 @@ class SessionManager:
                 if raw:
                     try:
                         unpacked = msgpack.unpackb(raw, raw=False)
-                        if isinstance(unpacked, dict):
-                            current = unpacked
-                        else:
-                            logger.warning(
-                                "Session %s state is not a mapping (%s); "
-                                "reinitializing state from the requested fields",
-                                session_id,
-                                type(unpacked).__name__,
-                            )
-                    except Exception:
-                        # m6: never silently discard unreadable session state —
-                        # an operator must be able to see the corruption.
-                        logger.warning(
-                            "Corrupt state_msgpack for session %s; "
-                            "reinitializing state from the requested fields",
-                            session_id,
-                            exc_info=True,
+                    except Exception as error:
+                        # Fail closed: the row (and its watermark/ancestry
+                        # metadata) stays exactly as stored. An operator can
+                        # inspect and repair it explicitly.
+                        raise CorruptSessionStateError(
+                            f"Session {session_id} has an undecodable state blob "
+                            f"({type(error).__name__}: {error}); refusing to overwrite it"
+                        ) from error
+                    if not isinstance(unpacked, dict):
+                        raise CorruptSessionStateError(
+                            f"Session {session_id} state is not a mapping "
+                            f"({type(unpacked).__name__}); refusing to overwrite it"
                         )
-                        current = {}
+                    current = unpacked
                 merged = {**current, **fields}
                 await conn.execute(
                     "UPDATE sessions SET state_msgpack = $2, last_activity = now() WHERE id = $1",
@@ -349,8 +362,8 @@ class SessionManager:
                     """
                     INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, ancestor_session_ids, ancestor_agent_ids)
                     VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10,
-                        COALESCE((SELECT ancestor_session_ids FROM sessions WHERE id = $11), '{}'),
-                        COALESCE((SELECT ancestor_agent_ids FROM sessions WHERE id = $11), '{}'))
+                        COALESCE((SELECT ARRAY[id] || ancestor_session_ids FROM sessions WHERE id = $11), '{}'),
+                        COALESCE((SELECT ARRAY[agent_id] || ancestor_agent_ids FROM sessions WHERE id = $11), '{}'))
                     RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
                     """,
                     fork_title,
@@ -361,7 +374,10 @@ class SessionManager:
                     source.provider,
                     source.context_budget,
                     "ask",  # Forks never inherit another session's live authority.
-                    source.parent_session_id,
+                    # Fork child semantics match create(): the source session is
+                    # the fork's parent and therefore one of its ancestors, so
+                    # artifact ACLs retain access to the source's artifacts.
+                    source.id,
                     json.dumps(source.delegation_authority),
                     source.id,
                 )

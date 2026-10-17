@@ -221,6 +221,10 @@ class WorkspaceService:
         self._save_tasks: set[asyncio.Task[None]] = set()
         self._diagnostics = DiagnosticsStore()
         self._stop_task: asyncio.Task[None] | None = None
+        # The manager whose bounded stop owns ``_stop_task`` (kept even when a
+        # reopen detaches ``_lsp_manager`` so escalation targets the right
+        # processes).
+        self._stopping_manager: Any | None = None
         # The manager close() retired: stop_all closes it permanently, so a
         # later open() must not pretend a fresh server can come from it.
         self._closing_manager: Any | None = None
@@ -330,8 +334,11 @@ class WorkspaceService:
     async def wait_stopped(self) -> None:
         """Await the bounded manager stop requested by :meth:`close` (if any).
 
-        The wait is bounded and never cancels the stop: a shutdown that
-        exceeds the deadline keeps running in the retained task.
+        The wait is bounded. If the graceful stop exceeds the deadline it is
+        escalated to a best-effort synchronous force-kill so a shutdown can
+        never leave an orphan language-server process behind; the original
+        stop task is still retained (never cancelled here) and this method
+        never raises from the shutdown path.
         """
         task = self._stop_task
         if task is None:
@@ -339,11 +346,35 @@ class WorkspaceService:
         done, _pending = await asyncio.wait({task}, timeout=self._manager_stop_timeout)
         if not done:
             logger.warning(
-                "language-server stop exceeded %.1fs; continuing in background",
+                "language-server stop exceeded %.1fs; escalating to force-kill",
                 self._manager_stop_timeout,
             )
+            self._force_kill_manager(self._stopping_manager or self._lsp_manager)
+
+    def _force_kill_manager(self, manager: Any) -> None:
+        """Best-effort, non-raising synchronous kill of a manager's servers."""
+        if manager is None:
+            return
+        force_kill_all = getattr(manager, "force_kill_all", None)
+        if not callable(force_kill_all):
+            return
+        try:
+            force_kill_all()
+        except asyncio.CancelledError:
+            # This is a synchronous escalation inside a shutdown path; the
+            # caller's own cancellation (if any) still propagates.
+            logger.warning("language-server force-kill was cancelled")
+        except Exception:
+            logger.warning("language-server force-kill failed", exc_info=True)
 
     def _reset_lsp_state(self) -> None:
+        """Drop all per-workspace LSP state, including every stored diagnostic.
+
+        Called on open, close and manager replacement: a diagnostic set is
+        only meaningful for the identity/epoch that received it, so clearing
+        here guarantees a previous workspace's diagnostics can never attach to
+        a new one (the store additionally filters by epoch/generation).
+        """
         for task in list(self._sync_tasks.values()):
             task.cancel()
         self._sync_tasks.clear()
@@ -364,6 +395,7 @@ class WorkspaceService:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return  # no event loop: there is no async transport to stop here
+        self._stopping_manager = manager
         self._stop_task = loop.create_task(
             self._stop_manager_detached(manager), name="workspace-lsp-stop"
         )
@@ -371,19 +403,26 @@ class WorkspaceService:
     async def _stop_manager_detached(self, manager: Any) -> None:
         """Run the manager's ``stop_all`` to completion in a retained task.
 
-        Never cancels the stop: the bounded observation (and its timeout log)
-        lives in :meth:`wait_stopped`, so a hanging shutdown keeps running and
-        stays observable through ``self._stop_task``.
+        On timeout the bounded observation (and its force-kill escalation)
+        lives in :meth:`wait_stopped`. If this task is itself cancelled (for
+        example while the event loop is torn down) or the stop fails midway,
+        a best-effort synchronous force-kill still runs so no process is
+        orphaned. Cancellation is re-raised; nothing is converted.
         """
         stop_all = getattr(manager, "stop_all", None)
         if not callable(stop_all):
             return
+        completed = False
         try:
             await _await_if_needed(stop_all())
+            completed = True
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.warning("language-server stop failed", exc_info=True)
+        finally:
+            if not completed:
+                self._force_kill_manager(manager)
 
     def _require_files(self) -> WorkspaceFiles:
         if self._files is None or self._identity is None:
@@ -1434,9 +1473,7 @@ class WorkspaceService:
         )
 
     # ─── diagnostics notifications (plan §16) ───────────────────────────────
-    def _handle_connection_notification(
-        self, connection: Any, method: str, params: Any
-    ) -> None:
+    def _handle_connection_notification(self, connection: Any, method: str, params: Any) -> None:
         """Store ``textDocument/publishDiagnostics`` per (uri, producer).
 
         Replace semantics live in :class:`DiagnosticsStore`: a publish

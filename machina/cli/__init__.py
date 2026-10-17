@@ -63,10 +63,7 @@ def main(
 ) -> None:
     """Open the interactive UI when no subcommand is given."""
     if mode is not None:
-        normalized = mode.strip().lower()
-        if normalized not in ("ask", "workspace", "sandbox", "full"):
-            output.error("Invalid --mode. Use ask|workspace|sandbox|full.")
-            raise typer.Exit(1)
+        normalized = _normalize_mode(mode)
         config.set("execution_mode", normalized)
         os.environ["MACHINA_EXECUTION_MODE"] = normalized
     if ctx.invoked_subcommand is None:
@@ -92,6 +89,28 @@ def _run(coro):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
+
+
+VALID_MODES = ("ask", "workspace", "sandbox", "full")
+
+
+def _normalize_mode(value: str, *, option: str = "--mode") -> str:
+    """Validate an execution-mode option, exiting with the CLI's usage error."""
+    normalized = value.strip().lower()
+    if normalized not in VALID_MODES:
+        output.error(f"Invalid {option}. Use ask|workspace|sandbox|full.")
+        raise typer.Exit(1)
+    return normalized
+
+
+@contextlib.asynccontextmanager
+async def _db_connected():
+    """Yield with a connected pool and always close it afterwards."""
+    await db.connect()
+    try:
+        yield
+    finally:
+        await db.close()
 
 
 def _sync_env_shadow(key: str, value: str) -> None:
@@ -237,10 +256,7 @@ def chat(
     only at the session ID.
     """
     if mode is not None:
-        normalized = mode.strip().lower()
-        if normalized not in ("ask", "workspace", "sandbox", "full"):
-            output.error("Invalid --mode. Use ask|workspace|sandbox|full.")
-            raise typer.Exit(1)
+        normalized = _normalize_mode(mode)
         config.set("execution_mode", normalized)
     if interactive:
         raise typer.Exit(
@@ -256,6 +272,14 @@ def chat(
     async def _chat():
         await db.connect()
         agent = None
+        # P0-18: headless chat is a first-class transport but never owned the
+        # audit writer, so every event it emitted (including this run's start
+        # record) hit the "dropped before the writer started" path. Own the
+        # writer for the whole one-shot run; the finally below drains it
+        # before the database closes.
+        from machina.observability.audit import audit_persistence
+
+        audit_persistence.start()
         try:
             try:
                 await db.initialize_runtime_schema()
@@ -323,6 +347,20 @@ def chat(
                     "Wait for it to finish (or stop it in the UI), then retry.",
                 )
                 raise typer.Exit(EXIT_FAILED)
+            # P0-18: forensic start record BEFORE the agent executes. Emitted
+            # after the claim is held (a busy rejection is not a started run)
+            # and before build/stream, so a crash mid-turn still leaves
+            # evidence of the attempted run. Best-effort: queued like every
+            # other audit write and never allowed to fail the turn.
+            from machina.core.provider.audit import audit_log
+
+            audit_log(
+                "chat.start",
+                session_id=str(session.id),
+                transport="cli",
+                mode=getattr(session, "execution_mode", None) or config.get("execution_mode"),
+                turn_id=turn_id,
+            )
             ownership_lost = asyncio.Event()
             # R04b: ownership loss must stop the running work immediately —
             # the same contract as gateway/server.py and
@@ -467,6 +505,12 @@ def chat(
                     await close_agent_provider(agent)
             except Exception:
                 pass
+            # P0-18: stop the writer this transport started, before the pool
+            # closes (a pending row must not lose its connection).
+            try:
+                await audit_persistence.stop()
+            except Exception as audit_error:
+                record_failure("cli.chat.audit_stop", audit_error)
             await db.close()
 
     try:
@@ -488,10 +532,7 @@ def repl(
 ):
     """Open the interactive UI (same as running `machina` with no arguments)."""
     if mode is not None:
-        normalized = mode.strip().lower()
-        if normalized not in ("ask", "workspace", "sandbox", "full"):
-            output.error("Invalid --mode. Use ask|workspace|sandbox|full.")
-            raise typer.Exit(1)
+        normalized = _normalize_mode(mode)
         config.set("execution_mode", normalized)
     raise typer.Exit(launch_ui(model=model, provider=provider, session_id=session_id, mode=mode))
 
@@ -566,16 +607,13 @@ def set_mode(
     async def _mode():
         # Show/set of the persistent default needs no DB; revocation does.
         if revoke:
-            await db.connect()
-            try:
+            async with _db_connected():
                 from machina.permissions.broker import permission_broker
 
                 count = await permission_broker.revoke("*")
                 config.set("execution_mode", "ask", persist=True)
                 _sync_env_shadow("execution_mode", "ask")
                 output.status_line("Mode", f"ask ({count} grants revoked)", "success")
-            finally:
-                await db.close()
             return
         if not mode:
             output.status_line("Mode", str(config.get("execution_mode")), "success")
@@ -584,10 +622,7 @@ def set_mode(
             console.print("sandbox: isolated container | full: explicit FULL HOST grant")
             console.print("`machina mode X` sets the persistent default for new sessions.")
             return
-        normalized = mode.strip().lower()
-        if normalized not in ("ask", "workspace", "sandbox", "full"):
-            output.error("Invalid mode. Use ask|workspace|sandbox|full.")
-            raise typer.Exit(1)
+        normalized = _normalize_mode(mode, option="mode")
         if normalized == "full":
             confirm = typer.confirm(
                 "Set FULL HOST as the persistent default for new sessions? "
@@ -629,8 +664,7 @@ def list_sessions(
     """List recent sessions."""
 
     async def _sessions():
-        await db.connect()
-        try:
+        async with _db_connected():
             sessions = await session_manager.list_sessions(status=status_filter, limit=limit)
 
             if not sessions:
@@ -638,8 +672,6 @@ def list_sessions(
                 return
 
             output.sessions_table(sessions)
-        finally:
-            await db.close()
 
     _run(_sessions())
 
@@ -652,8 +684,7 @@ def sessions_search(
     """Full-text search over session titles."""
 
     async def _search():
-        await db.connect()
-        try:
+        async with _db_connected():
             sessions = await session_manager.search(query, limit=limit)
 
             if not sessions:
@@ -661,8 +692,6 @@ def sessions_search(
                 return
 
             output.sessions_table(sessions)
-        finally:
-            await db.close()
 
     _run(_search())
 
@@ -679,8 +708,7 @@ def usage_command(
     async def _usage():
         from machina.core.usage import usage_store
 
-        await db.connect()
-        try:
+        async with _db_connected():
             session = await _resolve_session(session_id)
             result = await usage_store.summary(session.id, agent or session.agent_id)
             table = Table(title=f"Usage for {session.id}")
@@ -705,8 +733,6 @@ def usage_command(
                     else "unlimited",
                 )
             console.print(table)
-        finally:
-            await db.close()
 
     _run(_usage())
 
@@ -721,8 +747,7 @@ def export(
     """Export a conversation as markdown."""
 
     async def _export():
-        await db.connect()
-        try:
+        async with _db_connected():
             session = await _resolve_session(session_id)
             text = await services.export_markdown(session)
             from machina.tools.file import resolve_path
@@ -734,8 +759,6 @@ def export(
                 raise typer.Exit(1) from None
             output_path.write_text(text, encoding="utf-8")
             output.success(f"Exported session {session.id} to {filename}")
-        finally:
-            await db.close()
 
     _run(_export())
 
@@ -752,8 +775,7 @@ def fork(
         if sid is None:
             output.error(f"Invalid session ID: {session_id}")
             raise typer.Exit(1)
-        await db.connect()
-        try:
+        async with _db_connected():
             try:
                 new_session = await session_manager.fork(sid, title=title)
             except ValueError as error:
@@ -766,8 +788,6 @@ def fork(
                 raise typer.Exit(1) from None
             output.success(f"Forked session {session_id} → {new_session.id}")
             output.muted(f"Title: {new_session.title or '(untitled)'}")
-        finally:
-            await db.close()
 
     _run(_fork())
 
@@ -784,8 +804,7 @@ def delete(
     """
 
     async def _delete():
-        await db.connect()
-        try:
+        async with _db_connected():
             sid = _parse_uuid(session_id)
             if sid is None:
                 output.error(f"Invalid session ID: {session_id}")
@@ -841,8 +860,6 @@ def delete(
             else:
                 output.error(f"Failed to delete session {session_id}.")
                 raise typer.Exit(1)
-        finally:
-            await db.close()
 
     _run(_delete())
 
@@ -855,8 +872,7 @@ def context(
     """View context chunks for a session."""
 
     async def _context():
-        await db.connect()
-        try:
+        async with _db_connected():
             if session_id:
                 sid = _parse_uuid(session_id)
                 if sid is None:
@@ -890,8 +906,6 @@ def context(
 
             total_tokens = await context_manager.get_token_usage(sid)
             console.print(f"\n[dim]Total tokens: {total_tokens}[/dim]")
-        finally:
-            await db.close()
 
     _run(_context())
 
@@ -903,8 +917,7 @@ def compress(
     """Compress context for a session. Reduces token usage while preserving key information."""
 
     async def _compress():
-        await db.connect()
-        try:
+        async with _db_connected():
             session = await _resolve_session(session_id)
             total_tokens = await context_manager.get_token_usage(session.id)
             output.muted(f"Session: {session.id} ({total_tokens} tokens)")
@@ -919,8 +932,6 @@ def compress(
                 f"{result.original_tokens} → {result.compressed_tokens} tokens "
                 f"({result.compression_ratio:.1%} ratio, method: {result.method})"
             )
-        finally:
-            await db.close()
 
     _run(_compress())
 
@@ -1696,8 +1707,7 @@ def memory_list(
     """List all memories."""
 
     async def _memory_list():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.store import memory_store
 
             memories = await memory_store.search(category=category, limit=limit)
@@ -1707,8 +1717,6 @@ def memory_list(
                 return
 
             output.memory_table(memories)
-        finally:
-            await db.close()
 
     _run(_memory_list())
 
@@ -1721,8 +1729,7 @@ def memory_search(
     """Search memories by relevance."""
 
     async def _memory_search():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.retriever import MemoryRetriever
 
             retriever = MemoryRetriever(top_k=limit)
@@ -1744,8 +1751,6 @@ def memory_search(
                         f"      [dim][persona] {escape(rm.persona_interpretation[:200])}[/dim]"
                     )
             console.print()
-        finally:
-            await db.close()
 
     _run(_memory_search())
 
@@ -1757,8 +1762,7 @@ def memory_forget(
     """Delete a memory by ID."""
 
     async def _memory_forget():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.store import memory_store
 
             mid = _parse_uuid(memory_id)
@@ -1770,8 +1774,6 @@ def memory_forget(
                 output.success(f"Memory {memory_id} deleted.")
             else:
                 console.print(f"[yellow]Memory {escape(memory_id)} not found.[/yellow]")
-        finally:
-            await db.close()
 
     _run(_memory_forget())
 
@@ -1786,8 +1788,7 @@ def memory_pending(
     """List pending memories awaiting approval."""
 
     async def _memory_pending():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.approval import ApprovalStatus, memory_approval_gate
 
             pending = await memory_approval_gate.list_pending(
@@ -1816,8 +1817,6 @@ def memory_pending(
                 )
 
             console.print(table)
-        finally:
-            await db.close()
 
     _run(_memory_pending())
 
@@ -1830,8 +1829,7 @@ def memory_approve(
     """Approve a pending memory."""
 
     async def _memory_approve():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.approval import memory_approval_gate
 
             pid = _parse_uuid(pending_id)
@@ -1847,8 +1845,6 @@ def memory_approve(
                 console.print(
                     f"[yellow]Pending memory {pending_id} not found or already reviewed.[/yellow]"
                 )
-        finally:
-            await db.close()
 
     _run(_memory_approve())
 
@@ -1861,8 +1857,7 @@ def memory_reject(
     """Reject a pending memory."""
 
     async def _memory_reject():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.approval import memory_approval_gate
 
             pid = _parse_uuid(pending_id)
@@ -1876,8 +1871,6 @@ def memory_reject(
                 console.print(
                     f"[yellow]Pending memory {pending_id} not found or already reviewed.[/yellow]"
                 )
-        finally:
-            await db.close()
 
     _run(_memory_reject())
 
@@ -1889,14 +1882,11 @@ def memory_approve_all(
     """Approve all pending memories."""
 
     async def _memory_approve_all():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.approval import memory_approval_gate
 
             count = await memory_approval_gate.approve_all(agent_id=agent_id)
             console.print(f"[green]Approved {count} pending memories.[/green]")
-        finally:
-            await db.close()
 
     _run(_memory_approve_all())
 
@@ -1909,14 +1899,11 @@ def memory_reject_all(
     """Reject all pending memories."""
 
     async def _memory_reject_all():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.approval import memory_approval_gate
 
             count = await memory_approval_gate.reject_all(agent_id=agent_id, review_note=note)
             console.print(f"[green]Rejected {count} pending memories.[/green]")
-        finally:
-            await db.close()
 
     _run(_memory_reject_all())
 
@@ -1926,8 +1913,7 @@ def memory_stats():
     """Show memory approval statistics."""
 
     async def _memory_stats():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.approval import memory_approval_gate
 
             stats = await memory_approval_gate.get_stats()
@@ -1940,8 +1926,6 @@ def memory_stats():
                 table.add_row(status, str(count))
 
             console.print(table)
-        finally:
-            await db.close()
 
     _run(_memory_stats())
 
@@ -1957,8 +1941,7 @@ def user_profile_cmd(
     """Show or create a user profile."""
 
     async def _user_profile():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.user_profile import user_profile_store
 
             profile = await user_profile_store.get_or_create(
@@ -1988,8 +1971,6 @@ def user_profile_cmd(
             if profile.last_topics:
                 console.print("\n  [bold]Recent Topics:[/bold]")
                 console.print(f"    {escape(', '.join(profile.last_topics[:5]))}")
-        finally:
-            await db.close()
 
     _run(_user_profile())
 
@@ -2003,8 +1984,7 @@ def user_profile_update(
     """Update a user profile preference."""
 
     async def _user_profile_update():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.user_profile import user_profile_store
 
             profile = await user_profile_store.get_by_user_id(user_id)
@@ -2021,8 +2001,6 @@ def user_profile_update(
             else:
                 console.print("[red]Failed to update profile[/red]")
                 raise typer.Exit(1)
-        finally:
-            await db.close()
 
     _run(_user_profile_update())
 
@@ -2034,8 +2012,7 @@ def user_profile_list(
     """List all user profiles."""
 
     async def _user_profile_list():
-        await db.connect()
-        try:
+        async with _db_connected():
             from machina.memory.user_profile import user_profile_store
 
             profiles = await user_profile_store.list_all(limit=limit)
@@ -2059,8 +2036,6 @@ def user_profile_list(
                 )
 
             console.print(table)
-        finally:
-            await db.close()
 
     _run(_user_profile_list())
 
