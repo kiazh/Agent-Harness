@@ -170,8 +170,8 @@ def _bind_callback_socket(redirect_uri: str) -> socket.socket:
 class _CallbackListener:
     """One-shot asyncio loopback listener for the OAuth callback.
 
-    The first request carrying a code (or an OAuth error / state mismatch)
-    settles the flow; every other request gets a 404. The request line is
+    Only a callback with the expected state can settle the flow; invalid
+    requests leave it pending. The request line is
     never logged — it carries the one-time code and state — and the state
     check uses :func:`hmac.compare_digest`.
     """
@@ -181,6 +181,7 @@ class _CallbackListener:
     def __init__(self, redirect_uri: str, state: str, sock: socket.socket) -> None:
         parsed = urlparse(redirect_uri)
         self.path = parsed.path or chatgpt_auth.CALLBACK_PATH
+        self._authority = parsed.netloc.lower()
         self._state = str(state)
         self._sock = sock
         self._server: asyncio.AbstractServer | None = None
@@ -231,24 +232,29 @@ class _CallbackListener:
             if parsed.path != self.path:
                 await self._respond(writer, 404, "Not found.")
                 return
+            hosts = [
+                line.partition(b":")[2].strip().decode("latin-1").lower()
+                for line in raw.split(b"\r\n")[1:]
+                if line.partition(b":")[0].lower() == b"host"
+            ]
+            if parts[0] != "GET" or parsed.netloc or hosts != [self._authority]:
+                await self._respond(writer, 400, "Invalid callback request.")
+                return
             query = parse_qs(parsed.query)
+            state = (query.get("state") or [""])[0]
+            if not hmac.compare_digest(state.encode("utf-8"), self._state.encode("utf-8")):
+                await self._respond(writer, 400, "Sign-in state did not match.")
+                return
             error = (query.get("error") or [""])[0]
             if error:
-                self._settle(None, error)
+                self._settle(None, "oauth_error")
                 await self._respond(
                     writer, 200, "Sign-in was not completed. You can close this tab."
                 )
                 return
             code = (query.get("code") or [""])[0]
-            state = (query.get("state") or [""])[0]
             if not code:
                 await self._respond(writer, 400, "Missing authorization code.")
-                return
-            if not hmac.compare_digest(state.encode("utf-8"), self._state.encode("utf-8")):
-                self._settle(None, "state_mismatch")
-                await self._respond(
-                    writer, 400, "Sign-in state did not match. Run /auth sign-in again."
-                )
                 return
             self._settle(code, None)
             await self._respond(writer, 200, "Signed in to ChatGPT. You can close this tab.")
