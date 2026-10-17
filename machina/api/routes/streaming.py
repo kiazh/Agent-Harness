@@ -122,6 +122,15 @@ async def _stream_session(
             if task.done():
                 _renew_state.pop("active", None)
 
+    async def approval_data(request_id: str) -> dict[str, Any]:
+        from machina.permissions.store import get_approval
+        from machina.protocol import approval_fields
+
+        record = await get_approval(request_id)
+        if record is None:
+            raise RuntimeError("approval proposal is unavailable")
+        return {"type": "needs_approval", **_redact_value(approval_fields(record))}
+
     def frame(data: dict[str, Any]) -> str:
         if req.protocolVersion == 2:
             from machina.protocol import canonical_http_event
@@ -314,16 +323,17 @@ async def _stream_session(
                     # Stream pause marker (AH-AUDIT-030): typed and
                     # actionable, never a generic error. Continuation frames
                     # from the done response are emitted after the loop.
-                    yield frame(
-                        _serialize_event(
-                            StreamEvent(
-                                type="needs_approval",
-                                content=turn_event.payload["request_id"],
-                                tool_name=turn_event.payload["operation"],
-                                tool_args=turn_event.payload["proposal"],
-                            )
+                    data = _serialize_event(
+                        StreamEvent(
+                            type="needs_approval",
+                            content=turn_event.payload["request_id"],
+                            tool_name=turn_event.payload["operation"],
+                            tool_args=turn_event.payload["proposal"],
                         )
                     )
+                    if req.protocolVersion == 2:
+                        data = await approval_data(str(turn_event.payload["request_id"]))
+                    yield frame(data)
                 elif turn_event.kind == "usage":
                     # Transport shape preserved: SSE usage frames carry the
                     # per-call count while the engine reports the running
@@ -371,16 +381,7 @@ async def _stream_session(
                         )
                         data = _serialize_event(pause_event)
                         if req.protocolVersion == 2:
-                            from machina.permissions.store import get_approval
-                            from machina.protocol import approval_fields
-
-                            record = await get_approval(str(pause["requestId"]))
-                            if record is None:
-                                raise RuntimeError("approval proposal is unavailable")
-                            data = {
-                                "type": "needs_approval",
-                                **_redact_value(approval_fields(record)),
-                            }
+                            data = await approval_data(str(pause["requestId"]))
                         yield frame(data)
                     terminal_payload = engine.build_terminal(cancelled=False)
                     terminal_data = {
