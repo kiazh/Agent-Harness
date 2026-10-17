@@ -43,19 +43,24 @@ async def update_session(session_id: uuid.UUID, req: UpdateSessionRequest) -> di
     session = await session_manager.get(session_id)
     if session is None:
         raise HTTPException(404, "session not found")
-    if req.emotion is not None:
-        from machina.memory.persona import EmotionTopology
+    from machina.core.turns import mutation_scope
 
-        if req.emotion and req.emotion not in EmotionTopology.EMOTION_PROFILES:
-            raise HTTPException(400, "unknown emotion")
-        # AH-AUDIT-018: transactional field merge — concurrent
-        # compaction/watermark writes are preserved, never clobbered.
-        await session_manager.update_state_fields(session_id, {"emotion": req.emotion or None})
-    if req.title is not None:
-        await session_manager.set_title(session_id, req.title)
-    if req.goal is not None:
-        await session_manager.set_goal(session_id, req.goal)
-    return {"session": session_to_dict(await session_manager.get(session_id))}
+    async with mutation_scope(session_id) as token:
+        if token is None:
+            raise HTTPException(409, "stop the running reply before changing this session")
+        if req.emotion is not None:
+            from machina.memory.persona import EmotionTopology
+
+            if req.emotion and req.emotion not in EmotionTopology.EMOTION_PROFILES:
+                raise HTTPException(400, "unknown emotion")
+            # AH-AUDIT-018: transactional field merge — concurrent
+            # compaction/watermark writes are preserved, never clobbered.
+            await session_manager.update_state_fields(session_id, {"emotion": req.emotion or None})
+        if req.title is not None:
+            await session_manager.set_title(session_id, req.title)
+        if req.goal is not None:
+            await session_manager.set_goal(session_id, req.goal)
+        return {"session": session_to_dict(await session_manager.get(session_id))}
 
 
 @router.delete("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])

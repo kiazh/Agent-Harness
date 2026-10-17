@@ -7,7 +7,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from machina.core.config import config
-from machina.gateway.errors import INVALID_PARAMS, RpcError
+from machina.gateway.errors import INVALID_PARAMS, TURN_IN_PROGRESS, RpcError
 from machina.observability.diagnostics import record_failure
 
 if TYPE_CHECKING:
@@ -116,90 +116,99 @@ async def mode_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     session = await gw.get_session(params) if params.get("sessionId") else None
     if session is None:
         raise RpcError(INVALID_PARAMS, "sessionId is required for session-scoped mode")
-    sid = str(session.id)
-    from machina.db.connection import db
+    from machina.core.turns import mutation_scope
 
-    if db.connected:
-        from machina.core.session_mode import activate_durable_mode
+    async with mutation_scope(session.id) as token:
+        if token is None:
+            raise RpcError(TURN_IN_PROGRESS, "stop the running reply before changing this session")
+        sid = str(session.id)
+        from machina.db.connection import db
 
-        await activate_durable_mode(sid, session.agent_id, mode)
-        return {"mode": mode, "scope": scope, "backend": _backend(sid)}
-    previous = get_effective_mode(sid)
-    if mode == "full":
-        # Stage the override first so policy sees the intended mode, then
-        # persist the grant that actually authorizes it. Roll back the
-        # override when the grant write fails: no partial elevation.
-        set_session_mode(sid, mode)
-        try:
-            await _store.save_grant(
-                {
-                    "session_id": sid,
-                    "agent_id": session.agent_id,
-                    "mode": "full",
-                    "capability": "session",
-                    "scope_path": None,
-                    "scope_type": "file",
-                    "grant_kind": "session",
-                    "digest": "full-mode-session",
-                }
-            )
-        except Exception:
-            # Atomicity: failure leaves no elevation behind.
+        if db.connected:
+            from machina.core.session_mode import activate_durable_mode
+
+            await activate_durable_mode(sid, session.agent_id, mode)
+            return {"mode": mode, "scope": scope, "backend": _backend(sid)}
+        previous = get_effective_mode(sid)
+        if mode == "full":
+            # Stage the override first so policy sees the intended mode, then
+            # persist the grant that actually authorizes it. Roll back the
+            # override when the grant write fails: no partial elevation.
+            set_session_mode(sid, mode)
             try:
-                if previous == config.get("execution_mode"):
-                    clear_session_mode(sid)
-                else:
-                    set_session_mode(sid, previous)
+                await _store.save_grant(
+                    {
+                        "session_id": sid,
+                        "agent_id": session.agent_id,
+                        "mode": "full",
+                        "capability": "session",
+                        "scope_path": None,
+                        "scope_type": "file",
+                        "grant_kind": "session",
+                        "digest": "full-mode-session",
+                    }
+                )
             except Exception:
-                clear_session_mode(sid)
-            raise
-    else:
-        # Leaving full (or switching ask/workspace/sandbox): revoke the
-        # session's full-mode grant, then record the session override.
-        # Revocation failure must not leave full authority active under a
-        # non-full label: keep the full override and surface the error.
-        from machina.permissions.broker import permission_broker
+                # Atomicity: failure leaves no elevation behind.
+                try:
+                    if previous == config.get("execution_mode"):
+                        clear_session_mode(sid)
+                    else:
+                        set_session_mode(sid, previous)
+                except Exception:
+                    clear_session_mode(sid)
+                raise
+        else:
+            # Leaving full (or switching ask/workspace/sandbox): revoke the
+            # session's full-mode grant, then record the session override.
+            # Revocation failure must not leave full authority active under a
+            # non-full label: keep the full override and surface the error.
+            from machina.permissions.broker import permission_broker
 
-        try:
-            await permission_broker.revoke(sid)
-        except Exception:
-            set_session_mode(sid, "full")
-            raise
-        set_session_mode(sid, mode)
-    return {"mode": mode, "scope": scope, "backend": _backend(sid)}
+            try:
+                await permission_broker.revoke(sid)
+            except Exception:
+                set_session_mode(sid, "full")
+                raise
+            set_session_mode(sid, mode)
+        return {"mode": mode, "scope": scope, "backend": _backend(sid)}
 
 
 async def mode_revoke(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Revoke SESSION grants only (LP-07); the global default is untouched.
 
     Pass scope=global (CLI durable reset) to also reset the persistent default.
-    Session scope clears the session override so the session falls back to
-    the global default (well-defined switch-back-to-ask behavior).
+    Session scope explicitly selects ask, regardless of the global default.
     """
     gw.require_db()
-    from machina.core.session_mode import clear_session_mode, get_effective_mode
+    from machina.core.session_mode import set_session_mode
     from machina.permissions.broker import permission_broker
 
     session = await gw.get_session(params)
-    from machina.db.connection import db
+    from machina.core.turns import mutation_scope
 
-    if db.connected:
-        from machina.core.session_mode import activate_durable_mode
+    async with mutation_scope(session.id) as token:
+        if token is None:
+            raise RpcError(TURN_IN_PROGRESS, "stop the running reply before changing this session")
+        from machina.db.connection import db
 
-        n = await activate_durable_mode(str(session.id), session.agent_id, "ask")
-        if params.get("scope") == "global":
-            # F6: durable reset — persist the default (CLI parity) and sync
-            # the env/.env shadow (F1) so it is not silently shadowed.
+        if db.connected:
+            from machina.core.session_mode import activate_durable_mode
+
+            n = await activate_durable_mode(str(session.id), session.agent_id, "ask")
+            if params.get("scope") == "global":
+                # F6: durable reset — persist the default (CLI parity) and sync
+                # the env/.env shadow (F1) so it is not silently shadowed.
+                config.set("execution_mode", "ask", persist=True)
+                sync_execution_mode_env("ask", persist=True)
+            return {"revoked": n, "mode": "ask", "scope": params.get("scope", "session")}
+        n = await permission_broker.revoke(str(session.id))
+        if str(params.get("scope") or "session") == "global":
             config.set("execution_mode", "ask", persist=True)
             sync_execution_mode_env("ask", persist=True)
-        return {"revoked": n, "mode": "ask", "scope": params.get("scope", "session")}
-    n = await permission_broker.revoke(str(session.id))
-    if str(params.get("scope") or "session") == "global":
-        config.set("execution_mode", "ask", persist=True)
-        sync_execution_mode_env("ask", persist=True)
-        return {"revoked": n, "mode": "ask", "scope": "global"}
-    clear_session_mode(str(session.id))
-    return {"revoked": n, "mode": get_effective_mode(str(session.id)), "scope": "session"}
+            return {"revoked": n, "mode": "ask", "scope": "global"}
+        set_session_mode(str(session.id), "ask")
+        return {"revoked": n, "mode": "ask", "scope": "session"}
 
 
 async def approvals_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

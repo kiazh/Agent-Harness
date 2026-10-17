@@ -49,16 +49,26 @@ async def session_rename(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Rename a session."""
     gw.require_db()
     session = await gw.get_session(params)
-    await session_manager.set_title(session.id, _str(params, "title", max_len=80))
-    return {"session": session_to_dict(await session_manager.get(session.id))}
+    from machina.core.turns import mutation_scope
+
+    async with mutation_scope(session.id) as token:
+        if token is None:
+            raise RpcError(TURN_IN_PROGRESS, "stop the running reply before changing this session")
+        await session_manager.set_title(session.id, _str(params, "title", max_len=80))
+        return {"session": session_to_dict(await session_manager.get(session.id))}
 
 
 async def session_set_goal(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Set the goal for a session."""
     gw.require_db()
     session = await gw.get_session(params)
-    await session_manager.set_goal(session.id, _str(params, "goal", max_len=2000))
-    return {"goal": (await session_manager.get(session.id)).goal}
+    from machina.core.turns import mutation_scope
+
+    async with mutation_scope(session.id) as token:
+        if token is None:
+            raise RpcError(TURN_IN_PROGRESS, "stop the running reply before changing this session")
+        await session_manager.set_goal(session.id, _str(params, "goal", max_len=2000))
+        return {"goal": (await session_manager.get(session.id)).goal}
 
 
 async def session_set_model(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -80,13 +90,18 @@ async def session_set_model(gw: Gateway, params: dict[str, Any]) -> dict[str, An
         raise RpcError(INVALID_PARAMS, "model or provider is invalid")
     if model is None and provider is None:
         raise RpcError(INVALID_PARAMS, "model or provider is required")
-    await session_manager.set_model(session.id, model=model, provider=provider)
-    updated = await session_manager.get(session.id)
-    return {
-        "sessionId": str(session.id),
-        "model": updated.model if updated else model,
-        "provider": updated.provider if updated else provider,
-    }
+    from machina.core.turns import mutation_scope
+
+    async with mutation_scope(session.id) as token:
+        if token is None:
+            raise RpcError(TURN_IN_PROGRESS, "stop the running reply before changing this session")
+        await session_manager.set_model(session.id, model=model, provider=provider)
+        updated = await session_manager.get(session.id)
+        return {
+            "sessionId": str(session.id),
+            "model": updated.model if updated else model,
+            "provider": updated.provider if updated else provider,
+        }
 
 
 async def session_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
