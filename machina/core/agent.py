@@ -278,6 +278,19 @@ def _tool_outcome(item: dict[str, Any]) -> str:
     return "completed"
 
 
+def _ensure_tool_call_id(tool_call: dict[str, Any]) -> str:
+    """Return a non-empty, turn-unique tool-call id and persist it.
+
+    Providers that omit ids (notably Ollama/OpenAI-compatible gateways) must
+    still produce a matching assistant tool_call id and tool result id on the
+    next projection round. A per-batch index is not enough: it repeats every
+    ReAct iteration and collides in UIs keyed by call id.
+    """
+    call_id = str(tool_call.get("id") or f"call-{uuid.uuid4().hex}")
+    tool_call["id"] = call_id
+    return call_id
+
+
 class BaseReActAgent:
     """Base class for ReAct agents — Template Method pattern.
 
@@ -840,7 +853,7 @@ class BaseReActAgent:
         for idx, tc in enumerate(response.tool_calls):
             function_data = tc.get("function", {})
             tool_name = function_data.get("name")
-            call_id = str(tc.get("id") or f"call-{idx}")
+            call_id = _ensure_tool_call_id(tc)
             if not tool_name:
                 logger.warning("Tool call missing 'name' field: %s", tc)
                 audit_log(
@@ -859,7 +872,7 @@ class BaseReActAgent:
                 )
                 continue
 
-            raw_args = function_data.get("arguments", "{}")
+            raw_args = function_data.get("arguments") or "{}"
             try:
                 tool_args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args)
                 if not isinstance(tool_args, dict):
