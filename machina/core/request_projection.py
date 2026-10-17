@@ -595,15 +595,15 @@ def _compose(
     viewed: Mapping[str, str],
     native_cache: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Render the plan: governing pins, the instruction, derived pins, units.
+    """Render the plan: system pins first, then conversation units in order.
 
-    Governing pins (objective, constraints, core instructions) frame the
-    request and render first. The current turn's instruction is the first
-    included ``required`` unit (the assembled user prompt); it renders ahead of
-    the derived scope/blockers/task-state pins so projection can never demote
-    or drop instruction text (§14.3). When no required unit is in the plan,
-    derived pins keep their canonical place directly after the governing pins
-    (pin-only and floor measurements are unchanged).
+    Governing pins (objective, constraints, core instructions) and derived
+    scope/blockers/task-state pins are both system messages and must precede
+    the first conversation message. The previous implementation inserted
+    derived pins after the first ``required`` unit; when that unit was the
+    assembled user prompt (as ``build_turn_messages`` produces), it emitted
+    ``[user, system, ...]``, which strict providers reject (combined #15 /
+    original #41).
     """
     governing = [
         {"role": "system", "content": pin.text}
@@ -615,23 +615,11 @@ def _compose(
         for pin in pin_items
         if pin.kind not in _GOVERNING_PIN_KINDS
     ]
-    instruction_id = next(
-        (unit.unit_id for unit in messages if unit.kind == "required" and unit.unit_id in included),
-        None,
-    )
     plan = list(governing)
-    if instruction_id is None:
-        plan.extend(derived)
-        for unit in messages:
-            if unit.unit_id in included:
-                plan.append(_render_unit(unit, native_cache, text=viewed.get(unit.unit_id)))
-        return plan
+    plan.extend(derived)
     for unit in messages:
-        if unit.unit_id not in included:
-            continue
-        plan.append(_render_unit(unit, native_cache, text=viewed.get(unit.unit_id)))
-        if unit.unit_id == instruction_id:
-            plan.extend(derived)
+        if unit.unit_id in included:
+            plan.append(_render_unit(unit, native_cache, text=viewed.get(unit.unit_id)))
     return plan
 
 
