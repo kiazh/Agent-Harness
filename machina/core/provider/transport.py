@@ -16,10 +16,8 @@ from machina.core.exceptions import ProviderError, RateLimitError, ValidationErr
 from machina.core.models import ToolDefinition
 from machina.core.provider._log import logger
 from machina.observability.diagnostics import record_failure
+from machina.observability.instrumentation import instrumented_provider
 
-# ---------------------------------------------------------------------------
-# Retry with backoff for rate-limited (429) responses
-# ---------------------------------------------------------------------------
 # The provider retries 429s a small fixed number of times; the agent layer
 # must NOT retry 429s again (see machina.core.agent._is_rate_limit_error), or one
 # rate limit would fan out into dozens of requests.
@@ -115,6 +113,7 @@ def _retry_delay(attempt: int, resp: httpx.Response | None, free: bool) -> float
     return delay + random.uniform(0, 1.0)  # jitter so parallel turns don't thunder
 
 
+@instrumented_provider("request")
 async def _post_with_retry(
     client: httpx.AsyncClient,
     url: str,
@@ -164,6 +163,7 @@ async def _post_with_retry(
 
 
 @asynccontextmanager
+@instrumented_provider("stream")
 async def _stream_with_retry(
     client: httpx.AsyncClient,
     url: str,

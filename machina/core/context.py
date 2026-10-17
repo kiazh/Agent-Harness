@@ -22,6 +22,7 @@ from machina.core.serialization import (
 from machina.core.text_search import build_or_tsquery
 from machina.db.lazy import LazyDb
 from machina.observability.diagnostics import record_failure
+from machina.observability.instrumentation import instrument, instrumented, log_event
 
 logger = logging.getLogger(__name__)
 
@@ -202,42 +203,56 @@ class ContextManager:
         document_source: str | None = None,
     ) -> ContextChunk:
         """Add a context chunk."""
-        payload_msgpack = payload_to_msgpack(payload)
-        embedding_str = None
-        if embedding is not None:
-            embedding_str = embedding_to_str(embedding)
-        document_source = _document_source_for(chunk_type, payload, document_source)
-        query = _ADD_CHUNK_SQL
-        base_args = (
-            session_id,
-            agent_id,
-            chunk_type,
-            payload_msgpack,
-            token_count,
-            embedding_str,
-            _search_text_for(payload),
-            document_source,
-        )
-        image_context = _image_context_for(chunk_type, payload)
-        if image_context is None:
-            row = await db.fetchrow(query, *base_args)
-            return self._row_to_chunk(row)
-        _NO_LEGACY_IMAGES.discard((session_id, agent_id))
-        try:
-            row = await db.fetchrow(_ADD_CHUNK_WITH_IMAGES_SQL, *base_args, image_context)
-        except Exception as exc:
-            if not _is_missing_image_relation(exc):
-                raise
-            logger.warning(
-                "session_image_context missing for session %s agent %s; "
-                "stored chunk payload intact without image-cache update",
+        with instrument(
+            "context",
+            "add_chunk",
+            chunk_type=str(chunk_type),
+            session_id=str(session_id),
+            agent_id=str(agent_id),
+            token_count=token_count,
+        ) as span:
+            payload_msgpack = payload_to_msgpack(payload)
+            span.note(payload_bytes=len(payload_msgpack))
+            embedding_str = None
+            if embedding is not None:
+                embedding_str = embedding_to_str(embedding)
+            document_source = _document_source_for(chunk_type, payload, document_source)
+            query = _ADD_CHUNK_SQL
+            base_args = (
                 session_id,
                 agent_id,
-                exc_info=True,
+                chunk_type,
+                payload_msgpack,
+                token_count,
+                embedding_str,
+                _search_text_for(payload),
+                document_source,
             )
-            row = await db.fetchrow(query, *base_args)
-        return self._row_to_chunk(row)
+            image_context = _image_context_for(chunk_type, payload)
+            if image_context is None:
+                row = await db.fetchrow(query, *base_args)
+                chunk = self._row_to_chunk(row)
+                span.note(chunk_id=str(chunk.id))
+                return chunk
+            _NO_LEGACY_IMAGES.discard((session_id, agent_id))
+            try:
+                row = await db.fetchrow(_ADD_CHUNK_WITH_IMAGES_SQL, *base_args, image_context)
+            except Exception as exc:
+                if not _is_missing_image_relation(exc):
+                    raise
+                logger.warning(
+                    "session_image_context missing for session %s agent %s; "
+                    "stored chunk payload intact without image-cache update",
+                    session_id,
+                    agent_id,
+                    exc_info=True,
+                )
+                row = await db.fetchrow(query, *base_args)
+            chunk = self._row_to_chunk(row)
+            span.note(chunk_id=str(chunk.id))
+            return chunk
 
+    @instrumented("context", "add_chunks_batch")
     async def add_chunks_batch(
         self,
         chunks: list[dict[str, Any]],
@@ -251,7 +266,18 @@ class ContextManager:
         it uses a single execute with UNNEST + RETURNING instead of N individual INSERTs.
         """
         if not chunks:
+            log_event("context.batch.empty", level="debug")
             return []
+
+        chunk_types = sorted({str(c.get("chunk_type")) for c in chunks})
+        log_event(
+            "context.batch.start",
+            level="debug",
+            count=len(chunks),
+            chunk_types=chunk_types,
+            session_count=len({str(c.get("session_id")) for c in chunks}),
+            token_count=sum(int(c.get("token_count") or 0) for c in chunks),
+        )
 
         # Prepare columns for the single UNNEST execute
         records = []
@@ -373,6 +399,14 @@ class ContextManager:
         # Callers retry by identity; return the rows in the caller's original
         # event order (newly inserted and previously persisted alike).
         ordered = [by_id[cid] for cid in chunk_ids if cid in by_id]
+        log_event(
+            "context.batch.finish",
+            level="debug",
+            count=len(chunks),
+            returned=len(ordered),
+            inserted=len(rows),
+            verified_existing=len(missing),
+        )
         return [self._row_to_chunk(r) for r in ordered]
 
     async def get_latest_images(self, session_id: uuid.UUID, agent_id: str) -> list[dict[str, str]]:

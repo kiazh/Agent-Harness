@@ -14,7 +14,8 @@ from cachetools import TTLCache
 
 from machina.core.exceptions import MachinaError
 from machina.core.models import Session
-from machina.db.connection import db
+from machina.db.connection import db, parse_command_count
+from machina.observability.instrumentation import instrumented, log_event
 
 __all__ = [
     "CorruptSessionStateError",
@@ -24,6 +25,15 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+
+def _ancestor_count(session: Session, parent_session_id: uuid.UUID | None = None) -> int:
+    """Known ancestor count for a session (best effort; never queries)."""
+    ancestors = getattr(session, "ancestor_session_ids", None)
+    if isinstance(ancestors, (list, tuple)):
+        return len(ancestors)
+    parent = getattr(session, "parent_session_id", None) or parent_session_id
+    return 1 if parent else 0
 
 
 class CorruptSessionStateError(MachinaError, RuntimeError):
@@ -66,6 +76,7 @@ class SessionManager:
             return first_line[: max_length - 3] + "..."
         return first_line or "Untitled"
 
+    @instrumented("session", "create")
     async def create(
         self,
         title: str | None = None,
@@ -111,6 +122,16 @@ class SessionManager:
         )
         session = self._row_to_session(row)
         await self._cache_put(session)
+        log_event(
+            "session.create",
+            session_id=str(session.id),
+            agent_id=session.agent_id,
+            model=session.model,
+            provider=session.provider,
+            mode=session.execution_mode,
+            parent_session_id=str(parent_session_id) if parent_session_id else None,
+            ancestor_count=_ancestor_count(session, parent_session_id),
+        )
         return session
 
     async def get(self, session_id: uuid.UUID) -> Session | None:
@@ -325,7 +346,6 @@ class SessionManager:
                 await conn.execute("DELETE FROM context_archive WHERE session_id = $1", session_id)
                 result = await conn.execute("DELETE FROM sessions WHERE id = $1", session_id)
         await self._cache_invalidate(session_id)
-        from machina.db.connection import parse_command_count
 
         return parse_command_count(result) > 0
 
@@ -344,6 +364,7 @@ class SessionManager:
         )
         return [self._row_to_session(r) for r in rows]
 
+    @instrumented("session", "fork")
     async def fork(self, session_id: uuid.UUID, title: str | None = None) -> Session:
         """Fork a session — create a new session with copied state and context.
 
@@ -412,6 +433,15 @@ class SessionManager:
                         new_session.id,
                     )
         await self._cache_put(new_session)
+        log_event(
+            "session.fork",
+            session_id=str(new_session.id),
+            source_session_id=str(session_id),
+            agent_id=new_session.agent_id,
+            model=new_session.model,
+            provider=new_session.provider,
+            ancestor_count=_ancestor_count(new_session, session_id),
+        )
         return new_session
 
     async def list_sessions(

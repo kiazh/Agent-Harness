@@ -9,6 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, get_type_hints
 
+from machina.observability.instrumentation import instrument
+
 if TYPE_CHECKING:
     from machina.core.models import ToolDefinition
 
@@ -22,6 +24,18 @@ def _core_symbol(module: str, name: str):
     if mod is None:
         mod = _importlib.import_module(module)
     return getattr(mod, name)
+
+
+def _result_size(value: object) -> int:
+    """Bounded size signal for a tool result (never the body itself)."""
+    try:
+        if isinstance(value, (str, bytes)):
+            return len(value)
+        if isinstance(value, (list, tuple, dict, set, frozenset)):
+            return len(value)
+        return len(str(value))
+    except Exception:
+        return 0
 
 
 @dataclass
@@ -255,29 +269,41 @@ class ToolRegistry:
         file while executing in workspace B; R4-096 removed the cache —
         all shipped tools declare broker effects instead).
         """
-        if name not in self._tools:
-            _core_symbol("machina.core.provider", "audit_log")(
-                "tool_execution_error", tool_name=name, error="not_registered"
-            )
-            raise _core_symbol("machina.core.exceptions", "ToolError")(
-                f"Tool '{name}' not registered"
-            )
+        arg_keys = sorted(str(key) for key in kwargs)
+        result: Any = None
+        with instrument(
+            "tool",
+            "execute",
+            tool=name,
+            arg_keys=arg_keys,
+            arg_count=len(kwargs),
+        ) as span:
+            if name not in self._tools:
+                _core_symbol("machina.core.provider", "audit_log")(
+                    "tool_execution_error", tool_name=name, error="not_registered"
+                )
+                raise _core_symbol("machina.core.exceptions", "ToolError")(
+                    f"Tool '{name}' not registered"
+                )
 
-        tool = self._tools[name]
+            tool = self._tools[name]
 
-        # Input validation
-        try:
-            self._validate_tool_args(tool, kwargs)
-        except ValueError as e:
-            _core_symbol("machina.core.provider", "audit_log")(
-                "tool_execution_validation_error", tool_name=name, error=str(e)
-            )
-            raise
+            # Input validation
+            try:
+                self._validate_tool_args(tool, kwargs)
+            except ValueError as e:
+                _core_symbol("machina.core.provider", "audit_log")(
+                    "tool_execution_validation_error", tool_name=name, error=str(e)
+                )
+                raise
 
-        # Execute
-        if tool.is_async:
-            return await tool.func(**kwargs)
-        return tool.func(**kwargs)
+            # Execute
+            if tool.is_async:
+                result = await tool.func(**kwargs)
+            else:
+                result = tool.func(**kwargs)
+            span.note(result_size=_result_size(result))
+        return result
 
     def list_tools(self) -> list[str]:
         """List all registered tool names."""

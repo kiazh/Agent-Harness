@@ -52,6 +52,7 @@ from machina.db.connection import db
 from machina.gateway.errors import RpcError
 from machina.gateway.server import Gateway
 from machina.observability.diagnostics import record_failure
+from machina.observability.instrumentation import warm
 
 logger = logging.getLogger(__name__)
 CLAIM_RENEW_INTERVAL_SECONDS = 30.0
@@ -169,6 +170,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     primary_error: BaseException | None = None
     try:
         try:
+            warm()
             report = await runtime_services.startup()
             if report.get("db") == "ready":
                 from machina.core.scheduler import JobRunner

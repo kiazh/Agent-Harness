@@ -22,6 +22,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from machina.observability.diagnostics import record_failure
+from machina.observability.instrumentation import instrument, instrumented, log_event
 from machina.permissions import store as _store
 from machina.permissions.policy import ActionRequest, Decision, decide
 
@@ -103,10 +104,40 @@ class ApprovalDenied(Exception):
         self.reason = reason
 
 
+def _log_approval_wait(req: ActionRequest, approval: object) -> None:
+    """Record that an action is parked awaiting a human decision (no secrets)."""
+    try:
+        record = approval if isinstance(approval, dict) else {}
+        log_event(
+            "permissions.awaiting_approval",
+            operation=req.operation,
+            mode=req.mode,
+            tool=req.tool or None,
+            request_id=record.get("request_id") or req.request_id or None,
+            session_id=req.session_id or None,
+            agent_id=req.agent_id or None,
+        )
+    except Exception:
+        pass
+
+
 class PermissionBroker:
+    @instrumented("permissions", "guard")
     async def guard(self, req: ActionRequest) -> ActionRequest:
         """Evaluate *req*; allow, await human approval, or raise."""
         req.turn_id = req.turn_id or _turn.get()
+        log_event(
+            "permissions.propose",
+            operation=req.operation,
+            mode=req.mode,
+            backend=req.backend,
+            tool=req.tool or None,
+            target_count=len(req.targets),
+            targets=[_redacted(target) for target in req.targets[:5]],
+            request_id=req.request_id or None,
+            session_id=req.session_id or None,
+            agent_id=req.agent_id or None,
+        )
         # LP-08: inherited parent caps enforced at the broker boundary (not
         # just stored on the agent): a restricted parent can never mint a
         # broader child through tools, RPC, jobs, or delegation.
@@ -172,6 +203,15 @@ class PermissionBroker:
             logger.exception("grant lookup failed; denying by default")
             raise ApprovalDenied("grant store unavailable") from None
         decision: Decision = decide(req, grants)
+        log_event(
+            "permissions.guard",
+            operation=req.operation,
+            mode=req.mode,
+            tool=req.tool or None,
+            verdict=decision.verdict,
+            reason=decision.reason,
+            session_id=req.session_id or None,
+        )
         if decision.verdict == "allowed":
             # Stamp the immutable execution snapshot: backends execute
             # exactly what was authorized, even if globals change next.
@@ -198,6 +238,7 @@ class PermissionBroker:
         """No approver: resume an approved action or pause with a record."""
         existing = await _store.find_pending(req.session_id, req.digest, agent_id=req.agent_id)
         if existing is not None:
+            _log_approval_wait(req, existing)
             raise NeedsApproval(existing)
         # LP-02 resume: an approved-but-unclaimed action is claimed for this
         # fresh execution (revalidated). No new card, no permanent grant.
@@ -213,6 +254,7 @@ class PermissionBroker:
             current = await _store.get_approval(approved["request_id"])
             raise NeedsApproval(current or approved)
         approval = await _store.create_approval(req, principal="headless")
+        _log_approval_wait(req, approval)
         raise NeedsApproval(approval)
 
     async def _guard_interactive(
@@ -227,6 +269,7 @@ class PermissionBroker:
         if current is not None:
             state = current.get("status")
             if state == "pending":
+                _log_approval_wait(req, current)
                 raise NeedsApproval(current) from None
             if state == "approved":
                 # AH-AUDIT-005: legacy approvals without a reviewable
@@ -253,8 +296,10 @@ class PermissionBroker:
         existing = await _store.find_pending(req.session_id, req.digest, agent_id=req.agent_id)
         if existing is not None:
             # Queue/combine: no concurrent card flood for the same action.
+            _log_approval_wait(req, existing)
             raise NeedsApproval(existing)
         approval = await _store.create_approval(req, principal=principal)
+        _log_approval_wait(req, approval)
         try:
             from machina.core.config import config
 
@@ -347,18 +392,21 @@ class PermissionBroker:
         """Mark a claimed execution completed/failed/cancelled (best effort)."""
         if not request_id:
             return False
-        try:
-            return await _store.complete_execution(request_id, outcome)
-        except Exception:
-            logger.warning("approval completion record failed", exc_info=True)
-            return False
+        with instrument(
+            "permissions", "resolve", approval_id=request_id, outcome=outcome
+        ) as span:
+            try:
+                recorded = await _store.complete_execution(request_id, outcome)
+                span.note(recorded=bool(recorded))
+                return recorded
+            except Exception:
+                logger.warning("approval completion record failed", exc_info=True)
+                return False
 
     async def revoke(self, session_id: str, grant_id: str | None = None) -> int:
         if session_id == "*":
             # CLI-level durable reset across all sessions (explicit scope).
-            from machina.permissions import store as _s
-
-            return await _s.revoke_all_grants()
+            return await _store.revoke_all_grants()
         return await _store.revoke_grants(session_id, grant_id)
 
 

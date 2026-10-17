@@ -27,6 +27,7 @@ from machina.db.connection import db
 from machina.memory.authority import is_catalog_or_echo
 from machina.memory.redaction import redact_secrets
 from machina.observability.diagnostics import record_failure
+from machina.observability.instrumentation import instrumented, log_event
 from machina.rag.chunker import Chunk, RecursiveCharacterTextSplitter, normalize_language
 from machina.rag.embedder import Embedder, OpenAIEmbedder, build_embedder
 from machina.rag.loaders import Document, FileLoader
@@ -242,6 +243,7 @@ class RAGPipeline:
         except Exception:
             return {"reranker": "unknown", "detail": ""}
 
+    @instrumented("rag", "index_document")
     async def index_document(
         self,
         source: str | Document,
@@ -430,6 +432,16 @@ class RAGPipeline:
             else:
                 await db.execute(delete_sql, session_id, doc_source)
         stored_chunks = [self._row_to_chunk(r) for r in rows]
+        log_event(
+            "rag.index_document.summary",
+            session_id=str(session_id),
+            agent_id=str(agent_id),
+            doc_type=doc.doc_type,
+            chunks=len(chunks),
+            stored=len(stored_chunks),
+            embedded=sum(1 for embedding in embeddings if embedding),
+            embedder=str(embed_model_name),
+        )
 
         audit_log(
             "rag_index_complete",
@@ -442,6 +454,7 @@ class RAGPipeline:
         self._invalidate_search_cache(session_id)
         return stored_chunks
 
+    @instrumented("rag", "search")
     async def search(
         self,
         query: str,
@@ -501,6 +514,13 @@ class RAGPipeline:
             cached_time, cached_results = self._search_cache[cache_key]
             if now - cached_time < self._search_cache_ttl:
                 logger.debug("RAG search cache hit for session %s", session_id)
+                log_event(
+                    "rag.search.cache_hit",
+                    level="debug",
+                    session_id=str(session_id),
+                    top_k=k,
+                    returned=len(cached_results[:k]),
+                )
                 return copy.deepcopy(cached_results[:k])
             else:
                 # Expired
@@ -548,9 +568,7 @@ class RAGPipeline:
         # instead of returning corrupt similarity. Mixed keyword-only rows
         # (NULL embeddings) are unaffected.
         try:
-            from machina.core.serialization import embedding_to_str as _e2s
-
-            probe = _e2s(query_embedding)
+            probe = embedding_to_str(query_embedding)
             dims = len(probe.split(",")) if probe else 0
             if dims and dims != 1536:
                 raise ValueError(
@@ -865,6 +883,17 @@ class RAGPipeline:
             session_id=str(session_id),
             query=query[:100],
             results_returned=len(final_results),
+        )
+        log_event(
+            "rag.search.summary",
+            session_id=str(session_id),
+            top_k=k,
+            candidates=len(results),
+            returned=len(final_results),
+            rerank=bool(rerank),
+            retrieval_mode=retrieval_mode,
+            embedder=str(embed_model),
+            query_chars=len(query),
         )
 
         return final_results

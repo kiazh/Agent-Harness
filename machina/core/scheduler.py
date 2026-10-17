@@ -27,6 +27,7 @@ from machina.core.background_tasks import join_agent_background_tasks
 from machina.core.cron import next_cron_time
 from machina.db.connection import db, parse_command_count
 from machina.observability.diagnostics import record_failure
+from machina.observability.instrumentation import instrument, instrumented, log_event
 
 __all__ = ["Job", "JobStore", "JobRunner", "job_store", "DEFAULT_HEARTBEAT_PROMPT"]
 
@@ -632,6 +633,14 @@ class JobRunner:
         job = await self._store.claim_due()
         if job is None:
             return False
+        attempt = getattr(job, "run_count", 0)
+        log_event(
+            "scheduler.job.start",
+            job_id=str(getattr(job, "id", "")),
+            job_name=str(getattr(job, "name", "")),
+            attempt=attempt,
+            kind=getattr(job, "kind", None),
+        )
         error: str | None = None
         # Carry the claim token; loss of ownership cancels the effect task.
         claim_token = getattr(job, "claim_token", None)
@@ -782,21 +791,43 @@ class JobRunner:
         error: str | None,
         paused_for: str | None,
     ) -> None:
-        lease.cancel()
-        await asyncio.gather(lease, return_exceptions=True)
-        # Only terminated effects may finish; the original token still fences
-        # the outcome if another owner acquired the row during quarantine.
-        try:
-            await self._store.finish(
-                job.id, error=error, claim_token=claim_token, paused_for=paused_for
-            )
-        except TypeError:
-            if isinstance(self._store, JobStore):
-                raise
+        outcome = "paused" if paused_for else ("error" if error else "ok")
+        with instrument(
+            "scheduler",
+            "finish",
+            job_id=str(job.id),
+            job_name=job.name,
+            attempt=getattr(job, "run_count", 0),
+            outcome=outcome,
+            error=error,
+            paused=bool(paused_for),
+        ) as span:
+            lease.cancel()
+            await asyncio.gather(lease, return_exceptions=True)
+            # Only terminated effects may finish; the original token still fences
+            # the outcome if another owner acquired the row during quarantine.
             try:
-                await self._store.finish(job.id, error=error, claim_token=claim_token)
+                await self._store.finish(
+                    job.id, error=error, claim_token=claim_token, paused_for=paused_for
+                )
             except TypeError:
-                await self._store.finish(job.id, error=error)
+                if isinstance(self._store, JobStore):
+                    raise
+                try:
+                    await self._store.finish(job.id, error=error, claim_token=claim_token)
+                except TypeError:
+                    await self._store.finish(job.id, error=error)
+            span.note(finished=True)
+        log_event(
+            "scheduler.job.finish",
+            level="warning" if outcome == "error" else "info",
+            job_id=str(job.id),
+            job_name=job.name,
+            attempt=getattr(job, "run_count", 0),
+            outcome=outcome,
+            error=error,
+            paused=bool(paused_for),
+        )
 
     async def _keep_lease(
         self,
@@ -879,6 +910,7 @@ class JobRunner:
         if task is not None and not task.done():
             task.cancel()
 
+    @instrumented("scheduler", "execute")
     async def _execute(self, job: Job, ownership_lost: asyncio.Event | None = None) -> None:
         if job.session_id is None:
             raise RuntimeError("job has no session")

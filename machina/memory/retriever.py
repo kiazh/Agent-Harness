@@ -26,6 +26,7 @@ from machina.memory.models import MemoryEntry, RetrievedMemory
 from machina.memory.persona import EmotionTopology, PersonaMemoryStore
 from machina.memory.store import MemoryStore, memory_store
 from machina.observability.diagnostics import record_failure
+from machina.observability.instrumentation import instrumented, log_event
 
 __all__ = ["MemoryRetrievalError", "MemoryRetriever"]
 
@@ -135,6 +136,7 @@ class MemoryRetriever:
             record_failure("retriever._default_emotion", _boundary_error)
         return "trust"
 
+    @instrumented("memory", "retrieve")
     async def retrieve(
         self,
         query: str,
@@ -228,6 +230,14 @@ class MemoryRetriever:
         # empty list that callers could mistake for "no memories exist".
         if len(failures) == len(tasks):
             names = ", ".join(name for name, _ in failures)
+            log_event(
+                "memory.retrieve.failed",
+                level="warning",
+                agent_id=agent_id,
+                persona_id=persona_id,
+                query_chars=len(query),
+                branches=names,
+            )
             raise MemoryRetrievalError(
                 f"all memory retrieval branches failed ({names})"
             ) from failures[0][1]
@@ -274,6 +284,19 @@ class MemoryRetriever:
             except Exception:
                 logger.warning("batch_update_access failed", exc_info=True)
 
+        log_event(
+            "memory.retrieve.summary",
+            level="debug",
+            agent_id=agent_id,
+            persona_id=persona_id if persona_id is not None else agent_id,
+            query_chars=len(query),
+            dense_candidates=len(dense_results),
+            sparse_candidates=len(sparse_results),
+            merged_candidates=len(candidates),
+            returned=min(len(candidates), self.top_k),
+            failed_branches=len(failures),
+            rerank=bool(self.rerank),
+        )
         return candidates[: self.top_k]
 
     async def _retrieve_with_emotion(
@@ -341,6 +364,7 @@ class MemoryRetriever:
             logger.warning("Emotion-weighted retrieval failed, returning candidates unchanged")
             return candidates
 
+    @instrumented("memory", "retrieve_by_embedding")
     async def retrieve_by_embedding(
         self,
         embedding: list[float],

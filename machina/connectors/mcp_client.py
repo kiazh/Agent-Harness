@@ -40,6 +40,7 @@ from machina.connectors.models import (
     Transport,
 )
 from machina.connectors.policy import validate_arguments
+from machina.observability.instrumentation import instrument, instrumented, log_event
 
 logger = logging.getLogger(__name__)
 
@@ -361,9 +362,16 @@ class MCPConnection:
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
+    @instrumented("mcp", "connect")
     async def connect(self, secrets: Mapping[str, str] | None = None) -> None:
         """Spawn/handshake the server within bounded deadlines."""
         self.config.validate()
+        log_event(
+            "mcp.connect.start",
+            level="debug",
+            server_id=self.config.id,
+            transport=str(getattr(self.config.transport, "value", self.config.transport)),
+        )
         if not self.config.enabled:
             raise ConnectionFailed("connector is disabled; disabled servers are never launched")
         _require_sdk()
@@ -417,6 +425,14 @@ class MCPConnection:
                 self.last_error, retryable=_retryable_connect_error(exc)
             ) from exc
         self.state = ConnectionState.CONNECTED
+        log_event(
+            "mcp.connect",
+            server_id=self.config.id,
+            transport=str(getattr(self.config.transport, "value", self.config.transport)),
+            outcome="connected",
+            protocol_version=self.protocol_version,
+            server_version=self.server_version,
+        )
 
     async def _run_transport(self, secrets: Mapping[str, str]) -> None:
         """Own SDK cancel scopes for their entire lifetime in one task.
@@ -475,6 +491,13 @@ class MCPConnection:
     async def _fail(self, reason: str) -> None:
         self.last_error = reason
         self.state = ConnectionState.ERROR
+        log_event(
+            "mcp.connect",
+            level="warning",
+            server_id=self.config.id,
+            outcome="error",
+            error_class="ConnectionFailed",
+        )
         await self.disconnect()
 
     async def _new_session(self, read: Any, write: Any) -> Any:
@@ -682,6 +705,7 @@ class MCPConnection:
                 )
             )
 
+    @instrumented("mcp", "disconnect")
     async def disconnect(self) -> None:
         """Ask the owner to close; a caller timeout never cancels SDK cleanup."""
         task = self._owner_task
@@ -694,6 +718,13 @@ class MCPConnection:
                 ConnectionState.AUTH_REQUIRED,
             ):
                 self.state = ConnectionState.DISCONNECTED
+            log_event(
+                "mcp.disconnect",
+                level="debug",
+                server_id=self.config.id,
+                outcome="no_transport",
+                state=str(getattr(self.state, "value", self.state)),
+            )
             return
         if self._stop is not None:
             self._stop.set()
@@ -717,6 +748,13 @@ class MCPConnection:
             ConnectionState.AUTH_REQUIRED,
         ):
             self.state = ConnectionState.DISCONNECTED
+        log_event(
+            "mcp.disconnect",
+            level="debug",
+            server_id=self.config.id,
+            outcome="closed",
+            state=str(getattr(self.state, "value", self.state)),
+        )
 
     # Capped stderr diagnostics; connector tests assert redaction, no production caller. Kept (R4-106).
     def read_stderr(self) -> str:
@@ -798,47 +836,67 @@ class MCPConnection:
 
     async def call_tool(self, remote_name: str, args: Mapping[str, Any]) -> CallOutcome:
         """Validate, dispatch with a timeout, and normalize the result."""
-        _require_sdk()
-        if self._session is None:
-            raise ConnectionFailed("not connected")
-        from mcp import types as mcp_types
+        with instrument(
+            "mcp",
+            "call_tool",
+            server_id=self.config.id,
+            tool=remote_name,
+            arg_count=len(args or {}),
+        ) as span:
+            _require_sdk()
+            if self._session is None:
+                raise ConnectionFailed("not connected")
+            from mcp import types as mcp_types
 
-        schema = self._schemas.get(remote_name)
-        if schema is None:
-            # Discovery-first: never construct calls for unseen tools.
-            raise ConnectorToolError(f"unknown tool (discover first): {remote_name}")
-        validate_arguments(remote_name, dict(args or {}), schema)
-        try:
-            result = await asyncio.wait_for(
-                self._session.call_tool(remote_name, dict(args or {})),
-                timeout=self.config.call_timeout,
-            )
-        except TimeoutError:
-            # Never auto-retry: completion after a timeout is unknowable.
-            return CallOutcome(
-                ok=False,
-                outcome_unknown=True,
-                error=f"call timed out after {self.config.call_timeout}s",
-            )
-        except AuthRequired as exc:
-            self.state = ConnectionState.AUTH_REQUIRED
-            self.last_error = self._redact(str(exc))
-            return CallOutcome(ok=False, outcome_unknown=True, error=self.last_error)
-        except Exception as exc:
-            if _looks_like_auth_failure(exc):
-                # Post-dispatch auth failure: conservatively unknown, no replay.
-                # 403 insufficient_scope keeps its challenge for human step-up;
-                # 401 keeps the existing generic auth-required behavior.
-                self._capture_auth_challenge(exc)
+            schema = self._schemas.get(remote_name)
+            if schema is None:
+                # Discovery-first: never construct calls for unseen tools.
+                raise ConnectorToolError(f"unknown tool (discover first): {remote_name}")
+            validate_arguments(remote_name, dict(args or {}), schema)
+            try:
+                result = await asyncio.wait_for(
+                    self._session.call_tool(remote_name, dict(args or {})),
+                    timeout=self.config.call_timeout,
+                )
+            except TimeoutError:
+                # Never auto-retry: completion after a timeout is unknowable.
+                outcome = CallOutcome(
+                    ok=False,
+                    outcome_unknown=True,
+                    error=f"call timed out after {self.config.call_timeout}s",
+                )
+                span.note(ok=False, outcome_unknown=True, error_class="TimeoutError")
+                return outcome
+            except AuthRequired as exc:
                 self.state = ConnectionState.AUTH_REQUIRED
-                self.last_error = self._redact("server requires authorization; authorize via /mcp")
+                self.last_error = self._redact(str(exc))
+                span.note(ok=False, outcome_unknown=True, error_class="AuthRequired")
                 return CallOutcome(ok=False, outcome_unknown=True, error=self.last_error)
-            # Without a terminal result, a transport/protocol failure cannot
-            # establish whether the dispatched operation had an effect.
-            return CallOutcome(
-                ok=False, outcome_unknown=True, error=f"call failed: {type(exc).__name__}"
+            except Exception as exc:
+                if _looks_like_auth_failure(exc):
+                    # Post-dispatch auth failure: conservatively unknown, no replay.
+                    # 403 insufficient_scope keeps its challenge for human step-up;
+                    # 401 keeps the existing generic auth-required behavior.
+                    self._capture_auth_challenge(exc)
+                    self.state = ConnectionState.AUTH_REQUIRED
+                    self.last_error = self._redact(
+                        "server requires authorization; authorize via /mcp"
+                    )
+                    span.note(ok=False, outcome_unknown=True, error_class="AuthRequired")
+                    return CallOutcome(ok=False, outcome_unknown=True, error=self.last_error)
+                # Without a terminal result, a transport/protocol failure cannot
+                # establish whether the dispatched operation had an effect.
+                span.note(ok=False, outcome_unknown=True, error_class=type(exc).__name__)
+                return CallOutcome(
+                    ok=False, outcome_unknown=True, error=f"call failed: {type(exc).__name__}"
+                )
+            outcome = self._normalize(remote_name, result, mcp_types)
+            span.note(
+                ok=outcome.ok,
+                outcome_unknown=outcome.outcome_unknown,
+                truncated=outcome.truncated,
             )
-        return self._normalize(remote_name, result, mcp_types)
+            return outcome
 
     def _normalize(self, remote_name: str, result: Any, mcp_types: Any) -> CallOutcome:
         texts: list[str] = []

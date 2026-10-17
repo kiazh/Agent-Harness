@@ -58,6 +58,7 @@ from machina.gateway.features._common import _bool
 from machina.gateway.features.mode import sync_execution_mode_env
 from machina.gateway.serializers import history_from_chunks, session_to_dict
 from machina.observability.diagnostics import record_failure
+from machina.observability.instrumentation import instrument, warm
 from machina.observability.tracing import span
 
 __all__ = [
@@ -121,6 +122,8 @@ def _setup_gateway_logging() -> None:
     core_logger.addHandler(file_handler)
 
     logger.info("Gateway logging initialized: %s", log_file)
+    # Pay instrumentation's one-time import/regex cost now, never mid-turn.
+    warm()
 
 
 _setup_gateway_logging()
@@ -225,6 +228,8 @@ class Gateway:
         # auth) sets inherit_env_token=False so the stdio token never reaches
         # it — explicit signal instead of mutating _auth_token from outside.
         self._inherit_env_token = inherit_env_token
+        # Bounded transport label for instrumentation only (never a credential).
+        self._transport_label = "stdio" if inherit_env_token else "http"
         self._auth_token: str | None = (
             os.environ.get("MACHINA_GATEWAY_TOKEN") if inherit_env_token else None
         )
@@ -339,8 +344,17 @@ class Gateway:
             return
 
         logger.debug("→ %s (id=%s)", method, rid)
+        raw_session_id = params.get("session_id") or params.get("sessionId")
+        session_id = raw_session_id if isinstance(raw_session_id, str) else None
         try:
-            result = await handler(params)
+            with instrument(
+                "gateway",
+                "rpc",
+                method=method,
+                transport=self._transport_label,
+                session_id=session_id,
+            ):
+                result = await handler(params)
         except RpcError as e:
             logger.warning("← %s error %d (id=%s)", method, e.code, rid)
             self._send_error(rid, e.code, e.message)
@@ -659,14 +673,17 @@ class Gateway:
         self.require_db()
         session = await self.get_session(params)
         self._opened_session_id = session.id
-        chunks = await context_manager.get_transcript_chunks(session.id)
-        # W5: get_transcript_chunks has no LIMIT; the REST session endpoint
-        # bounds history at 200 chunks (machina/api/routes/sessions.py). Slice
-        # the newest-first snapshot to the same bound so resume cannot return
-        # an unbounded payload (or force an unbounded JSON serialization).
+        with instrument("session", "resume", session_id=str(session.id)) as span:
+            chunks = await context_manager.get_transcript_chunks(session.id)
+            # W5: get_transcript_chunks has no LIMIT; the REST session endpoint
+            # bounds history at 200 chunks (machina/api/routes/sessions.py). Slice
+            # the newest-first snapshot to the same bound so resume cannot return
+            # an unbounded payload (or force an unbounded JSON serialization).
+            history = history_from_chunks(chunks[:MAX_RESUME_HISTORY_CHUNKS])
+            span.note(history_chunks=len(history))
         return {
             "session": session_to_dict(session),
-            "history": history_from_chunks(chunks[:MAX_RESUME_HISTORY_CHUNKS]),
+            "history": history,
         }
 
     async def _usage_get(self, params: dict[str, Any]) -> dict[str, Any]:

@@ -26,6 +26,7 @@ indirection was deleted (review M4)."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import threading as _threading
 import uuid
@@ -34,8 +35,19 @@ from datetime import UTC, datetime
 
 from machina.core.metrics import metrics
 from machina.observability.diagnostics import record_failure
+from machina.observability.instrumentation import instrumented, log_event
 
 logger = logging.getLogger(__name__)
+
+
+def _owner_hash(token: str | None) -> str:
+    """Stable, non-reversible owner identity for logs (never the raw token)."""
+    if not token:
+        return ""
+    try:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+    except Exception:
+        return ""
 
 TURN_TTL_SECONDS = 360
 MUTATION_TTL_SECONDS = 120
@@ -261,6 +273,7 @@ def _observe_reconcile_task(task: asyncio.Task) -> None:
             record_failure("turns.cancel_reconcile.detached", error)
 
 
+@instrumented("turns", "reconcile")
 async def _reconcile_cancelled_claim(session_id: uuid.UUID, owner: str, kind: str) -> None:
     """Shielded, bounded cleanup for a claim whose acquisition was cancelled.
 
@@ -289,6 +302,15 @@ async def _reconcile_cancelled_claim(session_id: uuid.UUID, owner: str, kind: st
         # leave the durable claim for stale-claim recovery (expiry), and
         # record enough to make the ambiguity auditable.
         record_failure(f"turns.{kind}.cancel_reconcile", error)
+        log_event(
+            "turns.reconcile",
+            level="warning",
+            claim_kind=kind,
+            session_id=str(session_id),
+            owner_hash=_owner_hash(owner),
+            outcome="unknown",
+            error_class=type(error).__name__,
+        )
         logger.warning(
             "Cancelled %s acquisition for session %s: release outcome unknown; "
             "durable claim left for stale-claim recovery",
@@ -297,12 +319,28 @@ async def _reconcile_cancelled_claim(session_id: uuid.UUID, owner: str, kind: st
         )
         return
     if released:
+        log_event(
+            "turns.reconcile",
+            level="debug",
+            claim_kind=kind,
+            session_id=str(session_id),
+            owner_hash=_owner_hash(owner),
+            outcome="released",
+        )
         logger.info(
             "Cancelled %s acquisition for session %s; released the still-owned claim",
             kind,
             session_id,
         )
     else:
+        log_event(
+            "turns.reconcile",
+            level="debug",
+            claim_kind=kind,
+            session_id=str(session_id),
+            owner_hash=_owner_hash(owner),
+            outcome="not_owned",
+        )
         logger.info(
             "Cancelled %s acquisition for session %s; claim was already released or taken",
             kind,
@@ -361,6 +399,7 @@ async def owns_claim(session_id: uuid.UUID, token: str | None) -> bool:
         return False
 
 
+@instrumented("turns", "acquire")
 async def try_begin_turn(
     session_id: uuid.UUID, *, turn_id: str | None = None, ttl_s: int = TURN_TTL_SECONDS
 ) -> str | None:
@@ -375,6 +414,13 @@ async def try_begin_turn(
 
     lock = _session_lock(session_id)
     if not await _acquire_or_steal(lock, session_id, ("turn", "mutation")):
+        log_event(
+            "turns.claim",
+            level="debug",
+            claim_kind="turn",
+            session_id=str(session_id),
+            outcome="busy",
+        )
         return None
     owner = f"turn:{turn_id or uuid.uuid4().hex}:{uuid.uuid4().hex}"
     try:
@@ -385,6 +431,14 @@ async def try_begin_turn(
                     lock.release()
                 except RuntimeError:
                     _note_lock_contention("begin_turn_claim_busy")
+                log_event(
+                    "turns.claim",
+                    level="debug",
+                    claim_kind="turn",
+                    session_id=str(session_id),
+                    owner_hash=_owner_hash(owner),
+                    outcome="busy",
+                )
                 return None
             if not _local_try_claim(session_id, "turn", owner):
                 # A live DB claim is ours, so any local entry is stale
@@ -401,7 +455,23 @@ async def try_begin_turn(
                         lock.release()
                     except RuntimeError:
                         _note_lock_contention("begin_turn_stale_conflict")
+                    log_event(
+                        "turns.claim",
+                        level="debug",
+                        claim_kind="turn",
+                        session_id=str(session_id),
+                        owner_hash=_owner_hash(owner),
+                        outcome="stale_conflict",
+                    )
                     return None
+            log_event(
+                "turns.claim",
+                level="debug",
+                claim_kind="turn",
+                session_id=str(session_id),
+                owner_hash=_owner_hash(owner),
+                outcome="acquired",
+            )
             return owner
         # DB-less: the local registry IS the claim (either kind blocks).
         if not _local_try_claim(session_id, "turn", owner):
@@ -409,13 +479,37 @@ async def try_begin_turn(
                 lock.release()
             except RuntimeError:
                 _note_lock_contention("begin_turn_local_busy")
+            log_event(
+                "turns.claim",
+                level="debug",
+                claim_kind="turn",
+                session_id=str(session_id),
+                owner_hash=_owner_hash(owner),
+                outcome="busy",
+            )
             return None
+        log_event(
+            "turns.claim",
+            level="debug",
+            claim_kind="turn",
+            session_id=str(session_id),
+            owner_hash=_owner_hash(owner),
+            outcome="acquired",
+        )
         return owner
     except asyncio.CancelledError:
         # MCH-002: cancellation during acquisition must reconcile acquisition
         # state — a durable claim may have committed without any caller ever
         # receiving this token. Bounded, token-matched release only; a
         # successor's claim is never released (see _reconcile_cancelled_claim).
+        log_event(
+            "turns.claim",
+            level="warning",
+            claim_kind="turn",
+            session_id=str(session_id),
+            owner_hash=_owner_hash(owner),
+            outcome="cancelled",
+        )
         try:
             await _reconcile_cancelled_claim(session_id, owner, "turn")
         finally:
@@ -434,6 +528,7 @@ async def try_begin_turn(
         raise
 
 
+@instrumented("turns", "release")
 async def end_turn(session_id: uuid.UUID, token: str | None) -> bool:
     """Release a turn claim; only the exact owner succeeds (stale-safe).
 
@@ -445,6 +540,13 @@ async def end_turn(session_id: uuid.UUID, token: str | None) -> bool:
     from machina.db.connection import db
 
     if not token:
+        log_event(
+            "turns.release",
+            level="debug",
+            claim_kind="turn",
+            session_id=str(session_id),
+            outcome="no_token",
+        )
         return False
     if db.connected:
         ok = await _db_release(session_id, token)
@@ -460,6 +562,14 @@ async def end_turn(session_id: uuid.UUID, token: str | None) -> bool:
                         lock.release()
                     except RuntimeError:
                         _note_lock_contention("end_turn_release")
+        log_event(
+            "turns.release",
+            level="debug",
+            claim_kind="turn",
+            session_id=str(session_id),
+            owner_hash=_owner_hash(token),
+            outcome="released" if ok else "stale",
+        )
         return ok
     # DB-less: the token-gated local registry is the claim.
     mine = _local_release(session_id, token)
@@ -470,7 +580,23 @@ async def end_turn(session_id: uuid.UUID, token: str | None) -> bool:
                 lock.release()
             except RuntimeError:
                 _note_lock_contention("end_turn_local_release")
+        log_event(
+            "turns.release",
+            level="debug",
+            claim_kind="turn",
+            session_id=str(session_id),
+            owner_hash=_owner_hash(token),
+            outcome="released",
+        )
         return True
+    log_event(
+        "turns.release",
+        level="debug",
+        claim_kind="turn",
+        session_id=str(session_id),
+        owner_hash=_owner_hash(token),
+        outcome="stale",
+    )
     return False
 
 
@@ -499,6 +625,7 @@ async def turn_active(session_id: uuid.UUID, kinds: tuple[str, ...] = ("turn",))
     return turn_locked(session_id)
 
 
+@instrumented("turns", "mutation_acquire")
 async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SECONDS) -> str | None:
     """Claim a mutation slot; fails when a live turn owns the session.
 
@@ -509,6 +636,13 @@ async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SEC
 
     lock = _mutation_session_lock(session_id)
     if not await _acquire_or_steal(lock, session_id, ("turn", "mutation")):
+        log_event(
+            "turns.claim",
+            level="debug",
+            claim_kind="mutation",
+            session_id=str(session_id),
+            outcome="busy",
+        )
         return None
     owner = f"mutation:{uuid.uuid4().hex}"
     try:
@@ -519,6 +653,14 @@ async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SEC
                     lock.release()
                 except RuntimeError:
                     _note_lock_contention("begin_mutation_claim_busy")
+                log_event(
+                    "turns.claim",
+                    level="debug",
+                    claim_kind="mutation",
+                    session_id=str(session_id),
+                    owner_hash=_owner_hash(owner),
+                    outcome="busy",
+                )
                 return None
             if not _local_try_claim(session_id, "mutation", owner):
                 stale = _local_owner(session_id)
@@ -532,18 +674,58 @@ async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SEC
                         lock.release()
                     except RuntimeError:
                         _note_lock_contention("begin_mutation_stale_conflict")
+                    log_event(
+                        "turns.claim",
+                        level="debug",
+                        claim_kind="mutation",
+                        session_id=str(session_id),
+                        owner_hash=_owner_hash(owner),
+                        outcome="stale_conflict",
+                    )
                     return None
+            log_event(
+                "turns.claim",
+                level="debug",
+                claim_kind="mutation",
+                session_id=str(session_id),
+                owner_hash=_owner_hash(owner),
+                outcome="acquired",
+            )
             return owner
         if not _local_try_claim(session_id, "mutation", owner):
             try:
                 lock.release()
             except RuntimeError:
                 _note_lock_contention("begin_mutation_local_busy")
+            log_event(
+                "turns.claim",
+                level="debug",
+                claim_kind="mutation",
+                session_id=str(session_id),
+                owner_hash=_owner_hash(owner),
+                outcome="busy",
+            )
             return None
+        log_event(
+            "turns.claim",
+            level="debug",
+            claim_kind="mutation",
+            session_id=str(session_id),
+            owner_hash=_owner_hash(owner),
+            outcome="acquired",
+        )
         return owner
     except asyncio.CancelledError:
         # MCH-002 (mutation twin): same token-matched, bounded, shielded
         # reconciliation as the turn path before the cancellation propagates.
+        log_event(
+            "turns.claim",
+            level="warning",
+            claim_kind="mutation",
+            session_id=str(session_id),
+            owner_hash=_owner_hash(owner),
+            outcome="cancelled",
+        )
         try:
             await _reconcile_cancelled_claim(session_id, owner, "mutation")
         finally:
@@ -562,11 +744,19 @@ async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SEC
         raise
 
 
+@instrumented("turns", "mutation_release")
 async def end_mutation(session_id: uuid.UUID, token: str | None) -> bool:
     """Release a mutation claim; stale tokens never unlock newer owners."""
     from machina.db.connection import db
 
     if not token:
+        log_event(
+            "turns.release",
+            level="debug",
+            claim_kind="mutation",
+            session_id=str(session_id),
+            outcome="no_token",
+        )
         return False
     if db.connected:
         ok = await _db_release(session_id, token)
@@ -578,6 +768,14 @@ async def end_mutation(session_id: uuid.UUID, token: str | None) -> bool:
                     lock.release()
                 except RuntimeError:
                     _note_lock_contention("end_mutation_release")
+        log_event(
+            "turns.release",
+            level="debug",
+            claim_kind="mutation",
+            session_id=str(session_id),
+            owner_hash=_owner_hash(token),
+            outcome="released" if ok else "stale",
+        )
         return ok
     mine = _local_release(session_id, token)
     if mine:
@@ -587,7 +785,23 @@ async def end_mutation(session_id: uuid.UUID, token: str | None) -> bool:
                 lock.release()
             except RuntimeError:
                 _note_lock_contention("end_mutation_local_release")
+        log_event(
+            "turns.release",
+            level="debug",
+            claim_kind="mutation",
+            session_id=str(session_id),
+            owner_hash=_owner_hash(token),
+            outcome="released",
+        )
         return True
+    log_event(
+        "turns.release",
+        level="debug",
+        claim_kind="mutation",
+        session_id=str(session_id),
+        owner_hash=_owner_hash(token),
+        outcome="stale",
+    )
     return False
 
 

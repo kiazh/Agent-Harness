@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import UTC, datetime
 from typing import Any
 
@@ -27,16 +28,158 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# ── deterministic fallback token heuristic ────────────────────────────────
+#
+# The fallback runs only when tiktoken is unavailable, fails to load, or
+# rejects the text (literal special-token spellings such as ``<|endoftext|>``
+# are ordinary user text to tiktoken's disallowed-special policy). The old
+# ``len(text) // 4`` basis assumed ~4 ASCII characters per token, so it was
+# ~4x low for CJK (≈1 token/char) and worse for emoji (2-3 tokens per
+# codepoint); a short emoji-only string counted as 0.
+#
+# Documented heuristic (weights are quarter-tokens, summed then rounded up):
+#
+#   * emoji / pictographs / regional indicators .... 12 (≈3 tokens/char)
+#   * variation selectors / ZWJ ....................  4 (1 token)
+#   * CJK ideographs, CJK punctuation, fullwidth ...  4 (1 token)
+#   * kana / hangul (jamo and syllables) ...........  3 (0.75 token)
+#   * any other non-ASCII character ................  2 (0.5 token)
+#   * ASCII ........................................  1 (¼ token, i.e. the
+#     documented four-characters-per-token basis, rounded up)
+#
+# Crucially the fallback is DETERMINISTIC and never returns 0 for non-empty
+# text. Measured against ``cl100k_base`` on the samples in
+# ``tools/check_token_counter.py`` it stays within ±25% for dense scripts
+# (CJK, kana, hangul, emoji, mixed) and is never 4x low; ASCII keeps the
+# historic chars/4 basis. Tool results and prose may still be undercounted by
+# up to roughly 2x, so the fallback is a degraded mode, not a replacement.
+_WEIGHTED_CHAR_RANGES: tuple[tuple[int, int, int], ...] = (
+    (0x1F000, 0x1FAFF, 12),  # emoji, pictographs, skin-tone modifiers
+    (0x2600, 0x27BF, 12),  # miscellaneous symbols and dingbats (❤, ✅, ...)
+    (0xFE00, 0xFE0F, 4),  # variation selectors (e.g. ❤️)
+    (0x200D, 0x200D, 4),  # zero-width joiner (e.g. 🧑‍💻)
+    (0x3400, 0x4DBF, 4),  # CJK unified ideographs extension A
+    (0x4E00, 0x9FFF, 4),  # CJK unified ideographs
+    (0xF900, 0xFAFF, 4),  # CJK compatibility ideographs
+    (0x20000, 0x2FA1F, 4),  # CJK unified ideographs extensions B-F
+    (0x3000, 0x303F, 4),  # CJK punctuation
+    (0xFF00, 0xFFEF, 4),  # halfwidth and fullwidth forms
+    (0x3040, 0x30FF, 3),  # hiragana and katakana
+    (0x31F0, 0x31FF, 3),  # katakana phonetic extensions
+    (0x1100, 0x11FF, 3),  # hangul jamo
+    (0x3130, 0x318F, 3),  # hangul compatibility jamo
+    (0xAC00, 0xD7AF, 3),  # hangul syllables
+)
+
+# Emitted once per process (not per call) so a degraded counter is visible
+# without turning every token decision into log noise.
+_fallback_notified = False
+_fallback_notify_lock = threading.Lock()
+
+
+def _char_quarter_tokens(char: str) -> int:
+    """Quarter-token weight for one character (see the documented table)."""
+    code = ord(char)
+    if code < 0x80:
+        return 1
+    for start, end, weight in _WEIGHTED_CHAR_RANGES:
+        if start <= code <= end:
+            return weight
+    return 2
+
+
+def _fallback_token_count(text: str) -> int:
+    """Deterministic offline estimate (no tiktoken); 0 only for empty text."""
+    if not text:
+        return 0
+    if text.isascii():
+        # Historic documented basis: one token per four characters, rounded up
+        # so non-empty text can never count as zero tokens.
+        return max(1, (len(text) + 3) // 4)
+    quarters = 0
+    for char in text:
+        quarters += _char_quarter_tokens(char)
+    return max(1, (quarters + 3) // 4)
+
+
+def _fallback_prefix(text: str, max_tokens: int) -> str:
+    """Longest character prefix whose fallback count fits *max_tokens*."""
+    if max_tokens <= 0 or not text:
+        return ""
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _fallback_token_count(text[:middle]) <= max_tokens:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low]
+
+
+def _notify_fallback(reason: str) -> None:
+    """Emit one debug event the first time the fallback engages in a process.
+
+    ``machina.observability.instrumentation`` is an optional, independently
+    versioned dependency, so the import is lazy: counting must keep working
+    (and importing ``assembler`` must stay DB/observability independent) when
+    the module is absent. Exactly one notice per process avoids hot-path noise.
+    """
+    global _fallback_notified
+    if _fallback_notified:
+        return
+    with _fallback_notify_lock:
+        if _fallback_notified:
+            return
+        _fallback_notified = True
+    try:
+        from machina.observability.instrumentation import log_event
+    except Exception as error:
+        logger.debug("token counter fallback engaged (%s): no instrumentation (%s)", reason, error)
+        return
+    try:
+        log_event("tokens.count", level="debug", basis="fallback", reason=reason)
+    except Exception as error:
+        # Observability must never break a token decision; report instead.
+        logger.debug("tokens.count fallback event failed (%s): %s", reason, error)
+
+
 class TokenCounter:
-    """Accurate token counting using tiktoken, with len//4 fallback."""
+    """Accurate token counting using tiktoken, with a dense-script fallback.
+
+    Thread safety: the tiktoken encoding is loaded lazily under a lock
+    (double-checked), ``encode``/``decode`` on a loaded encoding are
+    thread-safe, and all other state is per-call except the one-shot fallback
+    notice (guarded by its own lock).
+    """
 
     def __init__(self, encoding_name: str = "cl100k_base") -> None:
-        self._encoding = None
-        if _TIKTOKEN_AVAILABLE:
-            try:
-                self._encoding = tiktoken.get_encoding(encoding_name)
-            except Exception:
-                self._encoding = None
+        self._encoding_name = encoding_name
+        self._encoding: Any | None = None
+        self._encoding_failed = False
+        self._available = _TIKTOKEN_AVAILABLE
+        self._init_lock = threading.Lock()
+
+    def _get_encoding(self) -> Any | None:
+        """Lazily load the configured encoding, or None when unavailable."""
+        if not self._available:
+            return None
+        if self._encoding is not None:
+            return self._encoding
+        with self._init_lock:
+            if self._encoding is None and not self._encoding_failed:
+                try:
+                    self._encoding = tiktoken.get_encoding(self._encoding_name)
+                except Exception as error:
+                    # A missing/corrupt BPE file is a real degradation: report
+                    # it once, then keep the deterministic fallback.
+                    self._encoding_failed = True
+                    logger.warning(
+                        "tiktoken encoding %r unavailable; using the documented "
+                        "fallback token heuristic: %s",
+                        self._encoding_name,
+                        error,
+                    )
+        return self._encoding
 
     def _encode_or_none(self, text: str) -> list[int] | None:
         """Encode *text*, returning None when tiktoken rejects it.
@@ -44,40 +187,73 @@ class TokenCounter:
         Literal special-token spellings (e.g. ``<|endoftext|>``) are ordinary
         user text, but tiktoken's default disallowed-special policy raises
         ValueError for them. Returning None lets callers fall back to the
-        length heuristic instead of failing the turn (usage.py applies the
+        documented heuristic instead of failing the turn (usage.py applies the
         same conversion at its own call site).
         """
-        if self._encoding is None:
+        encoding = self._get_encoding()
+        if encoding is None:
             return None
         try:
-            return self._encoding.encode(text)
+            return encoding.encode(text)
         except ValueError:
             return None
+
+    def _fallback_reason(self) -> str:
+        if self._get_encoding() is None:
+            return "tiktoken_unavailable"
+        return "special_token_literal"
 
     def count(self, text: str) -> int:
         """Return the number of tokens in *text*."""
         tokens = self._encode_or_none(text)
         if tokens is not None:
             return len(tokens)
-        return len(text) // 4
+        reason = self._fallback_reason()
+        _notify_fallback(reason)
+        return _fallback_token_count(text)
 
     def truncate(self, text: str, max_tokens: int) -> str:
-        """Return the longest prefix of *text* that fits in *max_tokens* tokens."""
-        if max_tokens <= 0:
+        """Return the longest prefix of *text* that fits in *max_tokens* tokens.
+
+        Both the tiktoken and fallback paths binary-search character prefixes
+        using the same counting basis, so the result is always a true prefix
+        (never a decoded replacement character) and its count never exceeds
+        the budget. A leading count short-circuits the common "already fits"
+        case with a single encode.
+
+        Instrumentation is deliberately NOT wrapped around this method: the
+        structured sink costs ~445µs per call against a ~3µs token-decision
+        baseline (measured), which would make the hot path ~100x slower. The
+        one-shot fallback notice below is the only observability on this path.
+        """
+        if max_tokens <= 0 or not text:
             return ""
-        tokens = self._encode_or_none(text)
-        if tokens is not None:
-            if len(tokens) <= max_tokens:
-                return text
-            return self._encoding.decode(tokens[:max_tokens])
-        return text[: max_tokens * 4]
+        if self.count(text) <= max_tokens:
+            return text
+        # Monotone (weights are positive), so the longest fitting prefix can
+        # be found by binary search under the SAME counting basis used by
+        # ``count`` — tiktoken when available, the documented heuristic else.
+        low, high = 0, len(text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            if self.count(text[:middle]) <= max_tokens:
+                low = middle
+            else:
+                high = middle - 1
+        return text[:low]
 
 
 _token_counter = TokenCounter()
 
 
 def get_token_count(text: str) -> int:
-    """Return the number of tokens in *text* (tiktoken or len//4 fallback)."""
+    """Return the number of tokens in *text*.
+
+    Canonical basis: ``tiktoken.get_encoding("cl100k_base").encode(text)``
+    length. When tiktoken is unavailable or rejects the text (literal special
+    tokens), the documented deterministic fallback (``_fallback_token_count``)
+    is used instead.
+    """
     return _token_counter.count(text)
 
 
@@ -126,10 +302,22 @@ class PromptAssembler:
 
             def prefix(tokens: int) -> str:
                 if encoded is not None:
-                    return _token_counter._encoding.decode(encoded[:tokens])
-                return value[: tokens * 4]
+                    # Decoding a token prefix may split a multi-byte character
+                    # and yield U+FFFD, which is NOT a prefix of *value* (and
+                    # can re-encode differently). Walk back to the nearest clean
+                    # character boundary; at most a few bytes/tokens are lost.
+                    candidate = _token_counter._encoding.decode(encoded[:tokens])
+                    while candidate and not value.startswith(candidate):
+                        tokens -= 1
+                        if tokens <= 0:
+                            return ""
+                        candidate = _token_counter._encoding.decode(encoded[:tokens])
+                    return candidate
+                return _fallback_prefix(value, tokens)
 
-            value_tokens = len(encoded) if encoded is not None else max(1, (len(value) + 3) // 4)
+            value_tokens = (
+                len(encoded) if encoded is not None else max(1, _fallback_token_count(value))
+            )
             upper = min(value_tokens, cap) if cap is not None else value_tokens
             if upper == value_tokens:
                 sections[key] = value
@@ -379,7 +567,7 @@ class PromptAssembler:
         return "\n".join(parts)
 
     def _estimate_tokens(self, text: str) -> int:
-        """Accurate token count via tiktoken (falls back to len//4)."""
+        """Accurate token count via tiktoken (documented fallback if absent)."""
         return get_token_count(text)
 
 
