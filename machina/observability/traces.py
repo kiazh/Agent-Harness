@@ -466,7 +466,7 @@ def end_turn(
             for key in [k for k, v in _RESERVATIONS.items() if v.get("turn_id") == tid]:
                 _RESERVATIONS.pop(key, None)
             try:
-                _span_stack.set(tuple(entry for entry in _span_stack.get()[: turn._stack_depth]))
+                _span_stack.set(tuple(entry for entry in _span_stack.get() if entry[0] != tid))
             except Exception:
                 pass
             _emit(
