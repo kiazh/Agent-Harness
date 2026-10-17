@@ -1356,14 +1356,16 @@ def _client_capabilities() -> dict[str, Any]:
     """Conservative client capabilities (plan §15).
 
     Deliberately absent: ``dynamicRegistration`` (anywhere),
-    ``workspace.configuration``, and ``workspace.executeCommand``.
+    ``workspace.configuration``, ``workspace.executeCommand``, and any
+    ``workspaceEdit`` support claim. ``applyEdit`` is ``False`` because this
+    client never applies server-initiated edits (no ``on_server_request``
+    handler is registered in production); ``workspace/applyEdit`` is still
+    refused structurally as defense-in-depth for servers that ignore the
+    advertised capability (invariant I-6: never advertise what we refuse).
     """
     return {
         "general": {"positionEncodings": ["utf-16"]},
-        "workspace": {
-            "applyEdit": True,
-            "workspaceEdit": {"documentChanges": True, "resourceOperations": []},
-        },
+        "workspace": {"applyEdit": False},
         "textDocument": {
             "synchronization": {"didSave": True},
             "completion": {"completionItem": {"snippetSupport": False}},

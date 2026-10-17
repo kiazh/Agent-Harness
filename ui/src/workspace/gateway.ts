@@ -171,7 +171,7 @@ export class WorkspaceGatewayAdapter implements WorkspaceGateway {
 		uiVersion: number,
 	): Promise<WorkspaceSaveResult> {
 		return this.request<WorkspaceSaveResult>("workspace.save", {
-			...this.bound(),
+			...this.bound(true),
 			uri,
 			text,
 			expectedRevision,
@@ -187,7 +187,7 @@ export class WorkspaceGatewayAdapter implements WorkspaceGateway {
 	): Promise<WorkspaceDocumentOpenResult | WorkspaceReadRefusal> {
 		return this.request<WorkspaceDocumentOpenResult | WorkspaceReadRefusal>(
 			"workspace.documentOpen",
-			{ ...this.bound(), uri, languageId, version, text },
+			{ ...this.bound(true), uri, languageId, version, text },
 		);
 	}
 
@@ -197,14 +197,14 @@ export class WorkspaceGatewayAdapter implements WorkspaceGateway {
 	): Promise<WorkspaceDocumentChangeResult | WorkspaceReadRefusal> {
 		return this.request<WorkspaceDocumentChangeResult | WorkspaceReadRefusal>(
 			"workspace.documentChange",
-			{ ...this.bound(), uri, ...change },
+			{ ...this.bound(true), uri, ...change },
 		);
 	}
 
 	async documentClose(uri: string): Promise<WorkspaceDocumentCloseResult | WorkspaceReadRefusal> {
 		return this.request<WorkspaceDocumentCloseResult | WorkspaceReadRefusal>(
 			"workspace.documentClose",
-			{ ...this.bound(), uri },
+			{ ...this.bound(true), uri },
 		);
 	}
 
@@ -239,7 +239,7 @@ export class WorkspaceGatewayAdapter implements WorkspaceGateway {
 	): Promise<WorkspaceLspControlResult | WorkspaceReadRefusal> {
 		return this.request<WorkspaceLspControlResult | WorkspaceReadRefusal>(
 			"workspace.lspControl",
-			{ ...this.bound(), profile, action },
+			{ ...this.bound(true), profile, action },
 		);
 	}
 
@@ -259,10 +259,18 @@ export class WorkspaceGatewayAdapter implements WorkspaceGateway {
 		return result;
 	}
 
-	/** workspaceId + epoch for every bound request; throws before `open`. */
-	private bound(): { workspaceId: string; epoch: number } {
+	/**
+	 * workspaceId + epoch for every bound request; throws before `open`.
+	 * Mutating calls also send `clientId` so the backend can verify the
+	 * request came from this connection's minted identity (the single-client
+	 * stdio path may omit it).
+	 */
+	private bound(includeClient = false): { workspaceId: string; epoch: number; clientId?: string } {
 		const identity = this.currentIdentity;
 		if (!identity) throw new Error("workspace is not open");
+		if (includeClient) {
+			return { workspaceId: identity.workspaceId, epoch: identity.epoch, clientId: identity.clientId };
+		}
 		return { workspaceId: identity.workspaceId, epoch: identity.epoch };
 	}
 }

@@ -434,8 +434,23 @@ class WorkspaceService:
         assert self._documents is not None  # guarded by _require_files
         return self._documents
 
-    def _check_epoch(self, epoch: int | None) -> int:
-        effective = self._epoch if epoch is None else epoch
+    def _check_epoch(self, epoch: int | None, *, required: bool = False) -> int:
+        """Validate a caller's workspace epoch.
+
+        Reads stay backward-compatible (``required=False``): an omitted epoch
+        means "current", so older read clients keep working. Mutating
+        operations pass ``required=True``: an absent epoch is refused instead
+        of being silently treated as the current one, otherwise a stale caller
+        that simply omits the field would always pass the fence.
+        """
+        if epoch is None:
+            if required:
+                raise WorkspaceError(
+                    "denied", "workspace epoch is required for this operation"
+                )
+            effective = self._epoch
+        else:
+            effective = epoch
         if (
             not isinstance(effective, int)
             or isinstance(effective, bool)
@@ -443,6 +458,19 @@ class WorkspaceService:
         ):
             raise WorkspaceError("denied", "stale workspace epoch; the workspace was reopened")
         return effective
+
+    def _check_client(self, client_id: str | None) -> None:
+        """Verify the optional client binding on a mutating request.
+
+        Absent is allowed: a single-client stdio connection is itself the
+        binding. When supplied (UI/HTTP path), it must equal the identity this
+        service minted on open, so a request minted by another client cannot
+        mutate this workspace.
+        """
+        if client_id is None:
+            return
+        if self._identity is None or client_id != self._identity.client_id:
+            raise WorkspaceError("denied", "client id does not match the live workspace")
 
     # ─── URI translation (authorization still happens in WorkspaceFiles) ────
     def _uri_to_rel(self, uri: str) -> str:
@@ -535,7 +563,11 @@ class WorkspaceService:
         expected_revision: str | None = None,
         *,
         ui_version: int | None = None,
+        epoch: int | None = None,
+        client_id: str | None = None,
     ) -> SaveResult:
+        self._check_epoch(epoch, required=True)
+        self._check_client(client_id)
         files = self._require_files()
         rel = self._uri_to_rel(uri)
         canonical = self._rel_to_uri(rel)
@@ -568,6 +600,7 @@ class WorkspaceService:
         text: str,
         *,
         epoch: int | None = None,
+        client_id: str | None = None,
     ) -> DocumentOpenResult:
         """Accept a mirror, then lazily start/synchronize its language server.
 
@@ -577,6 +610,8 @@ class WorkspaceService:
         queued inline, ``starting`` when a lazy start was scheduled, the
         connection's own state otherwise — and the UI may retry.
         """
+        self._check_epoch(epoch, required=True)
+        self._check_client(client_id)
         store = self._require_documents()
         rel = self._uri_to_rel(uri)
         canonical = self._rel_to_uri(rel)
@@ -647,6 +682,7 @@ class WorkspaceService:
         changes: list[dict[str, Any]],
         *,
         epoch: int | None = None,
+        client_id: str | None = None,
     ) -> DocumentChangeResult:
         """Accept an incremental change and mirror it to a ready server.
 
@@ -656,6 +692,8 @@ class WorkspaceService:
         against the live generation that received the ``didOpen`` — never
         against a dead one, and never fabricated from stale ranges.
         """
+        self._check_epoch(epoch, required=True)
+        self._check_client(client_id)
         store = self._require_documents()
         rel = self._uri_to_rel(uri)
         canonical = self._rel_to_uri(rel)
@@ -681,13 +719,21 @@ class WorkspaceService:
             logger.debug("didChange could not be queued: %s", error)
         return result
 
-    def document_close(self, uri: str, *, epoch: int | None = None) -> dict[str, Any]:
+    def document_close(
+        self,
+        uri: str,
+        *,
+        epoch: int | None = None,
+        client_id: str | None = None,
+    ) -> dict[str, Any]:
         """Retire a mirror and tell the server only if it knows the document.
 
         ``didClose`` is sent only when the document was opened on the
         connection's current generation; anything else has nothing to close
         and is dropped without a fabricated frame.
         """
+        self._check_epoch(epoch, required=True)
+        self._check_client(client_id)
         store = self._require_documents()
         rel = self._uri_to_rel(uri)
         canonical = self._rel_to_uri(rel)
@@ -791,9 +837,6 @@ class WorkspaceService:
             if entry.connection is connection and entry.epoch == self._epoch:
                 return entry
         return None
-
-    def _is_tracked(self, connection: Any) -> bool:
-        return self._tracked_entry(connection) is not None
 
     def _handle_connection_state(self, connection: Any, state: str) -> None:
         """Emit ``workspace.lspState``; reopen mirrors when a server becomes ready.
@@ -1579,13 +1622,22 @@ class WorkspaceService:
             server["detail"] = sanitize_log_text(detail)
         return server
 
-    async def lsp_control(self, action: str, profile: str) -> dict[str, Any]:
+    async def lsp_control(
+        self,
+        action: str,
+        profile: str,
+        *,
+        epoch: int | None = None,
+        client_id: str | None = None,
+    ) -> dict[str, Any]:
         """start/stop/restart through the injected manager; never installation.
 
         ``profile`` accepts the profile ids surfaced by ``lspStatus``
         ("pyright", "typescript-language-server") and the plain language names
         ("python", "typescript"); anything else is an honest ``missing``.
         """
+        self._check_epoch(epoch, required=True)
+        self._check_client(client_id)
         if action not in ("start", "stop", "restart"):
             raise WorkspaceError("denied", f"unsupported lsp control action: {action}")
         self._require_files()

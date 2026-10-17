@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _MAX_WORKSPACE_ID_CHARS = 128
+_MAX_CLIENT_ID_CHARS = 128
 _MAX_PROFILE_CHARS = 128
 _MAX_LANGUAGE_ID_CHARS = 128
 _MAX_ACTION_CHARS = 32
@@ -238,6 +239,21 @@ def _optional_int(params: dict[str, Any], key: str, lo: int, hi: int) -> int | N
     return value
 
 
+def _epoch(params: dict[str, Any]) -> int | None:
+    """The caller's workspace epoch (absence is fenced by the service).
+
+    Mutating routes require it: the service treats ``None`` as a denial for
+    those operations, surfacing a structured ``refused`` result. Values are
+    still type/range checked here because params are untrusted input.
+    """
+    return _optional_int(params, "epoch", 0, _MAX_INT32)
+
+
+def _client_id(params: dict[str, Any]) -> str | None:
+    """Optional client binding for a mutating route (absent on stdio)."""
+    return _raw_str(params, "clientId", required=False, max_len=_MAX_CLIENT_ID_CHARS) or None
+
+
 def _position(value: Any, label: str) -> dict[str, int]:
     if not isinstance(value, dict):
         raise RpcError(INVALID_PARAMS, f"{label} must be an object with line/character")
@@ -356,8 +372,17 @@ async def workspace_save(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         _raw_str(params, "expectedRevision", required=False, max_len=MAX_REVISION_CHARS) or None
     )
     ui_version = _optional_int(params, "uiVersion", 0, _MAX_INT32)
+    epoch = _epoch(params)
+    client_id = _client_id(params)
     try:
-        result = await service.save(uri, text, expected_revision, ui_version=ui_version)
+        result = await service.save(
+            uri,
+            text,
+            expected_revision,
+            ui_version=ui_version,
+            epoch=epoch,
+            client_id=client_id,
+        )
     except WorkspaceError as exc:
         return {"ok": False, **_refusal(exc)}
     return result.as_dict()
@@ -376,9 +401,11 @@ async def workspace_document_open(gw: Gateway, params: dict[str, Any]) -> dict[s
         raise RpcError(INVALID_PARAMS, "text must be a string")
     if len(text) > MAX_SAVE_PARAM_CHARS:
         raise RpcError(INVALID_PARAMS, f"text is too long (max {MAX_SAVE_PARAM_CHARS} characters)")
-    epoch = _optional_int(params, "epoch", 0, _MAX_INT32)
+    epoch = _epoch(params)
     try:
-        result = service.document_open(uri, language_id, version, text, epoch=epoch)
+        result = service.document_open(
+            uri, language_id, version, text, epoch=epoch, client_id=_client_id(params)
+        )
     except WorkspaceError as exc:
         return _refusal(exc)
     return result.as_dict()
@@ -390,9 +417,11 @@ async def workspace_document_change(gw: Gateway, params: dict[str, Any]) -> dict
     base_version = _required_int(params, "baseVersion", 0, _MAX_INT32)
     version = _required_int(params, "version", 0, _MAX_INT32)
     changes = _changes(params)
-    epoch = _optional_int(params, "epoch", 0, _MAX_INT32)
+    epoch = _epoch(params)
     try:
-        result = service.document_change(uri, base_version, version, changes, epoch=epoch)
+        result = service.document_change(
+            uri, base_version, version, changes, epoch=epoch, client_id=_client_id(params)
+        )
     except WorkspaceError as exc:
         return _refusal(exc)
     return result.as_dict()
@@ -401,9 +430,9 @@ async def workspace_document_change(gw: Gateway, params: dict[str, Any]) -> dict
 async def workspace_document_close(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     service = _require(gw, params)
     uri = _raw_str(params, "uri", max_len=MAX_URI_CHARS)
-    epoch = _optional_int(params, "epoch", 0, _MAX_INT32)
+    epoch = _epoch(params)
     try:
-        return service.document_close(uri, epoch=epoch)
+        return service.document_close(uri, epoch=epoch, client_id=_client_id(params))
     except WorkspaceError as exc:
         return _refusal(exc)
 
@@ -479,7 +508,9 @@ async def workspace_lsp_control(gw: Gateway, params: dict[str, Any]) -> dict[str
         raise RpcError(INVALID_PARAMS, "action must be start, stop or restart")
     profile = _raw_str(params, "profile", max_len=_MAX_PROFILE_CHARS)
     try:
-        return await service.lsp_control(action, profile)
+        return await service.lsp_control(
+            action, profile, epoch=_epoch(params), client_id=_client_id(params)
+        )
     except WorkspaceError as exc:
         return _refusal(exc)
 

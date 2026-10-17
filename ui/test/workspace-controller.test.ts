@@ -1436,6 +1436,54 @@ test("WorkspaceGatewayAdapter binds identity and shares the request function", a
 	await assert.rejects(() => adapter.read(fileUri("a.ts")), /workspace is not open/);
 });
 
+test("WorkspaceGatewayAdapter fences mutating calls with epoch and clientId", async () => {
+	const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+	const request = (async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+		calls.push({ method, params });
+		if (method === "workspace.open") {
+			return {
+				workspaceId: "ws_9",
+				clientId: "cl_9",
+				epoch: 7,
+				rootLabel: "ws",
+				resolvedRoot: "/ws",
+				trusted: true,
+				capabilities: [],
+			};
+		}
+		if (method === "workspace.save") return { ok: true, revision: "rev-1", savedUiVersion: 0 };
+		if (method === "workspace.documentOpen") {
+			return { acceptedVersion: 1, state: "missing", serverGeneration: 0 };
+		}
+		if (method === "workspace.documentChange") return { acceptedVersion: 2 };
+		if (method === "workspace.documentClose") return { closed: true, uri: "" };
+		if (method === "workspace.lspControl") {
+			return { action: "start", profile: "python", state: "missing" };
+		}
+		return {};
+	}) as unknown as WorkspaceRequestFn;
+	const adapter = new WorkspaceGatewayAdapter(request);
+	await adapter.open("/ws", true);
+	await adapter.save(fileUri("a.ts"), null, "x", 1);
+	await adapter.documentOpen(fileUri("a.ts"), "typescript", 1, "x");
+	await adapter.documentChange(fileUri("a.ts"), { baseVersion: 1, version: 2, changes: [] });
+	await adapter.documentClose(fileUri("a.ts"));
+	await adapter.lspControl("python", "start");
+
+	for (const method of [
+		"workspace.save",
+		"workspace.documentOpen",
+		"workspace.documentChange",
+		"workspace.documentClose",
+		"workspace.lspControl",
+	]) {
+		const params = calls.filter((call) => call.method === method).at(-1)?.params;
+		assert.equal(params?.workspaceId, "ws_9", method);
+		assert.equal(params?.epoch, 7, `${method} carries the bound epoch`);
+		assert.equal(params?.clientId, "cl_9", `${method} carries the bound client id`);
+	}
+});
+
 // ─── review fixes: save overlap, successor retirement, restore focus ────────
 
 test("overlapping saves keep suppressing save-origin echoes until the last settles", async () => {
