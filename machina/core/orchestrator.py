@@ -625,6 +625,7 @@ class Orchestrator:
     async def _record_end(
         self, message_id: uuid.UUID, *, status: str, response: str, tokens: int | None
     ) -> None:
+        """Persist delegation completion with a redacted response and usage count."""
         await db.execute(
             """
             UPDATE agent_messages
@@ -638,6 +639,7 @@ class Orchestrator:
         )
 
     async def history(self, session_id: uuid.UUID, limit: int = 50) -> list[dict]:
+        """Return session delegations in chronological order with redacted responses."""
         rows = await db.fetch(
             """
             SELECT id, from_agent, to_agent, task, response, status, tokens_used, created_at, completed_at

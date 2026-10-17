@@ -123,6 +123,7 @@ async def _stream_session(
                 _renew_state.pop("active", None)
 
     async def approval_data(request_id: str) -> dict[str, Any]:
+        """Return a redacted approval event, raising if the stored proposal is unavailable."""
         from machina.permissions.store import get_approval
         from machina.protocol import approval_fields
 

@@ -212,6 +212,7 @@ class _CallbackListener:
             self._settled.set_result((code, error))
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Validate a bounded OAuth callback request, settle valid results, and close the writer."""
         try:
             try:
                 raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=10.0)

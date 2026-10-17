@@ -126,6 +126,7 @@ class _CallbackServer:
         return _Handler
 
     def _handle(self, request: BaseHTTPRequestHandler) -> None:
+        """Settle sign-in only after validating the callback path, host, and OAuth state."""
         parsed = urlparse(request.path)
         if parsed.path != self.path:
             self._respond(request, 404, "Not found.")

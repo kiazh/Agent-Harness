@@ -90,6 +90,7 @@ async def resolve_approval(request_id: str, req: ResolveApprovalRequest) -> dict
 
 @router.post("/api/v1/approvals/{request_id}/resume", dependencies=[Depends(require_api_key)])
 async def resume_approval(request_id: str, req: ResumeApprovalRequest) -> StreamingResponse:
+    """Validate an approved continuation and stream it, requiring fresh approval on changes."""
     from machina.connectors.models import ConnectorError
     from machina.core.approval_resume import matches_approval, resumed_request
     from machina.permissions import store

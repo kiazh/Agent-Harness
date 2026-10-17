@@ -22,6 +22,7 @@ class _RedactionFailed(Exception):
 
 
 def install() -> None:
+    """Idempotently install a log factory that redacts Machina records and masks failures."""
     previous = logging.getLogRecordFactory()
     if getattr(previous, "_ah_sanitized", False):
         return

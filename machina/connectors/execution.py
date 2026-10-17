@@ -143,6 +143,7 @@ async def prepare_connect(service, connector_id: str, session_id: str, agent_id:
 async def connect_authorized(
     service, connector_id: str, session_id: str, agent_id: str, expected_digest: str
 ) -> dict:
+    """Connect a human-reviewed configuration after rechecking its digest under the lock."""
     from machina.permissions import broker, store
 
     request = await _connect_request(service, connector_id, session_id, agent_id)

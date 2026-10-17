@@ -117,6 +117,7 @@ def approval_fields(card: dict[str, Any]) -> dict[str, Any]:
 
 
 def canonical_http_event(data: dict[str, Any], session_id: str, turn_id: str) -> dict[str, Any]:
+    """Convert an HTTP stream event to the canonical wire envelope, preserving approval fields."""
     name = data["type"]
     if name == "text":
         return wire_event("message.delta", session_id, turn_id, text=data["content"])

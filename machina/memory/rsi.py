@@ -353,6 +353,7 @@ async def finish(
 
 
 async def evaluate_trial(conn, agent_id: str) -> None:
+    """Stabilize or roll back a trial after three completed human ratings, based on mean reward."""
     profile = await ensure(conn, agent_id)
     trial = profile["trial_revision"]
     if trial is None:

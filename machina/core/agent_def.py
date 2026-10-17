@@ -194,6 +194,7 @@ class AgentRegistry:
         self._file_definitions_cache_time: float = 0.0
 
     def _file_definitions(self) -> dict[str, AgentDef]:
+        """Load and cache valid YAML and SoulSpec agents, logging and skipping invalid files."""
         now = time.monotonic()
         if (
             self._file_definitions_cache is not None
@@ -343,6 +344,7 @@ class AgentRegistry:
     async def save_on_connection(
         self, agent: AgentDef, connection, *, identity_only: bool = False
     ) -> AgentDef:
+        """Validate and upsert an agent, preserving existing runtime fields if identity_only."""
         validate_agent_name(agent.name)
         query = """
             INSERT INTO agents (name, description, system_prompt, tools, model, provider, source, soul_spec)

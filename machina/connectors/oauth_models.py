@@ -91,6 +91,7 @@ class OAuthSettings:
 
     @classmethod
     def from_dict(cls, fields: dict[str, Any] | None) -> OAuthSettings | None:
+        """Parse optional OAuth settings, raising OAuthConfigError for invalid fields."""
         if fields is None:
             return None
         if not isinstance(fields, dict):

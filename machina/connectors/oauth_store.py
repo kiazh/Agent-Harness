@@ -351,6 +351,7 @@ class OAuthCredentialStore:
 
     # ── public API ────────────────────────────────────────────────
     async def load(self, binding: OAuthBinding) -> OAuthCredentialRecord | None:
+        """Decrypt a bound grant and register its tokens for redaction; return None if absent."""
         key = _safe_name(binding.credential_key)
         await self._master()
         for attempt in range(3):
@@ -408,6 +409,7 @@ class OAuthCredentialStore:
         expected_generation: int,
         fence: PublicationFence | None = None,
     ) -> OAuthCredentialRecord:
+        """Publish an encrypted grant under the store lock with generation and fence checks."""
         for token in (record.access_token, record.refresh_token):
             remember_secret_value(token)
         key = _safe_name(record.credential_key)

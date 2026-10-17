@@ -614,6 +614,7 @@ class Gateway:
             record_failure("server.initialize.db_cleanup", _boundary_error)
 
     async def _session_create(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Create and select a session using the agent definition and gateway routing defaults."""
         self.require_db()
         title = str(params.get("title") or "").strip()[:80] or "New session"
         agent_id = str(params.get("agent") or "harness").strip()[:100] or "harness"

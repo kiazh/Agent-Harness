@@ -58,6 +58,7 @@ def _require_managed_key(key: str) -> str:
 
 
 def _credential_names(key: str) -> tuple[str, ...]:
+    """Return canonical and legacy environment names for managed configuration secrets."""
     from machina.core.config import LEGACY_ENV_VARS, SECRET_KEYS
 
     setting = key.lower()
@@ -69,6 +70,7 @@ def _credential_names(key: str) -> tuple[str, ...]:
 
 
 def _sync_config_secret(key: str, value: str) -> None:
+    """Update a recognized config secret and any existing session override."""
     from machina.core.config import SECRET_KEYS, get_config
 
     setting = key.lower()

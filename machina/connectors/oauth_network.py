@@ -47,6 +47,7 @@ class OAuthNetworkError(Exception):
 
 
 def _parse_url(url: str) -> ParseResult:
+    """Parse a URL, translating invalid authorities or ports into OAuthNetworkError."""
     try:
         parts = urlparse(url)
         _ = parts.port  # urllib defers authority/port validation until access.
@@ -69,6 +70,7 @@ def _authority_host(host: str | None) -> str:
 
 
 def normalize_resource(url: str) -> str:
+    """Normalize resource scheme, host, port, and path, omitting query and fragment."""
     parts = _parse_url(url)
     scheme = parts.scheme.lower()
     host = _authority_host((parts.hostname or "").lower().rstrip("."))
@@ -275,6 +277,7 @@ def _scope_list(value: str | None) -> tuple[str, ...]:
 
 
 def protected_resource_candidates(endpoint: str) -> list[str]:
+    """Return protected-resource metadata URLs, trying the endpoint path before the root."""
     parts = _parse_url(endpoint)
     base = f"{parts.scheme}://{_authority_host(parts.hostname)}"
     if parts.port:
@@ -288,6 +291,7 @@ def protected_resource_candidates(endpoint: str) -> list[str]:
 
 
 def issuer_metadata_candidates(issuer: str) -> list[str]:
+    """Return OAuth and OpenID discovery URLs in lookup order for an issuer."""
     parts = _parse_url(issuer)
     base = f"{parts.scheme}://{_authority_host(parts.hostname)}"
     if parts.port:
@@ -803,6 +807,7 @@ class OAuthNetworkClient:
     def _validate_token_payload(
         self, payload: dict[str, Any], *, approved: tuple[str, ...]
     ) -> None:
+        """Raise OAuthNetworkError for invalid bearer tokens, expiry, or unapproved scopes."""
         if not isinstance(payload, dict):
             raise OAuthNetworkError(
                 "token response is not an object", reason="oauth_exchange_failed"

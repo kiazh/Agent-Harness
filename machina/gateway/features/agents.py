@@ -71,6 +71,7 @@ async def agents_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _delegation(r: Any) -> dict[str, Any]:
+    """Serialize a delegation result, redacting failure diagnostics and summarizing approvals."""
     from machina.protocol import approval_summary
 
     return {
