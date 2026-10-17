@@ -448,15 +448,6 @@ class ChatGPTProvider(LLMProvider, RateLimitBinding):
         except Exception:
             return ""
 
-    def catalog_scope(self) -> tuple[str, str]:
-        """Account + endpoint scope for catalog metadata (R6-1).
-
-        ``context_window_for`` and the inherited ``LLMProvider.context_window``
-        both read this, so one account's live catalog window can never answer
-        another account's capacity check.
-        """
-        return self._account_hint(), self.BASE_URL
-
     async def _resolve_tokens(self) -> dict[str, Any]:
         return await asyncio.to_thread(chatgpt_auth.resolve_tokens, path=self._auth_path)
 

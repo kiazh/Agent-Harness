@@ -10,6 +10,7 @@ from contextvars import ContextVar
 
 from machina.core.exceptions import DelegationAccountingError, ToolError
 from machina.db.connection import db
+from machina.memory.redaction import redact_secrets
 from machina.observability.diagnostics import record_failure
 from machina.tools.base import registry
 
@@ -193,13 +194,7 @@ async def delegate(
         raise
     except Exception as e:
         logger.exception("delegate tool failed")
-        try:
-            from machina.memory.redaction import redact_secrets
-
-            message = redact_secrets(str(e)).text
-        except Exception:
-            message = "[redaction unavailable]"
-        raise ToolError(f"delegation failed: {message}") from None
+        raise ToolError(f"delegation failed: {redact_secrets(str(e)).text}") from None
     finally:
         delegation_deadline.reset(deadline_token)
 

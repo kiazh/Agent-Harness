@@ -13,14 +13,6 @@ from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
 class LLMProvider:
     """Base provider interface."""
 
-    def catalog_scope(self) -> tuple[str, str]:
-        """Account/base-URL scope for catalog metadata lookups (R6-1).
-
-        Providers with account-scoped live catalogs override this. The default
-        has no scope, so lookups keep the documented most-recent fallback.
-        """
-        return "", ""
-
     async def context_window(self, model: str | None = None) -> int:
         from machina.core.context_windows import context_window_for
 

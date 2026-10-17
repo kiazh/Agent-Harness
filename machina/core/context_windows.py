@@ -128,19 +128,21 @@ def context_window_for(model: str | None, provider=None) -> int:
         # leaf for its many lazy importers (see architecture guard).
         from machina.core.provider.catalog import window_for
 
+        # R6-1: account-scoped callers must pass the serving account so one
+        # account's live catalog never answers another account's capacity
+        # check. Duck-typed here (both the prompt gate and the provider method
+        # route through this function) so the provider class ceilings stay put.
+        hint = getattr(provider, "_account_hint", None)
         account_id = ""
-        base_url = ""
-        scope = getattr(provider, "catalog_scope", None)
-        if callable(scope):
+        if callable(hint):
             try:
-                account_id, base_url = scope()
+                account_id = str(hint() or "")
             except Exception:
-                account_id, base_url = "", ""
-        window = window_for(
-            name,
-            account_id=str(account_id or ""),
-            base_url=str(base_url or ""),
+                account_id = ""
+        base_url = str(
+            getattr(provider, "BASE_URL", "") or getattr(provider, "base_url", "") or ""
         )
+        window = window_for(name, account_id=account_id, base_url=base_url)
         if window:
             return window
     best = 0
