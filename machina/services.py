@@ -383,35 +383,24 @@ async def _estimate_next_request(session_id) -> int:
     # Context window: the same bounded recent-context read the agent uses.
     messages: list[dict[str, Any]] = []
     try:
-        # Compaction applies to the whole compressible session, so the
-        # threshold estimate must see the same volume. Reading only the newest
-        # 10 chunks made auto-compaction unreachable on large-context models
-        # (combined #35 / original #51).
-        all_chunks = await context_manager.get_all_chunks(session_id)
+        recent = await context_manager.get_recent_context(session_id, limit=10)
     except Exception as _boundary_error:
         # Optional fallback preserves the primary outcome; report no payload.
         record_failure("services._estimate_next_request", _boundary_error)
-        all_chunks = []
-    for chunk in reversed(all_chunks or []):
-        chunk_type = getattr(chunk, "chunk_type", "")
-        if chunk_type == "document":
-            # Indexed documents are outside the conversational compaction
-            # scope; compression preserves them.
+        recent = []
+    for entry in reversed(recent or []):
+        if not isinstance(entry, dict):
             continue
-        payload = getattr(chunk, "payload", None)
+        payload = entry.get("payload")
         if not isinstance(payload, dict):
             payload = {}
-        if chunk_type == "tool_call":
-            # Prompt assembly exposes only a bounded preview of a tool call,
-            # not the full stored payload (which can be 64 KiB).
-            content = str(payload.get("result_preview") or payload.get("content") or "")[:400]
-        else:
-            content = payload.get("content")
-            if not isinstance(content, str):
-                try:
-                    content = json.dumps(payload, ensure_ascii=False, default=str)
-                except Exception:
-                    content = str(payload)
+        content = payload.get("content")
+        if not isinstance(content, str):
+            try:
+                content = json.dumps(payload, ensure_ascii=False, default=str)
+            except Exception:
+                content = str(payload)
+        chunk_type = entry.get("type")
         if chunk_type == "assistant_message":
             role = "assistant"
         elif chunk_type == "tool_call":
@@ -519,6 +508,26 @@ def _record_compaction_status(
         record_failure("services.compaction_status", exc)
 
 
+async def _compressible_context_tokens(session_id) -> int:
+    """Stored tokens eligible for conversational compaction.
+
+    The next-request estimate intentionally mirrors prompt assembly (latest
+    window); the auto-compaction *trigger* must also see older compressible
+    chunks, or a large-context session never reaches the threshold
+    (combined #35 / original #51).
+    """
+    try:
+        chunks = await context_manager.get_all_chunks(session_id)
+    except Exception as _boundary_error:
+        record_failure("services.compressible_context", _boundary_error)
+        return 0
+    return sum(
+        int(getattr(chunk, "token_count", 0) or 0)
+        for chunk in (chunks or [])
+        if getattr(chunk, "chunk_type", "") != "document"
+    )
+
+
 async def maybe_auto_compact(session_id) -> dict | None:
     """Threshold-triggered rolling compaction at a safe turn boundary.
 
@@ -570,7 +579,9 @@ async def maybe_auto_compact(session_id) -> dict | None:
             threshold = float(config.get("compression_threshold") or 0.8)
         except Exception:
             threshold = 0.8
-        if await _estimate_next_request(session_id) < int(budget * threshold):
+        estimated = await _estimate_next_request(session_id)
+        compressible = await _compressible_context_tokens(session_id)
+        if max(estimated, compressible) < int(budget * threshold):
             _record_compaction_status("skipped", reason="below_threshold")
             return None
         # No-progress guard: skip when a previous run already compacted at
