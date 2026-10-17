@@ -185,10 +185,12 @@ async def connect_authorized(
             outcome = "completed"
             return {**config.public_view(), **service.manager.status(connector_id)}
     finally:
-        if request.approval_id:
-            await broker.permission_broker.complete(request.approval_id, outcome)
-        for variable, token in reversed(tokens):
-            variable.reset(token)
+        try:
+            if request.approval_id:
+                await broker.permission_broker.complete(request.approval_id, outcome)
+        finally:
+            for variable, token in reversed(tokens):
+                variable.reset(token)
 
 
 async def execute_call(service, name: str, arguments: dict, *, session_id: str, agent_id: str):
