@@ -13,7 +13,7 @@ import httpx
 
 from machina.core.config import config
 from machina.core.exceptions import ProviderError, ValidationError
-from machina.core.metrics import metrics
+from machina.core.metrics import record_llm_call as _record_llm_call
 from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
 from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
@@ -141,9 +141,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
             data = resp.json()
         except BaseException as e:
             duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_llm_call(
-                session_id="", model=model, duration_ms=duration_ms, is_error=True
-            )
+            _record_llm_call(model, duration_ms, is_error=True)
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -158,9 +156,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
             message = (
                 f"provider returned no choices for {model}: {detail or data or 'empty response'}"
             )
-            metrics.record_llm_call(
-                session_id="", model=model, duration_ms=duration_ms, is_error=True
-            )
+            _record_llm_call(model, duration_ms, is_error=True)
             await settlement.fail()
             audit_log("llm_call_error", provider=self.spec.name, model=model, error="no_choices")
             raise ProviderError(message)
@@ -171,13 +167,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
         tool_calls = message.get("tool_calls", []) or []
         usage = parse_openai_usage(data.get("usage", {}))
 
-        metrics.record_llm_call(
-            session_id="",
-            model=data.get("model", model),
-            duration_ms=duration_ms,
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
-        )
+        _record_llm_call(data.get("model", model), duration_ms, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
         await settlement.settle(usage, model=data.get("model", model))
         audit_log(
             "llm_call_complete",
@@ -300,12 +290,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
         except BaseException as e:
             # GeneratorExit/CancelledError are BaseException: settle before
             # re-raising so an early close cannot strand the reservation.
-            metrics.record_llm_call(
-                session_id="",
-                model=resolved_model,
-                duration_ms=(time.monotonic() - start) * 1000,
-                is_error=True,
-            )
+            _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, is_error=True)
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -337,13 +322,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
                 "estimated": True,
             }
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-        metrics.record_llm_call(
-            session_id="",
-            model=resolved_model,
-            duration_ms=(time.monotonic() - start) * 1000,
-            prompt_tokens=usage["prompt_tokens"],
-            completion_tokens=usage["completion_tokens"],
-        )
+        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, prompt_tokens=usage["prompt_tokens"], completion_tokens=usage["completion_tokens"],)
         await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete", provider=self.spec.name, model=model, tool_calls=len(tool_calls)

@@ -12,7 +12,7 @@ import httpx
 
 from machina.core.exceptions import ProviderError
 from machina.core.images import ollama_messages
-from machina.core.metrics import metrics
+from machina.core.metrics import record_llm_call as _record_llm_call
 from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
 from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
@@ -148,12 +148,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                 )
         except BaseException as e:
             duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_llm_call(
-                session_id="",
-                model=model or self.model,
-                duration_ms=duration_ms,
-                is_error=True,
-            )
+            _record_llm_call(model or self.model, duration_ms, is_error=True)
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -165,13 +160,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         tool_calls = message.get("tool_calls", []) or []
         usage = parse_ollama_usage(data.get("prompt_eval_count"), data.get("eval_count"))
 
-        metrics.record_llm_call(
-            session_id="",
-            model=data.get("model", model or self.model),
-            duration_ms=duration_ms,
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
-        )
+        _record_llm_call(data.get("model", model or self.model), duration_ms, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
 
         # Finish usage reservation
         await settlement.settle(usage, model=data.get("model", model or self.model))
@@ -331,12 +320,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                     f"Ollama stream ended without a terminal done frame for {model or self.model}"
                 )
         except BaseException as e:
-            metrics.record_llm_call(
-                session_id="",
-                model=resolved_model,
-                duration_ms=(time.monotonic() - start) * 1000,
-                is_error=True,
-            )
+            _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, is_error=True)
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -351,13 +335,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         # exist for local models; the ledger still labels the basis).
         usage = parse_ollama_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
 
-        metrics.record_llm_call(
-            session_id="",
-            model=resolved_model,
-            duration_ms=(time.monotonic() - start) * 1000,
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
-        )
+        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
         # Finish usage reservation
         await settlement.settle(usage, model=resolved_model)
 

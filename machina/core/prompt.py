@@ -27,6 +27,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import uuid
 from typing import Any
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "_SKILL_PAGE_RE",
     "stale_tool_preview",
     "_stale_tool_preview",
+    "_ensure_tool_call_id",
     "turn_model",
     "_turn_model",
     "effective_turn_budget",
@@ -88,6 +90,19 @@ _REDUCED_VIEW_TAIL_RE = re.compile(r"\n\[machina view: reduced by [a-z_]+[^\]\n]
 # thinking requires the original signed ``thinking`` blocks alongside
 # ``tool_use``; normalizing to OpenAI-style shapes would drop them).
 PROVIDER_CONTENT_KEY = "provider_content"
+
+
+def _ensure_tool_call_id(tool_call: dict[str, Any]) -> str:
+    """Return a non-empty, turn-unique tool-call id and persist it.
+
+    Providers that omit ids (notably Ollama/OpenAI-compatible gateways) must
+    still produce a matching assistant tool_call id and tool result id on the
+    next projection round. A per-batch index repeats every ReAct iteration and
+    collides in UIs keyed by call id.
+    """
+    call_id = str(tool_call.get("id") or f"call-{uuid.uuid4().hex}")
+    tool_call["id"] = call_id
+    return call_id
 
 
 def stale_tool_preview(content: str) -> str:

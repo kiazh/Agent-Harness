@@ -13,7 +13,7 @@ import httpx
 
 from machina.core.config import config
 from machina.core.exceptions import ProviderError, RateLimitError, ValidationError
-from machina.core.metrics import metrics
+from machina.core.metrics import record_llm_call as _record_llm_call
 from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
 from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
@@ -231,12 +231,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                 raise last_err or RuntimeError("LLM call failed with no response")
         except BaseException as e:
             duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_llm_call(
-                session_id="",
-                model=model,
-                duration_ms=duration_ms,
-                is_error=True,
-            )
+            _record_llm_call(model, duration_ms, is_error=True)
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -254,9 +249,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                 f"provider returned no choices for {used_model}: "
                 f"{detail or data or 'empty response'}"
             )
-            metrics.record_llm_call(
-                session_id="", model=used_model, duration_ms=duration_ms, is_error=True
-            )
+            _record_llm_call(used_model, duration_ms, is_error=True)
             await settlement.fail()
             audit_log(
                 "llm_call_error",
@@ -272,13 +265,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
         tool_calls = message.get("tool_calls", []) or []
         usage = parse_openai_usage(data.get("usage", {}))
 
-        metrics.record_llm_call(
-            session_id="",
-            model=data.get("model", model),
-            duration_ms=duration_ms,
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
-        )
+        _record_llm_call(data.get("model", model), duration_ms, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
 
         # Finish usage reservation
         await settlement.settle(usage, model=data.get("model", model))
@@ -462,12 +449,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                     # Account-wide daily quota exhausted: no free candidate can
                     # succeed, so stop now instead of sleeping through the rest
                     # of the chain and burning more of the quota.
-                    metrics.record_llm_call(
-                        session_id="",
-                        model=resolved_model,
-                        duration_ms=(time.monotonic() - start) * 1000,
-                        is_error=True,
-                    )
+                    _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, is_error=True)
                     await settlement.fail()
                     audit_log(
                         "llm_stream_rate_limited",
@@ -495,12 +477,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                     except BaseException:
                         # Cancel/close while waiting for the next fallback
                         # candidate must settle the shared reservation.
-                        metrics.record_llm_call(
-                            session_id="",
-                            model=resolved_model,
-                            duration_ms=(time.monotonic() - start) * 1000,
-                            is_error=True,
-                        )
+                        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, is_error=True)
                         await settlement.fail()
                         raise
                     continue
@@ -556,12 +533,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                         break
                     except Exception as e2:
                         e = e2
-                metrics.record_llm_call(
-                    session_id="",
-                    model=resolved_model,
-                    duration_ms=(time.monotonic() - start) * 1000,
-                    is_error=True,
-                )
+                _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, is_error=True)
                 await settlement.fail()
                 audit_log("llm_stream_error", provider="openrouter", model=cand, error=str(e))
                 raise e
@@ -569,12 +541,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                 # GeneratorExit/CancelledError at a text yield or inside the
                 # SDK stream bypass ``except Exception``; settle before the
                 # generator closes so the reservation is not stranded.
-                metrics.record_llm_call(
-                    session_id="",
-                    model=resolved_model,
-                    duration_ms=(time.monotonic() - start) * 1000,
-                    is_error=True,
-                )
+                _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, is_error=True)
                 await settlement.fail()
                 if not isinstance(exc, Exception):
                     raise
@@ -607,13 +574,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
             usage["prompt_tokens"] + usage["completion_tokens"],
         )
 
-        metrics.record_llm_call(
-            session_id="",
-            model=resolved_model,
-            duration_ms=(time.monotonic() - start) * 1000,
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
-        )
+        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
         # Finish usage reservation
         await settlement.settle(usage, model=resolved_model)
 

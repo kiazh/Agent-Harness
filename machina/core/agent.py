@@ -34,6 +34,7 @@ from machina.core.models import AgentResponse, LLMResponse, StreamEvent, ToolDef
 from machina.core.projection import project_retrieved
 from machina.core.prompt import (
     _effective_turn_budget,
+    _ensure_tool_call_id,
     _request_context_tokens,
     _stale_tool_preview,
     _turn_model,
@@ -95,7 +96,6 @@ __all__ = [
     "stale_tool_preview",
     "tool_message_limit",
 ]
-
 logger = logging.getLogger(__name__)
 _growth_episode: ContextVar[uuid.UUID | None] = ContextVar("growth_episode", default=None)
 _rsi_choice: ContextVar[dict | None] = ContextVar("rsi_choice", default=None)
@@ -276,19 +276,6 @@ def _tool_outcome(item: dict[str, Any]) -> str:
     if item.get("_failed") or preview.startswith("Error:"):
         return "failed"
     return "completed"
-
-
-def _ensure_tool_call_id(tool_call: dict[str, Any]) -> str:
-    """Return a non-empty, turn-unique tool-call id and persist it.
-
-    Providers that omit ids (notably Ollama/OpenAI-compatible gateways) must
-    still produce a matching assistant tool_call id and tool result id on the
-    next projection round. A per-batch index is not enough: it repeats every
-    ReAct iteration and collides in UIs keyed by call id.
-    """
-    call_id = str(tool_call.get("id") or f"call-{uuid.uuid4().hex}")
-    tool_call["id"] = call_id
-    return call_id
 
 
 class BaseReActAgent:

@@ -14,7 +14,7 @@ import httpx
 from machina.core.config import config
 from machina.core.exceptions import ProviderError, ValidationError
 from machina.core.images import anthropic_content
-from machina.core.metrics import metrics
+from machina.core.metrics import record_llm_call as _record_llm_call
 from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
 from machina.core.prompt import PROVIDER_CONTENT_KEY
 from machina.core.provider._log import logger
@@ -306,9 +306,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
             data = resp.json()
         except BaseException as e:
             duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_llm_call(
-                session_id="", model=model, duration_ms=duration_ms, is_error=True
-            )
+            _record_llm_call(model, duration_ms, is_error=True)
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -319,9 +317,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
         if data.get("type") == "error" or "content" not in data:
             error = data.get("error") or {}
             detail = error.get("message") if isinstance(error, dict) else str(error)
-            metrics.record_llm_call(
-                session_id="", model=model, duration_ms=duration_ms, is_error=True
-            )
+            _record_llm_call(model, duration_ms, is_error=True)
             await settlement.fail()
             audit_log(
                 "llm_call_error", provider=self.PROVIDER_NAME, model=model, error="no_content"
@@ -330,13 +326,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
 
         content, tool_calls = self._from_response_blocks(data.get("content", []))
         usage = parse_anthropic_usage(data.get("usage", {}))
-        metrics.record_llm_call(
-            session_id="",
-            model=data.get("model", model),
-            duration_ms=duration_ms,
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
-        )
+        _record_llm_call(data.get("model", model), duration_ms, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
         await settlement.settle(usage, model=data.get("model", model))
         audit_log(
             "llm_call_complete",
@@ -515,12 +505,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
         except BaseException as e:
             # GeneratorExit/CancelledError bypass ``except Exception``; settle
             # before re-raising so an early close cannot strand the reservation.
-            metrics.record_llm_call(
-                session_id="",
-                model=resolved_model,
-                duration_ms=(time.monotonic() - start) * 1000,
-                is_error=True,
-            )
+            _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, is_error=True)
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -560,13 +545,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
         # placeholder in message_start.
         stream_usage["output_tokens"] = output_tokens
         usage = parse_anthropic_usage(stream_usage)
-        metrics.record_llm_call(
-            session_id="",
-            model=resolved_model,
-            duration_ms=(time.monotonic() - start) * 1000,
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
-        )
+        _record_llm_call(resolved_model, (time.monotonic() - start) * 1000, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0),)
         await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete",

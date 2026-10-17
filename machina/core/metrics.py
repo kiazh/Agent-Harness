@@ -11,7 +11,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
-__all__ = ["MetricsCollector", "metrics", "timed"]
+__all__ = ["MetricsCollector", "metrics", "record_llm_call", "timed"]
 
 logger = logging.getLogger("machina.metrics")
 
@@ -275,6 +275,30 @@ class MetricsCollector:
 
 # Global singleton
 metrics = MetricsCollector()
+
+
+def record_llm_call(
+    model: str,
+    duration_ms: float,
+    *,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    is_error: bool = False,
+) -> None:
+    """One compact provider call-metric seam (success or error).
+
+    Kept outside ``core/provider`` so provider modules do not each carry the
+    same multi-line recording boilerplate (god-file/package ratchets).
+    """
+    metrics.record_llm_call(
+        session_id="",
+        model=model,
+        duration_ms=duration_ms,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        is_error=is_error,
+    )
+
 
 
 @contextmanager
