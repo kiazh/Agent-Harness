@@ -127,7 +127,8 @@ async def web_research(query: str, limit: int = 3) -> str:
                         raise ToolError("No document chunks were saved")
                 saved += 1
                 state = (
-                    "already saved in this session; saved snapshot"
+                    "already saved in this session; returning the stored snapshot "
+                    "(not re-fetched; freshness/completeness not verified)"
                     if already_indexed
                     else "saved to this session"
                 )
