@@ -140,8 +140,16 @@ def _clean_terms(value: Any, *, limit: int, max_chars: int = MAX_TERM_CHARS) -> 
             continue
         try:
             text = redact_secrets(text).text.strip()
-        except Exception:  # redaction must fail closed without losing routing
-            text = ""
+        except Exception as exc:  # redaction must fail closed without leaking
+            # An explicit, bounded failure signal: the term is dropped (never
+            # emitted raw), and the drop is distinguishable from an empty
+            # model value in observability (combined #55 / original #68).
+            log_event(
+                "skills.expand.term_redaction_failed",
+                level="warning",
+                error=type(exc).__name__,
+            )
+            continue
         text = text[:max_chars].strip()
         if not text:
             continue
@@ -159,7 +167,9 @@ def build_expansion_prompt(query: str) -> str:
     """Build the single bounded routing prompt for one user request."""
     families = ", ".join(sorted(TASK_FAMILIES))
     capabilities = ", ".join(sorted(CAPABILITIES))
-    body = (query or "")[:MAX_QUERY_CHARS]
+    # Redact before the size cut: a token crossing the boundary must not
+    # survive as a recognizable partial credential (combined #54 / #67).
+    body = redact_secrets(query or "").text[:MAX_QUERY_CHARS]
     return (
         "You are a catalog router. Split the user request into routing vocabulary for a "
         "deterministic skill picker. Return ONLY a YAML (or JSON) mapping, no prose and no "
@@ -307,9 +317,10 @@ async def expand_query(
             level="warning",
             **_event_fields(normalized, error=type(exc).__name__),
         )
-        expansion = EMPTY_EXPANSION
-        _cache_put(normalized, expansion, now)
-        return expansion
+        # Do not cache a transient failure: a provider outage must not make
+        # every equivalent query skip retrying for the full TTL (combined #53
+        # / original #66).
+        return EMPTY_EXPANSION
 
     _cache_put(normalized, expansion, now)
     log_event(
