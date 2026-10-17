@@ -362,8 +362,8 @@ class LearningReviewer:
             "Return only JSON with name, description, triggers (array of short strings), "
             "and content (concrete steps). Do not include secrets, personal data, or "
             "instructions unrelated to the workflow. Do not invent actions not evidenced here.\n"
-            f"User: {redact_secrets(user_message[:1200]).text}\n"
-            f"Result: {redact_secrets(response[:1200]).text}\n"
+            f"User: {redact_secrets(user_message).text[:1200]}\n"
+            f"Result: {redact_secrets(response).text[:1200]}\n"
         )
         if tool_calls:
             names = [str(call.get("tool", ""))[:60] for call in tool_calls[:8]]
