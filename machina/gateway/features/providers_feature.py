@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 def _catalog_model_view(models: list[Any]) -> list[dict[str, Any]]:
     return [model.to_dict() for model in models]
 
@@ -305,8 +306,7 @@ async def providers_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     models: list[dict[str, Any]] = []
     try:
         pulled = await asyncio.to_thread(store.fetch_models, entry["base_url"], api_key=key)
-        if pulled:
-            models = await asyncio.to_thread(store.save_models, name, pulled)
+        models = await asyncio.to_thread(store.save_models, name, pulled)
     except Exception as exc:
         fetch_error = str(exc) or type(exc).__name__
     return {

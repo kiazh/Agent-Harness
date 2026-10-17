@@ -323,12 +323,15 @@ def add_provider(
     with _store_lock():
         store = load_store()
         previous = _entry_or_none(store, normalized) or {}
+        same_endpoint = previous.get("base_url") == url
         entry: dict[str, Any] = {
             "base_url": url,
             "api_key_env": api_key_env(normalized),
-            "models": previous.get("models") if isinstance(previous.get("models"), list) else [],
-            "models_fetched_at": previous.get("models_fetched_at"),
-            "default_model": previous.get("default_model"),
+            "models": previous.get("models")
+            if same_endpoint and isinstance(previous.get("models"), list)
+            else [],
+            "models_fetched_at": previous.get("models_fetched_at") if same_endpoint else None,
+            "default_model": previous.get("default_model") if same_endpoint else None,
             "created_at": previous.get("created_at")
             or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
@@ -449,8 +452,8 @@ def save_models(name: str, models: Any) -> list[dict[str, Any]]:
         rows = _normalize_models(models)
         entry["models"] = rows
         entry["models_fetched_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        if rows and not entry.get("default_model"):
-            entry["default_model"] = rows[0]["id"]
+        if entry.get("default_model") not in {row["id"] for row in rows}:
+            entry["default_model"] = rows[0]["id"] if rows else None
         _save_store(store)
     return rows
 
