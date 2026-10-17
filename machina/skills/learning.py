@@ -757,13 +757,16 @@ class LearningReviewer:
         """Post-hoc review: undo an approved proposal and its published skill.
 
         Source-guarded: only the artifact whose ``source`` names this review is
-        deleted; a foreign skill occupying the same name is merely disabled.
-        The review row is then marked ``reverted``; any non-``approved`` status
-        is an idempotent no-op. Ownership checks match :meth:`approve`, and the
-        skill is acted on before the status commits so a failure leaves the
-        skill off, never live against a reverted review.
+        deleted; a foreign skill occupying the same name is left untouched.
+        The status transition commits before the filesystem action, so a
+        database failure can never leave a deleted skill behind an ``approved``
+        row. If cleanup then fails, the revert is still durably recorded; a
+        later revert call retries the ownership-guarded cleanup.
+        Ownership checks match :meth:`approve`.
         """
         source = f"learning-review:{review_id}"
+        transitioned = False
+        name = ""
         async with db.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
@@ -773,30 +776,56 @@ class LearningReviewer:
                     raise LookupError("learning proposal not found")
                 if row["agent_id"] != agent_id:
                     raise PermissionError("learning proposal belongs to a different agent")
-                if row["status"] != "approved":
+                status = row["status"]
+                if status not in ("approved", "reverted"):
                     return self._serialize(row)
                 name = row["name"]
-                removed = False
-                if name:
-                    self.registry.load_all()
-                    skill = self.registry.get(name)
-                    if skill is not None and skill.source == source:
-                        removed = self.registry.delete_skill(name)
-                    elif skill is not None:
-                        self.registry.set_enabled(name, False)
-                reverted = await conn.fetchrow(
-                    "UPDATE learning_reviews SET status = 'reverted', reviewed_at = now() "
-                    "WHERE id = $1 RETURNING *",
-                    review_id,
-                )
+                if status == "approved":
+                    reverted = await conn.fetchrow(
+                        "UPDATE learning_reviews SET status = 'reverted', reviewed_at = now() "
+                        "WHERE id = $1 RETURNING *",
+                        review_id,
+                    )
+                    transitioned = True
+                else:
+                    # Idempotent retry: the durable transition already happened;
+                    # still retry cleanup for a prior filesystem failure.
+                    reverted = row
+
+        # The revert is committed. Only now may the artifact change; a failure
+        # here surfaces to the caller but leaves the row honestly reverted.
+        removed = False
+        cleanup_error: Exception | None = None
+        if name:
+            try:
+                self.registry.load_all()
+                skill = self.registry.get(name)
+                if skill is not None and skill.source == source:
+                    removed = self.registry.delete_skill(name)
+                # A same-named skill from another source is not this review's
+                # artifact. Leave it untouched: disabling it would corrupt an
+                # unrelated replacement (combined #6 / original #37).
+            except Exception as error:
+                cleanup_error = error
+                logger.exception("failed to remove reverted learning artifact %s", name)
                 _audit(
-                    "learning_reverted",
+                    "learning_revert_artifact_failed",
                     review_id=str(review_id),
                     agent_id=agent_id,
                     skill=name,
-                    removed=removed,
+                    error=type(error).__name__,
                 )
-                return self._serialize(reverted)
+        if transitioned:
+            _audit(
+                "learning_reverted",
+                review_id=str(review_id),
+                agent_id=agent_id,
+                skill=name,
+                removed=removed,
+            )
+        if cleanup_error is not None:
+            raise cleanup_error
+        return self._serialize(reverted)
 
     async def reject(self, review_id: uuid.UUID, *, agent_id: str) -> dict[str, Any]:
         row = await db.fetchrow(
