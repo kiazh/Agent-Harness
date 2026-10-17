@@ -24,11 +24,26 @@ from machina.core.context import context_manager
 from machina.core.exceptions import DelegationAccountingError
 from machina.core.session import session_manager
 from machina.db.connection import db
+from machina.memory.redaction import redact_secrets
 from machina.observability.diagnostics import record_failure
 
 __all__ = ["DelegationResult", "Orchestrator", "AgentNotFoundError"]
 
 logger = logging.getLogger(__name__)
+
+
+def _redacted(text: str) -> str:
+    """Redact secrets from diagnostic text before persistence or display.
+
+    Delegated-child exceptions can echo bearer tokens, API keys, or DSNs.
+    Every path that stores or returns ``str(exc)`` must pass through the same
+    redaction registry as the other transcript surfaces; if redaction itself
+    fails, emit an explicit placeholder rather than the raw text.
+    """
+    try:
+        return redact_secrets(str(text)).text
+    except Exception:
+        return "[redaction unavailable]"
 delegation_depth: ContextVar[int] = ContextVar("delegation_depth", default=0)
 delegation_deadline: ContextVar[float | None] = ContextVar("delegation_deadline", default=None)
 
@@ -367,7 +382,8 @@ class Orchestrator:
                 # never ran; re-raise so the finally archives/closes cleanly.
                 raise
             logger.exception("Delegation to %s failed", agent_name)
-            detail = "delegation timed out" if isinstance(e, TimeoutError) else str(e)
+            raw_detail = "delegation timed out" if isinstance(e, TimeoutError) else str(e)
+            detail = _redacted(raw_detail)
             try:
                 tokens = await self._charged_child_tokens(child.id, agent_name)
             except DelegationAccountingError as accounting_error:
@@ -612,7 +628,7 @@ class Orchestrator:
             """,
             message_id,
             status,
-            response,
+            _redacted(response),
             tokens,
         )
 
@@ -631,7 +647,7 @@ class Orchestrator:
                 "fromAgent": r["from_agent"],
                 "toAgent": r["to_agent"],
                 "task": r["task"],
-                "response": r["response"],
+                "response": _redacted(r["response"]) if r["response"] is not None else None,
                 "status": r["status"],
                 "tokens": r["tokens_used"],
                 "createdAt": r["created_at"].isoformat() if r["created_at"] else None,

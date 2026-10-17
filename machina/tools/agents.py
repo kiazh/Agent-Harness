@@ -193,7 +193,13 @@ async def delegate(
         raise
     except Exception as e:
         logger.exception("delegate tool failed")
-        raise ToolError(f"delegation failed: {e}") from None
+        try:
+            from machina.memory.redaction import redact_secrets
+
+            message = redact_secrets(str(e)).text
+        except Exception:
+            message = "[redaction unavailable]"
+        raise ToolError(f"delegation failed: {message}") from None
     finally:
         delegation_deadline.reset(deadline_token)
 
