@@ -92,11 +92,17 @@ _UPSTREAM_TRUNCATION_MARKERS = {
 }
 
 
-def _upstream_truncated(tool_name: str, result_str: str) -> bool | None:
-    """``True``/``False`` for audited producers, ``None`` when unknown."""
+def _upstream_truncated(tool_name: str, result_str: str) -> bool:
+    """Whether a producer already truncated its own output.
+
+    Unknown tools have no audited marker; that means "not observed as
+    upstream-truncated", not "unknown completeness". Returning None here
+    disabled reducers and verified artifact views for every unlisted tool and
+    stored complete=NULL (combined #31).
+    """
     marker = _UPSTREAM_TRUNCATION_MARKERS.get(tool_name)
     if marker is None:
-        return None
+        return False
     return marker in result_str
 
 

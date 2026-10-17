@@ -383,24 +383,35 @@ async def _estimate_next_request(session_id) -> int:
     # Context window: the same bounded recent-context read the agent uses.
     messages: list[dict[str, Any]] = []
     try:
-        recent = await context_manager.get_recent_context(session_id, limit=10)
+        # Compaction applies to the whole compressible session, so the
+        # threshold estimate must see the same volume. Reading only the newest
+        # 10 chunks made auto-compaction unreachable on large-context models
+        # (combined #35 / original #51).
+        all_chunks = await context_manager.get_all_chunks(session_id)
     except Exception as _boundary_error:
         # Optional fallback preserves the primary outcome; report no payload.
         record_failure("services._estimate_next_request", _boundary_error)
-        recent = []
-    for entry in reversed(recent or []):
-        if not isinstance(entry, dict):
+        all_chunks = []
+    for chunk in reversed(all_chunks or []):
+        chunk_type = getattr(chunk, "chunk_type", "")
+        if chunk_type == "document":
+            # Indexed documents are outside the conversational compaction
+            # scope; compression preserves them.
             continue
-        payload = entry.get("payload")
+        payload = getattr(chunk, "payload", None)
         if not isinstance(payload, dict):
             payload = {}
-        content = payload.get("content")
-        if not isinstance(content, str):
-            try:
-                content = json.dumps(payload, ensure_ascii=False, default=str)
-            except Exception:
-                content = str(payload)
-        chunk_type = entry.get("type")
+        if chunk_type == "tool_call":
+            # Prompt assembly exposes only a bounded preview of a tool call,
+            # not the full stored payload (which can be 64 KiB).
+            content = str(payload.get("result_preview") or payload.get("content") or "")[:400]
+        else:
+            content = payload.get("content")
+            if not isinstance(content, str):
+                try:
+                    content = json.dumps(payload, ensure_ascii=False, default=str)
+                except Exception:
+                    content = str(payload)
         if chunk_type == "assistant_message":
             role = "assistant"
         elif chunk_type == "tool_call":
