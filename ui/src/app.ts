@@ -2117,6 +2117,9 @@ export class App implements FeatureHost {
 			return { ok: true, message: "workspace switched" };
 		}
 		this.workspaceLayoutActive = true;
+		// The explorer tree belongs to the old root; root reload alone kept
+		// expanded child records from A visible under B (combined #28).
+		integration.explorerModel.reset();
 		let closed = 0;
 		let kept = 0;
 		for (const document of integration.store.documents()) {

@@ -508,3 +508,59 @@ test("selection clamps predictably when the selected entry disappears", async ()
 		"the fallback lands on the closest visible neighbor, never silently elsewhere",
 	);
 });
+
+test("reset drops expanded children from the previous workspace", async () => {
+	const { list } = recordingList(standardTree());
+	const model = new ExplorerModel(list);
+	await model.load();
+	await model.expand("src");
+	assert.equal(model.directory("src")?.state, "loaded");
+
+	model.reset();
+	assert.equal(model.directory("src"), undefined);
+	await model.load();
+	assert.equal(
+		model.visibleNodes().some((node) => node.id.startsWith("src/")),
+		false,
+		"old-root children must not survive a root switch",
+	);
+});
+
+test("backend scan truncation survives without a next cursor", async () => {
+	const { list } = recordingList({
+		"": () => page([entry("a.ts", "file")], { nextCursor: null, truncated: true }),
+	});
+	const model = new ExplorerModel(list);
+	await model.load();
+	assert.equal(model.directory("")?.truncated, true);
+});
+
+test("a stale load-more finisher cannot clear a newer spinner", async () => {
+	const pending: Array<(value: WorkspaceListResult) => void> = [];
+	const list: ExplorerListFn = async (_path, cursor) => {
+		if (cursor === undefined) {
+			return page([entry("docs", "directory")], { nextCursor: "1" });
+		}
+		return await new Promise<WorkspaceListResult>((resolve) => pending.push(resolve));
+	};
+	const model = new ExplorerModel(list);
+	await model.load();
+
+	const first = model.loadMore("");
+	assert.equal(model.directory("")?.loadingMore, true);
+	await model.reload(""); // generation bump; invalidates first
+	const second = model.loadMore("");
+	assert.equal(model.directory("")?.loadingMore, true);
+
+	pending[0]?.(page([entry("old.ts", "file")]));
+	await first;
+	assert.equal(
+		model.directory("")?.loadingMore,
+		true,
+		"the stale finisher cleared the newer request's loading flag",
+	);
+
+	pending[1]?.(page([entry("new.ts", "file")]));
+	await second;
+	assert.equal(model.directory("")?.loadingMore, false);
+});

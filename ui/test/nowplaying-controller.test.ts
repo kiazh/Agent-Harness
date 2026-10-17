@@ -391,3 +391,31 @@ test("MCH-006 a stale on resolving after a newer off cannot resurrect visibility
 	writes.at(-1)!({ ok: true });
 	await drainMicrotasks();
 });
+
+test("stop during initialization prevents polling from restarting", async () => {
+	const coordinator = new AnimationCoordinator(() => {});
+	const bar = new NowPlayingBar(coordinator);
+	let resolvePending: ((value: unknown) => void) | undefined;
+	const controller = new NowPlayingController({
+		bar,
+		request: async <T,>() =>
+			new Promise((resolve) => {
+				resolvePending = resolve as (value: unknown) => void;
+			}) as Promise<T>,
+	});
+	try {
+		const starting = controller.initialize({ nowplaying_enabled: true });
+		await Promise.resolve();
+		controller.stop();
+		resolvePending?.(PLAYING);
+		await starting;
+		assert.equal(
+			(controller as unknown as { pollTimer?: unknown }).pollTimer,
+			undefined,
+			"initialize restarted polling after an explicit stop",
+		);
+	} finally {
+		controller.stop();
+		coordinator.dispose();
+	}
+});

@@ -397,3 +397,8 @@ test("subsequenceMatches is case-insensitive and empty queries match everything"
 	assert.equal(subsequenceMatches("main.ts", "mtz"), false);
 	assert.equal(subsequenceMatches("other.md", "mn"), false);
 });
+
+test("local quick-open filter uses casefold-compatible matching", () => {
+	assert.equal(subsequenceMatches("straße.ts", "strasse"), true);
+	assert.equal(subsequenceMatches("STRASSE.ts", "strasse"), true);
+});

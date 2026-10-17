@@ -83,6 +83,10 @@ export class NowPlayingController {
 	/** Stop polling (exit, or while the bar is disabled). */
 	stop(): void {
 		this.seq += 1;
+		// Initialize captures the transition before its first await; bumping
+		// it makes a refresh that lands after stop() unable to start polling
+		// (combined #36 / original #52).
+		this.transition += 1;
 		if (!this.pollTimer) return;
 		clearInterval(this.pollTimer);
 		this.pollTimer = undefined;

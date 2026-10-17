@@ -105,6 +105,8 @@ export type ExplorerVisibleNode = ExplorerEntryNode | ExplorerLoadMoreNode;
 
 interface DirectoryRecord extends ExplorerDirectoryView {
 	generation: number;
+	/** Token for the current load-more request; stale finishers cannot clear it. */
+	moreRequest: number;
 }
 
 function newRecord(path: string): DirectoryRecord {
@@ -118,6 +120,7 @@ function newRecord(path: string): DirectoryRecord {
 		exclusions: [],
 		loadingMore: false,
 		generation: 0,
+		moreRequest: 0,
 	};
 }
 
@@ -213,6 +216,23 @@ export class ExplorerModel {
 		}
 	}
 
+	/**
+	 * Reset the entire tree for a workspace identity change.
+	 *
+	 * Root reloading alone kept child records (and their expanded/loaded
+	 * state) from the previous root, so a same-named directory displayed the
+	 * old root's children (combined #28 / original #48).
+	 */
+	reset(): void {
+		for (const record of this.records.values()) record.generation += 1;
+		this.records.clear();
+		this.records.set("", newRecord(""));
+		this.selectedEntryId = null;
+		this.selectionHint = 0;
+		this.lastExclusions = [];
+		this.emit();
+	}
+
 	/** Load the root listing. */
 	async load(): Promise<void> {
 		await this.reload("");
@@ -225,6 +245,7 @@ export class ExplorerModel {
 		record.state = "loading";
 		record.entries = [];
 		record.loadingMore = false;
+		record.moreRequest += 1;
 		record.refused = undefined;
 		record.error = undefined;
 		this.reconcileSelection();
@@ -278,6 +299,7 @@ export class ExplorerModel {
 		}
 		const cursor = record.nextCursor;
 		const generation = record.generation;
+		const request = ++record.moreRequest;
 		record.loadingMore = true;
 		this.emit();
 		try {
@@ -291,15 +313,19 @@ export class ExplorerModel {
 			} else {
 				record.entries = [...record.entries, ...result.entries];
 				record.nextCursor = result.nextCursor ?? null;
-				record.truncated = record.nextCursor !== null;
+				record.truncated = record.truncated || result.truncated === true;
 				record.exclusions = [...(result.exclusions ?? [])];
 				if (record.exclusions.length > 0) this.lastExclusions = [...record.exclusions];
 			}
 		} catch {
 			// A failed page keeps the loaded rows; the cursor stays for a retry.
 		} finally {
-			record.loadingMore = false;
-			this.emit();
+			// Only the request that still owns the flag may clear it. A stale
+			// finisher used to hide a newer page's spinner (combined #32).
+			if (record.moreRequest === request) {
+				record.loadingMore = false;
+				this.emit();
+			}
 		}
 	}
 
@@ -322,6 +348,7 @@ export class ExplorerModel {
 			record.refused = undefined;
 			record.error = undefined;
 			record.loadingMore = false;
+			record.moreRequest += 1;
 			record.state = "unloaded";
 			if (record.path === "" || record.expanded) reloadPaths.push(record.path);
 		}
@@ -394,7 +421,7 @@ export class ExplorerModel {
 	private applyPage(record: DirectoryRecord, result: WorkspaceListResult): void {
 		record.entries = [...result.entries];
 		record.nextCursor = result.nextCursor ?? null;
-		record.truncated = record.nextCursor !== null;
+		record.truncated = result.truncated === true;
 		record.exclusions = [...(result.exclusions ?? [])];
 		record.refused = result.refused;
 		record.state = result.refused ? "error" : "loaded";

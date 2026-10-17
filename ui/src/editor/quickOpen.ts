@@ -81,10 +81,22 @@ export const QUICK_OPEN_QUERY_MAX = 200;
  * Fuzzy subsequence containment for the local as-you-type filter
  * (case-insensitive; an empty query matches everything).
  */
+function casefold(value: string): string {
+	// Python's casefold (used by the backend matcher) maps ß/ẞ to ss and
+	// ligature-like forms; NFKC + these mappings keep the local suggestion
+	// filter from hiding results the backend correctly matched.
+	return value
+		.normalize("NFKC")
+		.toLowerCase()
+		.replace(/ß/g, "ss")
+		.replace(/ẞ/g, "ss")
+		.replace(/ſ/g, "s");
+}
+
 export function subsequenceMatches(name: string, query: string): boolean {
-	const needle = query.toLowerCase();
+	const needle = casefold(query);
 	if (!needle) return true;
-	const haystack = name.toLowerCase();
+	const haystack = casefold(name);
 	if (haystack.includes(needle)) return true;
 	let position = 0;
 	for (const char of haystack) {
