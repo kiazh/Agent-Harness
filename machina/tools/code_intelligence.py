@@ -30,6 +30,7 @@ this tool never raises for workspace states and never reads files itself.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from typing import Any
@@ -142,7 +143,10 @@ def _shrink(payload: dict[str, Any], result: dict[str, Any]) -> Any | None:
                 low = mid + 1
             else:
                 high = mid - 1
-        return _trimmed(result, key, best)
+        candidate = _trimmed(result, key, best)
+        # Re-verify the final candidate: the binary search assumes _fits is
+        # monotonic in keep, which is true for a prefix but is cheap to check.
+        return candidate if _fits(_with_truncation(payload, candidate)) else None
     contents = result.get("contents")
     if isinstance(contents, str):
         low, high, best = 0, len(contents), None
@@ -154,8 +158,32 @@ def _shrink(payload: dict[str, Any], result: dict[str, Any]) -> Any | None:
             else:
                 high = mid - 1
         if best is not None:
-            return {**result, "contents": contents[:best]}
+            candidate = {**result, "contents": contents[:best]}
+            return candidate if _fits(_with_truncation(payload, candidate)) else None
     return None
+
+
+def _truncation_refusal(payload: dict[str, Any], result: Any) -> dict[str, Any]:
+    """Explain a result that could not be shrunk instead of emitting null.
+
+    The envelope still carries ``result: null`` (the contract has no partial
+    representation for this shape), but the reason, operation, original size
+    and a digest distinguish "too large" from "server returned nothing".
+    """
+    rendered = _serialize(result)
+    info = {
+        "reason": "result_too_large",
+        "operation": payload.get("operation"),
+        "resultType": type(result).__name__,
+        "originalBytes": len(rendered.encode("utf-8")),
+        "budgetBytes": MAX_RESULT_BYTES,
+        "digest": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+    }
+    candidate = _with_truncation({**payload, "truncation": info}, None)
+    if _fits(candidate):
+        return candidate
+    # The fixed envelope itself is exceptional; never exceed the bound.
+    return _with_truncation(payload, None)
 
 
 def _bounded(payload: dict[str, Any]) -> str:
@@ -168,6 +196,8 @@ def _bounded(payload: dict[str, Any]) -> str:
         shrunk = _shrink(payload, result)
         if shrunk is not None:
             return _serialize(_with_truncation(payload, shrunk))
+    if result is not None:
+        return _serialize(_truncation_refusal(payload, result))
     return _serialize(_with_truncation(payload, None))
 
 
