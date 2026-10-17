@@ -25,7 +25,11 @@ from machina.skills.query_expansion import Expansion, current_expansion, merge_i
 from machina.skills.registry import Skill, SkillRegistry
 from machina.skills.revisions import RevisionRegistry, task_state_revision
 
-_INDEXES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+#: Cache keyed by the listing variant (normal vs include-disabled) and the
+#: full registry content signature, never by registry object identity. A
+#: replaced registry can therefore never serve an old index, and the
+#: include-disabled variant is cached too.
+_INDEXES: dict[bool, tuple[tuple, SkillIndex]] = {}
 #: Per-registry content-revision cache: ``name -> (file_path, (mtime_ns, size) |
 #: None, version, metadata digest or None, revision)``. Hashing every skill body
 #: on every warm search was the measured warm-path cost (A6 ledger); the key is
@@ -173,18 +177,14 @@ def search_skills(
         )
         for s in usable_skills
     )
-    cached = _INDEXES.get(skills)
+    variant = bool(include_excluded)
+    cached = _INDEXES.get(variant)
     if cached is None or cached[0] != signature:
-        new_index = SkillIndex(usable_skills)
+        new_index = SkillIndex(usable_skills, include_disabled=variant)
         new_index.revisions = revisions
         cached = (signature, new_index)
-        _INDEXES[skills] = cached
+        _INDEXES[variant] = cached
     index = cached[1]
-    if include_excluded and any(not skill.enabled for skill in usable_skills):
-        # Browsing is a rare, user-triggered path: build a one-shot full index
-        # instead of growing the per-turn cache the automatic path shares.
-        index = SkillIndex(usable_skills, include_disabled=True)
-        index.revisions = revisions
     if expansion is not None:
         # Expanded routing vocabulary only enriches the text the one scorer
         # reads; exact name/id precedence and tie-breaks are untouched.
