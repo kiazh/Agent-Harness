@@ -33,6 +33,7 @@ from machina.connectors.oauth_models import (
     OAuthBinding,
     OAuthCredentialRecord,
 )
+from machina.security.secrets import remember_secret_value
 
 _WINDOWS = os.name == "nt"
 if _WINDOWS:  # pragma: no cover - platform branch
@@ -380,7 +381,10 @@ class OAuthCredentialStore:
                 if latest["grants"].get(key) == entry or attempt == 2:
                     raise
                 continue
-            return await self._decrypt(raw, expected_key=key)
+            record = await self._decrypt(raw, expected_key=key)
+            for token in (record.access_token, record.refresh_token):
+                remember_secret_value(token)
+            return record
         raise ValueError("oauth credential changed during read")  # pragma: no cover
 
     async def public_identity(self, binding: OAuthBinding) -> dict[str, Any] | None:
@@ -404,6 +408,8 @@ class OAuthCredentialStore:
         expected_generation: int,
         fence: PublicationFence | None = None,
     ) -> OAuthCredentialRecord:
+        for token in (record.access_token, record.refresh_token):
+            remember_secret_value(token)
         key = _safe_name(record.credential_key)
         _ensure_dirs(self.root)
         await self._master()
