@@ -58,6 +58,19 @@ app.add_typer(harnesses_app, name="interop")
 app.add_typer(providers_app, name="providers")
 
 
+def _apply_cli_mode(mode: str) -> str:
+    """Apply --mode to both config and the environment shadow.
+
+    Config.get("execution_mode") reads MACHINA_EXECUTION_MODE before the
+    attribute, so setting only the attribute left a .env/TUI value winning
+    over an explicit restrictive CLI flag (combined #39).
+    """
+    normalized = _normalize_mode(mode)
+    config.set("execution_mode", normalized)
+    os.environ["MACHINA_EXECUTION_MODE"] = normalized
+    return normalized
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -65,9 +78,7 @@ def main(
 ) -> None:
     """Open the interactive UI when no subcommand is given."""
     if mode is not None:
-        normalized = _normalize_mode(mode)
-        config.set("execution_mode", normalized)
-        os.environ["MACHINA_EXECUTION_MODE"] = normalized
+        _apply_cli_mode(mode)
     if ctx.invoked_subcommand is None:
         raise typer.Exit(launch_ui(mode=mode))
 
@@ -257,9 +268,7 @@ def chat(
     cleanup ran. Paused/failed runs point at the terminal response, never
     only at the session ID.
     """
-    if mode is not None:
-        normalized = _normalize_mode(mode)
-        config.set("execution_mode", normalized)
+    normalized_mode = _apply_cli_mode(mode) if mode is not None else None
     if interactive:
         raise typer.Exit(
             launch_ui(model=model, provider=provider, session_id=session_id, mode=mode)
@@ -325,6 +334,19 @@ def chat(
                 except Exception as grant_error:
                     record_failure("cli.chat.grant_full_default", grant_error)
                     logger.warning("full-mode grant activation failed: %s", grant_error)
+
+            if (
+                normalized_mode is not None
+                and getattr(session, "execution_mode", None) != normalized_mode
+            ):
+                # A resumed row carries its own durable mode; an explicit
+                # --mode must win for this invocation (combined #39).
+                await db.execute(
+                    "UPDATE sessions SET execution_mode = $2 WHERE id = $1",
+                    session.id,
+                    normalized_mode,
+                )
+                session.execution_mode = normalized_mode
 
             ceiling = os.environ.get("MACHINA_MCP_MODE_CEILING")
             if ceiling is not None:
@@ -534,8 +556,7 @@ def repl(
 ):
     """Open the interactive UI (same as running `machina` with no arguments)."""
     if mode is not None:
-        normalized = _normalize_mode(mode)
-        config.set("execution_mode", normalized)
+        _apply_cli_mode(mode)
     raise typer.Exit(launch_ui(model=model, provider=provider, session_id=session_id, mode=mode))
 
 
