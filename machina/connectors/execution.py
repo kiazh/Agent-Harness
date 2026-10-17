@@ -170,6 +170,10 @@ async def connect_authorized(
         async with service._configuration_lock:
             if service.store is not None:
                 await service._refresh_locked()
+            if service.oauth is not None:
+                await service.oauth.refresh_auth_cache(
+                    connector_id, config=service._config(connector_id), wait_for_refresh=False
+                )
             current = await _connect_request(
                 service, connector_id, session_id, agent_id, refresh=False
             )

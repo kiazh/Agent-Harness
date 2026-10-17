@@ -1298,7 +1298,13 @@ class OAuthCoordinator:
         except (ValueError, TypeError):
             return False
 
-    async def refresh_auth_cache(self, connector_id: str, *, config=None) -> None:
+    async def refresh_auth_cache(
+        self, connector_id: str, *, config=None, wait_for_refresh: bool = True
+    ) -> None:
+        """Reload durable authority; callers holding the config lock must not wait
+        on a token-refresh owner that may need that same configuration lock.
+        Non-waiting reads fail closed while a refresh is in flight.
+        """
         try:
             if config is None:
                 config = await self._resolve_config(connector_id)
@@ -1332,6 +1338,7 @@ class OAuthCoordinator:
         if (
             record is not None
             and record.refresh_state != "idle"
+            and wait_for_refresh
             and self._refresh_owners.get(binding.credential_key) is not asyncio.current_task()
         ):
             # A live refresh journals "in_flight" before its token POST and
