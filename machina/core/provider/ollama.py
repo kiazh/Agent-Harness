@@ -251,6 +251,7 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                 max_tokens,
             )
         settlement = ReservationSettlement(reservation_id, usage_store)
+        start = time.monotonic()
 
         content_parts: list[str] = []
         tool_calls: list[dict] = []
@@ -299,6 +300,13 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                                         **call,
                                         "function": {**fn, "arguments": json.dumps(args)},
                                     }
+                                elif not args:
+                                    # Zero-argument tool: never leave "" for
+                                    # json.loads on the continuation round.
+                                    call = {
+                                        **call,
+                                        "function": {**fn, "arguments": "{}"},
+                                    }
                             tool_calls.append(call)
 
                     if data.get("done"):
@@ -325,6 +333,12 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
                     f"Ollama stream ended without a terminal done frame for {model or self.model}"
                 )
         except BaseException as e:
+            metrics.record_llm_call(
+                session_id="",
+                model=resolved_model,
+                duration_ms=(time.monotonic() - start) * 1000,
+                is_error=True,
+            )
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -339,6 +353,13 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         # exist for local models; the ledger still labels the basis).
         usage = parse_ollama_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
 
+        metrics.record_llm_call(
+            session_id="",
+            model=resolved_model,
+            duration_ms=(time.monotonic() - start) * 1000,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
         # Finish usage reservation
         await settlement.settle(usage, model=resolved_model)
 

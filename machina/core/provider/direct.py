@@ -240,6 +240,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
                 session_id, agent_id, self.spec.name, model, messages, tools or [], max_tokens
             )
         settlement = ReservationSettlement(reservation_id, usage_store)
+        start = time.monotonic()
         content_parts: list[str] = []
         tool_calls_by_index: dict[int, dict[str, str]] = {}
         stream_usage: dict[str, int] = {}
@@ -299,6 +300,12 @@ class DirectProvider(LLMProvider, RateLimitBinding):
         except BaseException as e:
             # GeneratorExit/CancelledError are BaseException: settle before
             # re-raising so an early close cannot strand the reservation.
+            metrics.record_llm_call(
+                session_id="",
+                model=resolved_model,
+                duration_ms=(time.monotonic() - start) * 1000,
+                is_error=True,
+            )
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -312,7 +319,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
                 {
                     "id": tc["id"],
                     "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    "function": {"name": tc["name"], "arguments": tc["arguments"] or "{}"},
                 }
             )
         full_content = "".join(content_parts)
@@ -330,6 +337,13 @@ class DirectProvider(LLMProvider, RateLimitBinding):
                 "estimated": True,
             }
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        metrics.record_llm_call(
+            session_id="",
+            model=resolved_model,
+            duration_ms=(time.monotonic() - start) * 1000,
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+        )
         await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete", provider=self.spec.name, model=model, tool_calls=len(tool_calls)

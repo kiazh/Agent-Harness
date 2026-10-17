@@ -401,6 +401,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
                 payload["max_tokens"],
             )
         settlement = ReservationSettlement(reservation_id, usage_store)
+        start = time.monotonic()
 
         text_parts: list[str] = []
         blocks: dict[int, dict[str, Any]] = {}
@@ -514,6 +515,12 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
         except BaseException as e:
             # GeneratorExit/CancelledError bypass ``except Exception``; settle
             # before re-raising so an early close cannot strand the reservation.
+            metrics.record_llm_call(
+                session_id="",
+                model=resolved_model,
+                duration_ms=(time.monotonic() - start) * 1000,
+                is_error=True,
+            )
             await settlement.fail()
             if not isinstance(e, Exception):
                 raise
@@ -524,7 +531,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
             {
                 "id": b["id"],
                 "type": "function",
-                "function": {"name": b["name"], "arguments": b["arguments"]},
+                "function": {"name": b["name"], "arguments": b["arguments"] or "{}"},
             }
             for _, b in sorted(blocks.items())
             if b.get("name") or b.get("arguments")
@@ -553,6 +560,13 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
         # placeholder in message_start.
         stream_usage["output_tokens"] = output_tokens
         usage = parse_anthropic_usage(stream_usage)
+        metrics.record_llm_call(
+            session_id="",
+            model=resolved_model,
+            duration_ms=(time.monotonic() - start) * 1000,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
         await settlement.settle(usage, model=resolved_model)
         audit_log(
             "llm_stream_complete",
