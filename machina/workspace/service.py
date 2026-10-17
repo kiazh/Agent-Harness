@@ -493,16 +493,20 @@ class WorkspaceService:
             raise WorkspaceError("denied", "uri must carry an absolute path")
         if "\x00" in path:
             raise WorkspaceError("denied", "uri contains a NUL byte")
-        # Canonicalize platform symlinks in the path prefix (e.g. macOS
-        # /tmp -> /private/tmp) so a URI the client builds from the path it
-        # requested still maps into the resolved root. This is URI
-        # canonicalization only — authority remains with resolve() at the
-        # I/O boundary, and an outside target still fails containment below.
-        try:
-            path = os.path.realpath(path)
-        except OSError as error:
-            raise WorkspaceError("denied", "uri is not accessible") from error
+        # Canonicalize only platform aliases outside the resolved root (e.g.
+        # macOS /tmp -> /private/tmp). An in-root path keeps its requested
+        # lexical identity even when a component is a symlink; resolving it
+        # here rewrote the URI to a different in-root location (combined #58 /
+        # original #71). Authority remains with resolve() at the I/O boundary,
+        # which still refuses an outside target.
         root_str = str(files.root)
+        lexical = os.path.normpath(path)
+        under_root = lexical == root_str or lexical.startswith(root_str + os.sep)
+        if not under_root:
+            try:
+                path = os.path.realpath(path)
+            except OSError as error:
+                raise WorkspaceError("denied", "uri is not accessible") from error
         if path == root_str:
             return ""
         try:
@@ -716,7 +720,11 @@ class WorkspaceService:
         try:
             self._apply_document_sync(connection, canonical, language, payload)
         except LspError as error:
+            # The mirror accepted the edit but the server did not receive it.
+            # Tell the client to resync from a snapshot instead of claiming
+            # the server is current (combined #59 / original #72).
             logger.debug("didChange could not be queued: %s", error)
+            return DocumentChangeResult(accepted_version=result.accepted_version, resync=True)
         return result
 
     def document_close(
