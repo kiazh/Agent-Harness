@@ -44,6 +44,10 @@ except ImportError:  # pragma: no cover - non-POSIX platforms
 
 logger = logging.getLogger(__name__)
 
+#: Sentinel distinguishing "use the skill's current metadata" from an explicit
+#: ``None`` (no v2 metadata) in ``_write_skill_file``.
+_UNSET = object()
+
 # Defaults are anchored to the project root, not the current directory, so the
 # same skills are found no matter where `machina` is launched. Override with env vars.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1302,6 +1306,7 @@ class SkillRegistry(SkillSource):
         content: str,
         triggers: list[str],
         enabled: bool,
+        metadata: Any = _UNSET,
     ) -> None:
         """Atomically replace a skill's SKILL.md (temp file + fsync + replace).
 
@@ -1324,11 +1329,14 @@ class SkillRegistry(SkillSource):
             "source": skill.source,
             "source_type": skill.source_type,
         }
-        if skill.skill_metadata is not None:
+        selected = skill.skill_metadata if metadata is _UNSET else metadata
+        if selected is not None:
             # Preserve validated v2 catalog metadata across rewrites instead of
             # silently dropping it. ``to_dict`` inlines opaque extensions as
             # top-level fields; anchors re-derive from content on the next load.
-            frontmatter.update(skill.skill_metadata.to_dict())
+            # Callers that are changing content pass the already-rebound
+            # metadata, so the file never carries a stale snapshot.
+            frontmatter.update(selected.to_dict())
         yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
         skill_content = f"---\n{yaml_text}---\n{content}\n"
 
@@ -1504,25 +1512,29 @@ class SkillRegistry(SkillSource):
             SkillParser._validate_metadata(skill.name, new_description, triggers)
             new_triggers = list(triggers)
 
+        # Rebind content-derived section anchors BEFORE writing, so the file
+        # and the live object receive the same content+metadata snapshot.
+        new_metadata = skill.skill_metadata
+        if content is not None and new_metadata is not None:
+            metadata_module = _metadata_module()
+            new_metadata, _anchor_diags = metadata_module.bind_section_anchors(
+                new_metadata, new_content
+            )
+
         self._write_skill_file(
             skill,
             description=new_description,
             content=new_content,
             triggers=new_triggers,
             enabled=skill.enabled,
+            metadata=new_metadata,
         )
 
         skill.description = new_description
         skill.content = new_content
         skill.triggers = new_triggers
-        if content is not None and skill.skill_metadata is not None:
-            # Section anchors are content-derived: re-bind them so the live
-            # object never carries line numbers into replaced content. The
-            # next load_all() re-derives them (and their diagnostics) anyway.
-            metadata_module = _metadata_module()
-            skill.skill_metadata, _anchor_diags = metadata_module.bind_section_anchors(
-                skill.skill_metadata, new_content
-            )
+        skill.skill_metadata = new_metadata
+        self._refresh_install_manifest(Path(skill.file_path))
         self._invalidate()
         return skill
 
@@ -1544,6 +1556,10 @@ class SkillRegistry(SkillSource):
             triggers=skill.triggers,
             enabled=enabled,
         )
+        # A toggle rewrites SKILL.md; a repo-installed tree's manifest must
+        # acknowledge the new digest or a later integrity check reports a
+        # false divergence (combined #12 / original #40).
+        self._refresh_install_manifest(Path(skill.file_path))
         skill.enabled = enabled
         self._invalidate()
         return skill
