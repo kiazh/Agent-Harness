@@ -502,7 +502,16 @@ class WorkspaceService:
         root_str = str(files.root)
         lexical = os.path.normpath(path)
         under_root = lexical == root_str or lexical.startswith(root_str + os.sep)
-        if not under_root:
+        if under_root:
+            # Preserve an in-root symlink's requested identity only when its
+            # target stays inside the root. An outside target is canonicalized
+            # so the containment check below refuses it (combined #58).
+            resolved = os.path.realpath(lexical)
+            if not (resolved == root_str or resolved.startswith(root_str + os.sep)):
+                path = resolved
+            else:
+                path = lexical
+        else:
             try:
                 path = os.path.realpath(path)
             except OSError as error:
