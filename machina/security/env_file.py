@@ -223,23 +223,6 @@ def read_env_values(path: Path | None = None) -> dict[str, str]:
     return values
 
 
-def _unescape(value: str) -> str:
-    """Decode the ``\\\\`` and ``\\"`` escapes emitted by :func:`_quote`."""
-    if "\\" not in value:
-        return value
-    out: list[str] = []
-    index = 0
-    while index < len(value):
-        char = value[index]
-        if char == "\\" and index + 1 < len(value) and value[index + 1] in ("\\", '"'):
-            out.append(value[index + 1])
-            index += 2
-        else:
-            out.append(char)
-            index += 1
-    return "".join(out)
-
-
 def _quote(value: str) -> str:
     """Quote a value only when it needs it (spaces, #, quotes)."""
     if "\n" in value or "\r" in value:

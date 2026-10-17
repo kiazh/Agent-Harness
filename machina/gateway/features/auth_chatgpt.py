@@ -30,7 +30,7 @@ import socket
 import webbrowser
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import parse_qs, urlparse
 
 from machina.gateway.errors import OPERATION_FAILED, RpcError
@@ -176,7 +176,7 @@ class _CallbackListener:
     check uses :func:`hmac.compare_digest`.
     """
 
-    _STATUS_TEXT = {200: "OK", 400: "Bad Request", 404: "Not Found"}
+    _STATUS_TEXT: ClassVar[dict[int, str]] = {200: "OK", 400: "Bad Request", 404: "Not Found"}
 
     def __init__(self, redirect_uri: str, state: str, sock: socket.socket) -> None:
         parsed = urlparse(redirect_uri)
@@ -313,7 +313,7 @@ async def _run_login_flow(
                 reason=str(error.code or "") or "chatgpt_exchange_failed",
             )
             return
-        except Exception as error:  # noqa: BLE001 — bounded and sanitized
+        except Exception as error:  # bounded and sanitized
             _emit(gw, "auth.chatgpt.failed", reason=type(error).__name__)
             return
         expiry = tokens.get("expires_at")

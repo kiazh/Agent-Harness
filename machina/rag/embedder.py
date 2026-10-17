@@ -12,6 +12,7 @@ import threading
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import ClassVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -69,7 +70,7 @@ class OpenAIEmbedder(Embedder):
     DEFAULT_CACHE_SIZE = 1024
     DEFAULT_BATCH_SIZE = 100
 
-    MODEL_DIMENSIONS: dict[str, int] = {
+    MODEL_DIMENSIONS: ClassVar[dict[str, int]] = {
         "text-embedding-3-small": 1536,
         "text-embedding-3-large": 3072,
         "text-embedding-ada-002": 1536,
@@ -450,7 +451,7 @@ class LocalEmbedder(_LocalEmbedderBase):
     DEFAULT_MODEL = "minishlab/potion-base-8M"
     # Known native widths: lets dimensions/native_dimensions answer without
     # forcing a model download. Unknown ids fall back to the loaded model.
-    NATIVE_DIMENSIONS: dict[str, int] = {
+    NATIVE_DIMENSIONS: ClassVar[dict[str, int]] = {
         "minishlab/potion-base-2M": 64,
         "minishlab/potion-base-4M": 128,
         "minishlab/potion-base-8M": 256,
@@ -509,7 +510,7 @@ class OnnxEmbedder(_LocalEmbedderBase):
     DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
     # Known native widths: lets dimensions/native_dimensions answer without
     # forcing a model download. Unknown ids fall back to the loaded model.
-    NATIVE_DIMENSIONS: dict[str, int] = {
+    NATIVE_DIMENSIONS: ClassVar[dict[str, int]] = {
         "BAAI/bge-small-en-v1.5": 384,
         "BAAI/bge-base-en-v1.5": 768,
         "BAAI/bge-large-en-v1.5": 1024,

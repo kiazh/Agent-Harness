@@ -973,7 +973,7 @@ def learn(
         from machina.skills import enrich
 
         enrich.ensure_skill_metadata_sync(skill, agent_seam=enrich.default_agent_seam())
-    except Exception as exc:  # noqa: BLE001 - metadata generation never fails a learn
+    except Exception as exc:  # metadata generation never fails a learn
         record_failure("cli.learn.metadata", exc)
     console.print(f"[green]Skill '{escape(skill.name)}' created successfully![/green]")
     console.print(f"  Description: {escape(skill.description)}")

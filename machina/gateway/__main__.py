@@ -35,12 +35,12 @@ else:
     _protocol_in = getattr(sys.stdin, "buffer", None)
     _protocol_out = sys.stdout
 
-import asyncio  # noqa: E402
-import json  # noqa: E402
-import logging  # noqa: E402
-import secrets  # noqa: E402
-import threading  # noqa: E402
-from typing import Any  # noqa: E402
+import asyncio
+import json
+import logging
+import secrets
+import threading
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

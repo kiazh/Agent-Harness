@@ -11,7 +11,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from machina.db.lazy import LazyDb
 from machina.memory.redaction import redact_secrets
@@ -62,7 +62,7 @@ class EmotionTopology:
     """
 
     # Plutchik's wheel of emotions → retrieval weights
-    EMOTION_PROFILES: dict[str, dict[str, float]] = {
+    EMOTION_PROFILES: ClassVar[dict[str, dict[str, float]]] = {
         "joy": {
             "recency_weight": 0.8,
             "importance_weight": 0.4,
@@ -114,7 +114,7 @@ class EmotionTopology:
     }
 
     # Default profile for unknown emotions
-    DEFAULT_PROFILE: dict[str, float] = {
+    DEFAULT_PROFILE: ClassVar[dict[str, float]] = {
         "recency_weight": 0.5,
         "importance_weight": 0.5,
         "valence_bias": 0.0,

@@ -439,7 +439,7 @@ def _chat_command(prompt: str, session_id: str | None, mode: str | None) -> list
 
 def _parse_session_id(output: str) -> str | None:
     match = None
-    for match in _SESSION_LINE_RE.finditer(output):  # noqa: B007 - keep the last
+    for match in _SESSION_LINE_RE.finditer(output):  # keep the last
         pass
     if match is not None:
         return match.group("session_id")

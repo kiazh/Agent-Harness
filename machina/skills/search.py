@@ -439,7 +439,7 @@ def _meta_value(meta: Any, key: str) -> Any:
     if callable(getter):
         try:
             return getter(key)
-        except Exception:  # noqa: BLE001 - third-party metadata must never break search
+        except Exception:  # third-party metadata must never break search
             return None
     return getattr(meta, key, None)
 
@@ -906,7 +906,7 @@ def content_revision(skill: Any) -> str:
         if callable(to_dict):
             try:
                 typed_digest = json.dumps(to_dict(), sort_keys=True, default=str)
-            except Exception:  # noqa: BLE001 - revision must never fail on odd payloads
+            except Exception:  # revision must never fail on odd payloads
                 typed_digest = str(typed)
         else:
             typed_digest = str(typed)

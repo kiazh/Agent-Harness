@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 
 @dataclass
@@ -67,7 +67,7 @@ class RecursiveCharacterTextSplitter:
     """
 
     # Default separators in priority order
-    DEFAULT_SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
+    DEFAULT_SEPARATORS: ClassVar[list[str]] = ["\n\n", "\n", ". ", " ", ""]
 
     # Markdown header pattern
     _MD_HEADER = re.compile(r"^(#{1,6}\s+.+)$", re.MULTILINE)

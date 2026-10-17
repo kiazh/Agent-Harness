@@ -172,7 +172,7 @@ async def generate_skill_metadata(
     prompt = build_metadata_prompt(skill_content, skill_name=skill_name)
     try:
         raw = await asyncio.wait_for(agent_seam(prompt), timeout=GENERATION_TIMEOUT_SECONDS)
-    except Exception as exc:  # noqa: BLE001 - any provider/timeout failure is fail-open
+    except Exception as exc:  # any provider/timeout failure is fail-open
         _fail(f"metadata generation did not complete ({type(exc).__name__})")
         return None
     mapping = _decode_mapping(raw)
@@ -298,7 +298,7 @@ def default_agent_seam(
             if callable(closer):
                 try:
                     await closer()
-                except Exception:  # noqa: BLE001 - closing must never mask the result
+                except Exception:  # closing must never mask the result
                     pass
         return str(getattr(response, "content", "") or "")
 

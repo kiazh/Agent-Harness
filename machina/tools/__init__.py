@@ -4,22 +4,22 @@ Importing this package registers every built-in tool with ``registry``.
 """
 
 from machina.tools import (
-    agents,  # noqa: F401 — delegate, list_agents
-    artifacts,  # noqa: F401 — artifact_read, artifact_search, artifact_describe
-    builtins,  # noqa: F401 — web_search, web_extract, search_files
-    code_intelligence,  # noqa: F401 — read-only workspace code intelligence
-    file,  # noqa: F401 — read_file, write_file, list_files
-    harness,  # noqa: F401 — read-only feature/configuration/learning inspection
+    agents,  # delegate, list_agents
+    artifacts,  # artifact_read, artifact_search, artifact_describe
+    builtins,  # web_search, web_extract, search_files
+    code_intelligence,  # read-only workspace code intelligence
+    file,  # read_file, write_file, list_files
+    harness,  # read-only feature/configuration/learning inspection
     mcp,  # noqa: F401 — lazy connector catalogs and exact remote calls
-    memory,  # noqa: F401 — remember, recall
-    rag,  # noqa: F401 — index_document, search_documents
-    repo,  # noqa: F401 — repo_stage, repo_activate
-    repomap,  # noqa: F401 — learn_directory
-    session_recall,  # noqa: F401 — transcript recall
-    skills,  # noqa: F401 — skill discovery and reading
-    terminal,  # noqa: F401 — terminal
-    web_crawl,  # noqa: F401 — bounded multi-page crawl into session RAG
-    web_research,  # noqa: F401 — session-scoped public web research
+    memory,  # remember, recall
+    rag,  # index_document, search_documents
+    repo,  # repo_stage, repo_activate
+    repomap,  # learn_directory
+    session_recall,  # transcript recall
+    skills,  # skill discovery and reading
+    terminal,  # terminal
+    web_crawl,  # bounded multi-page crawl into session RAG
+    web_research,  # session-scoped public web research
 )
 from machina.tools.base import Tool, ToolRegistry, registry
 

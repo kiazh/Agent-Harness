@@ -117,7 +117,7 @@ class _CallbackServer:
             # Bound request reads so a stalled client cannot hang the server.
             timeout = 10
 
-            def do_GET(self) -> None:  # noqa: N802 — http.server API
+            def do_GET(self) -> None:  # http.server API
                 flow._handle(self)
 
             def log_message(self, *args: Any) -> None:

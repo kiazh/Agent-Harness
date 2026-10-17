@@ -175,7 +175,7 @@ def _generate_installed_metadata(names: list[str]) -> None:
             enrich.ensure_skill_metadata_sync(
                 skill, agent_seam=enrich.default_agent_seam(), registry=skill_registry
             )
-        except Exception:  # noqa: BLE001 - metadata generation never fails an install
+        except Exception:  # metadata generation never fails an install
             logger.warning("skill metadata generation failed for %s", name, exc_info=True)
 
 

@@ -91,7 +91,7 @@ def _record_browse_activity(kind: str, **fields: Any) -> None:
     """
     try:
         from machina.skills import events as skill_events
-    except Exception:  # noqa: BLE001 - optional module must never fail the read
+    except Exception:  # optional module must never fail the read
         skill_events = None
     recorder = getattr(skill_events, "record_event", None) if skill_events else None
     if not callable(recorder):
@@ -104,9 +104,9 @@ def _record_browse_activity(kind: str, **fields: Any) -> None:
             try:
                 recorder(kind=kind, **fields)
                 return
-            except Exception:  # noqa: BLE001 - recorder contracts are provisional
+            except Exception:  # recorder contracts are provisional
                 pass
-        except Exception:  # noqa: BLE001 - recorder contracts are provisional
+        except Exception:  # recorder contracts are provisional
             pass
     _BROWSE_ACTIVITY[kind] = _BROWSE_ACTIVITY.get(kind, 0) + 1
 
@@ -134,7 +134,7 @@ async def _generate_installed_metadata(gw: Gateway, skill: Any) -> None:
             provider=getattr(gw, "provider", None), model=getattr(gw, "model", None)
         )
         await enrich.ensure_skill_metadata(skill, agent_seam=seam, registry=_registry())
-    except Exception as exc:  # noqa: BLE001 - metadata generation never fails an install
+    except Exception as exc:  # metadata generation never fails an install
         record_failure("gateway.skills.learn.metadata", exc)
 
 
