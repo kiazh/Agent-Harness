@@ -927,13 +927,32 @@ class MCPConnection:
             else 0
         )
         if len(encoded) + structured_bytes > self.config.result_limit:
-            # The marker shares the byte budget. Drop an oversized structured
-            # payload rather than smuggling a second unbounded copy of text.
+            # The marker shares the byte budget. When the text portion leaves
+            # room, serialize structuredContent into that room instead of
+            # dropping the tool's only output (combined #41 / original #54).
             marker = b"\n...[truncated]..."[: self.config.result_limit]
-            text = (
-                encoded[: self.config.result_limit - len(marker)].decode("utf-8", "ignore")
-                + marker.decode()
-            )
+            if structured is not None:
+                structured_text = json.dumps(structured, ensure_ascii=False).encode("utf-8")
+                room = self.config.result_limit - len(encoded) - len(marker)
+                if room > 0:
+                    prefix = text + ("\n" if text else "")
+                    text = (
+                        prefix
+                        + structured_text[:room].decode("utf-8", "ignore")
+                        + marker.decode()
+                    )
+                else:
+                    text = (
+                        encoded[: self.config.result_limit - len(marker)].decode(
+                            "utf-8", "ignore"
+                        )
+                        + marker.decode()
+                    )
+            else:
+                text = (
+                    encoded[: self.config.result_limit - len(marker)].decode("utf-8", "ignore")
+                    + marker.decode()
+                )
             structured = None
             truncated = True
         if getattr(result, "is_error", getattr(result, "isError", False)):
