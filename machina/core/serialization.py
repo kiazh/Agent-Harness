@@ -15,7 +15,6 @@ from machina.core.models import ContextChunk
 
 __all__ = [
     "row_to_chunk",
-    "chunk_to_payload",
     "embedding_to_str",
     "str_to_embedding",
     "payload_to_msgpack",
@@ -47,15 +46,6 @@ def row_to_chunk(row: Any) -> ContextChunk:
         accessed_at=row["accessed_at"],
         document_source=doc_source,
     )
-
-
-def chunk_to_payload(chunk: ContextChunk) -> dict[str, Any]:
-    """Convert a ContextChunk to a payload dict suitable for msgpack packing."""
-    return {
-        "text": chunk.payload.get("text", ""),
-        "metadata": chunk.payload.get("metadata", {}),
-        "source": chunk.payload.get("source", ""),
-    }
 
 
 def embedding_to_str(embedding: list[float]) -> str:

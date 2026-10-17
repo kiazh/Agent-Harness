@@ -38,7 +38,6 @@ _OWNER_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}")
 _REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}")
 _REF_RE = re.compile(r"[A-Za-z0-9._/-]{1,128}")
 
-_SKILL_GLOB = "skills/*/SKILL.md"
 # Skill resource directories that are never installed: test suites add
 # attack surface without runtime value; fixtures elsewhere still copy.
 _TEST_DIRS = {"tests", "test", "__tests__", "testing"}
@@ -929,9 +928,7 @@ def activate_plan(plan_detail: dict[str, Any], staged: Path, skills_dir: Path) -
                 shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _verify_installed(
-    skills_dir: Path, safe: str, manifest: dict[str, Any], SkillParser: Any
-) -> list[str]:
+def _verify_installed(skills_dir: Path, manifest: dict[str, Any], SkillParser: Any) -> list[str]:
     """Re-hash installed files against the manifest; return diverged paths."""
     diverged: list[str] = []
     for relative, digest in (manifest.get("files") or {}).items():
@@ -979,7 +976,7 @@ def _build_skill(
                 and manifest.get("revision") == plan_detail.get("revision")
                 and manifest.get("digest") == plan_detail.get("digest")
             ):
-                diverged = _verify_installed(skills_dir, safe, manifest, SkillParser)
+                diverged = _verify_installed(skills_dir, manifest, SkillParser)
                 if not diverged:
                     return name, None
                 raise RepoInstallError(

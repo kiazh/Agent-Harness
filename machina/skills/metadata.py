@@ -112,7 +112,9 @@ CAPABILITIES = frozenset(
 )
 
 #: Closed vocabulary of instruction-section stages. Extend only with tests.
-STAGES = frozenset({"plan", "inspect", "implement", "verify", "debug", "review", "deliver", "maintain"})
+STAGES = frozenset(
+    {"plan", "inspect", "implement", "verify", "debug", "review", "deliver", "maintain"}
+)
 
 #: v1 front-matter keys already consumed by ``SkillParser``; they are neither
 #: v2 metadata nor extension data.
@@ -445,14 +447,16 @@ def _build_metadata(
 
     def warn(code: str, message: str) -> None:
         diags.append(
-            MetadataDiagnostic(
-                code=code, message=message, skill_id=skill_name, file_path=file_path
-            )
+            MetadataDiagnostic(code=code, message=message, skill_id=skill_name, file_path=file_path)
         )
 
     try:
         declared = values.get("schema_version", SCHEMA_VERSION)
-        if isinstance(declared, bool) or not isinstance(declared, int) or declared != SCHEMA_VERSION:
+        if (
+            isinstance(declared, bool)
+            or not isinstance(declared, int)
+            or declared != SCHEMA_VERSION
+        ):
             raise _MetadataError(
                 CODE_UNSUPPORTED_SCHEMA,
                 f"schema_version {declared!r} is not supported; expected {SCHEMA_VERSION}",
@@ -472,7 +476,7 @@ def _build_metadata(
 
         task_families = _enum_list(values, "task_families", TASK_FAMILIES, warn)
         capabilities = _enum_list(values, "capabilities", CAPABILITIES, warn)
-        aliases = _alias_list(values.get("aliases"), warn)
+        aliases = _alias_list(values.get("aliases"))
         stack = _stack(value=values.get("stack"), warn=warn)
         preconditions = _text_list(values, "preconditions")
         required_tools = _text_list(values, "required_tools")
@@ -659,14 +663,12 @@ def _enum_list(
     return tuple(out)
 
 
-def _alias_list(value: Any, warn: _Warn) -> tuple[str, ...]:
+def _alias_list(value: Any) -> tuple[str, ...]:
     out: list[str] = []
     seen: set[str] = set()
     for item in _list(value, "aliases"):
         if not isinstance(item, str) or not _ALIAS_RE.fullmatch(item):
-            raise _MetadataError(
-                CODE_METADATA_INVALID, "aliases must be short alphanumeric slugs"
-            )
+            raise _MetadataError(CODE_METADATA_INVALID, "aliases must be short alphanumeric slugs")
         folded = item.casefold()
         if folded in seen:
             continue
@@ -676,7 +678,11 @@ def _alias_list(value: Any, warn: _Warn) -> tuple[str, ...]:
 
 
 def _string_tuple(
-    value: Any, field_name: str, *, limit: int = MAX_LIST_ITEMS, max_length: int = MAX_IDENTIFIER_LENGTH
+    value: Any,
+    field_name: str,
+    *,
+    limit: int = MAX_LIST_ITEMS,
+    max_length: int = MAX_IDENTIFIER_LENGTH,
 ) -> tuple[str, ...]:
     out: list[str] = []
     seen: set[str] = set()
@@ -713,9 +719,7 @@ def _sections(value: Any, *, warn: _Warn) -> tuple[SectionMetadata, ...]:
     seen_ids: set[str] = set()
     for index, item in enumerate(_list(value, "sections", limit=MAX_SECTIONS)):
         if not isinstance(item, dict):
-            raise _MetadataError(
-                CODE_METADATA_INVALID, f"sections[{index}] must be a mapping"
-            )
+            raise _MetadataError(CODE_METADATA_INVALID, f"sections[{index}] must be a mapping")
         for key in sorted(key for key in item if key not in SECTION_FIELDS):
             warn(
                 CODE_UNSUPPORTED_FIELD,
@@ -727,9 +731,7 @@ def _sections(value: Any, *, warn: _Warn) -> tuple[SectionMetadata, ...]:
                 CODE_METADATA_INVALID, f"sections[{index}].id must be a lowercase slug"
             )
         if section_id in seen_ids:
-            raise _MetadataError(
-                CODE_SECTION_DUPLICATE_ID, f"duplicate section id {section_id!r}"
-            )
+            raise _MetadataError(CODE_SECTION_DUPLICATE_ID, f"duplicate section id {section_id!r}")
         seen_ids.add(section_id)
         heading = item.get("heading")
         if not isinstance(heading, str) or not heading.strip() or len(heading) > MAX_STRING_LENGTH:
@@ -761,9 +763,7 @@ def _sections(value: Any, *, warn: _Warn) -> tuple[SectionMetadata, ...]:
             limit=MAX_REQUIRES_PER_SECTION,
         )
         out.append(
-            SectionMetadata(
-                id=section_id, heading=heading, stage=stage, requires_sections=requires
-            )
+            SectionMetadata(id=section_id, heading=heading, stage=stage, requires_sections=requires)
         )
     return tuple(out)
 
@@ -813,9 +813,7 @@ def _extensions(values: Mapping[str, Any], *, policy: str, warn: _Warn) -> dict[
     for key in sorted(key for key in values if key not in known):
         if not isinstance(key, str):
             if policy == "reject":
-                raise _MetadataError(
-                    CODE_ENRICHMENT_INVALID, "sidecar fields must be strings"
-                )
+                raise _MetadataError(CODE_ENRICHMENT_INVALID, "sidecar fields must be strings")
             continue
         if _looks_like_authority_field(key):
             if policy == "reject":

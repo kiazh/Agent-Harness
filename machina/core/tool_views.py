@@ -22,6 +22,9 @@ as unknown and are never reported complete.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import logging
 import uuid
 from typing import Any
 
@@ -36,9 +39,16 @@ from machina.observability.diagnostics import record_failure
 __all__ = [
     "bounded_tool_view",
     "artifact_source_version",
+    "append_limit",
+    "ensure_item_artifact_view",
+    "acknowledged_chunk_ids",
+    "reconcile_pending_flush",
+    "flush_pending_chunks",
     "REDUCER_EXEMPT_TOOLS",
     "mark_turn_accepted",
 ]
+
+logger = logging.getLogger(__name__)
 
 # Tools whose output is already bounded and continuation/paging-addressed;
 # their append caps must never be replaced by a reducer view because offsets
@@ -110,6 +120,32 @@ def _append_limit(tool_name: str) -> int:
     return limit
 
 
+def append_limit(tool_name: str) -> int:
+    """Model-visible cap a page-producing tool must budget its envelope to (C5).
+
+    Exposed so ``artifact_read``/``artifact_search`` can size header + body +
+    cursor to exactly the space the append seam will grant; without this the
+    append cap would blind-slice a cursor-bearing page and lose its
+    continuation pointer.
+    """
+    return _append_limit(tool_name)
+
+
+# Page-aware tools whose emitted envelope must never be blind-sliced: a cut
+# header or a cut cursor line lies about what was emitted (C5). Oversized
+# pages come back as a bounded refusal instead; the tool re-runs smaller.
+_PAGE_REFUSAL_TOOLS = frozenset({"artifact_read", "artifact_search"})
+
+
+def _page_refusal(tool_name: str, limit: int, total: int) -> str:
+    """Bounded refusal marker for a page too large for the visible budget (C5)."""
+    marker = (
+        f"[{tool_name}: {total}-char page exceeds the {limit}-char model-visible "
+        f"budget; re-run {tool_name} with a smaller limit]"
+    )
+    return marker[:limit]
+
+
 def _flags() -> tuple[bool, bool]:
     """Read the reducer/artifact switches; broken config degrades safely."""
     try:
@@ -165,6 +201,14 @@ async def bounded_tool_view(
             # through verbatim. The page header leads the result, so
             # continuation offsets remain resolvable after the bound, and no
             # unrecoverable marker is added — smaller pages can be re-read.
+            if len(result_str) <= limit:
+                return result_str, None
+            if tool_name in _PAGE_REFUSAL_TOOLS:
+                # C5: a page envelope carries its own header/cursor contract;
+                # blind-slicing it emits a partial cursor line (or cuts the
+                # cursor away entirely) and lies about the emitted range.
+                metrics.increment_counter("reducers.page_refused")
+                return _page_refusal(tool_name, limit, len(result_str)), None
             return result_str[:limit], None
         reducers_enabled, artifacts_enabled = _flags()
         upstream = _upstream_truncated(tool_name, result_str)
@@ -231,6 +275,119 @@ async def bounded_tool_view(
             ),
             None,
         )
+
+
+async def ensure_item_artifact_view(
+    item: dict[str, Any],
+    session_id: uuid.UUID,
+    agent_id: str,
+    *,
+    status: str | None = None,
+) -> str:
+    """Retain an action's original once and cache its model-visible view (MCH-010).
+
+    The retention decision — and therefore the artifact handle — is made BEFORE
+    any durable record can claim the action, so the pending payload and the
+    durable ``tool_call`` chunk always carry the same link. A refused or failed
+    store keeps the bounded legacy view and claims no recovery; repeated calls
+    reuse the cached view.
+    """
+    view = item.get("_artifact_view")
+    if view is not None:
+        return view
+    view, artifact_id = await bounded_tool_view(
+        item["name"],
+        item["result"],
+        session_id=session_id,
+        agent_id=agent_id,
+        status=status,
+        source_version=artifact_source_version(),
+    )
+    item["_artifact_view"] = view
+    if artifact_id:
+        item["_artifact_handle"] = artifact_id
+    return view
+
+
+def acknowledged_chunk_ids(rows: Any) -> set[str]:
+    """Chunk ids the store reported as durably written (C1)."""
+    try:
+        iterator = iter(rows or ())
+    except TypeError:
+        # Opaque consumer result (older fakes/mocks): no explicit acks.
+        return set()
+    acknowledged: set[str] = set()
+    for row in iterator:
+        row_id = row.get("id") if isinstance(row, dict) else getattr(row, "id", None)
+        if row_id is not None:
+            acknowledged.add(str(row_id))
+    return acknowledged
+
+
+async def _verify_persisted_chunk_ids(db: Any, chunk_ids: list[Any]) -> set[str]:
+    """SELECT-by-id confirmation for an ambiguous batch acknowledgement (C1).
+
+    A connection that dropped after the INSERT still persisted the rows, so an
+    ambiguous success is verified before anything leaves the pending queue.
+    Unverifiable ids stay queued for the next flush (fail-open policy).
+    """
+    try:
+        keys = [cid if isinstance(cid, uuid.UUID) else uuid.UUID(str(cid)) for cid in chunk_ids]
+        rows = await db.fetch("SELECT id FROM context_chunks WHERE id = ANY($1::uuid[])", keys)
+    except Exception as exc:
+        record_failure("tool_views.verify_persisted_chunk_ids", exc)
+        return set()
+    return acknowledged_chunk_ids(rows)
+
+
+async def reconcile_pending_flush(
+    result: Any, pending_chunks: list[dict[str, Any]], *, db: Any
+) -> bool:
+    """Apply a batch acknowledgement to the pending queue (contract C1).
+
+    Every producer-assigned ``id`` is a stable event identity: retries resubmit
+    the same ids, and only records the store (or a by-id SELECT) confirms leave
+    the queue. Legacy batches without ids keep the historical clear-on-success
+    behavior. Returns True only when the queue is empty.
+    """
+    identified = [record for record in pending_chunks if record.get("id") is not None]
+    if not identified:
+        pending_chunks.clear()
+        return True
+    confirmed = acknowledged_chunk_ids(result)
+    missing = [record for record in identified if str(record.get("id")) not in confirmed]
+    if missing and db is not None:
+        confirmed |= await _verify_persisted_chunk_ids(db, [record.get("id") for record in missing])
+    remaining = [record for record in identified if str(record.get("id")) not in confirmed]
+    pending_chunks[:] = remaining
+    return not remaining
+
+
+async def flush_pending_chunks(
+    pending_chunks: list[dict[str, Any]], *, store: Any, db: Any
+) -> bool:
+    """Insert all pending chunks in one batch, keeping the fail-open policy.
+
+    R4-025/PB-1: a failing context store must never fail the turn. Returns True
+    only when every pending chunk was durably written (the queue is then
+    cleared, so a later flush cannot re-insert it). A failed write retains the
+    chunks for a later retry — never silently dropped (code_review #6) — and
+    cancellation still propagates to the caller. Contract C1 reconciliation
+    (stable ids, ambiguous acknowledgements verified by id) lives in
+    :func:`reconcile_pending_flush`.
+    """
+    if not pending_chunks:
+        return True
+    try:
+        result = store.add_chunks_batch(pending_chunks)
+        if inspect.isawaitable(result):
+            result = await result
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Context flush failed (%s); continuing turn", type(exc).__name__)
+        return False
+    return await reconcile_pending_flush(result, pending_chunks, db=db)
 
 
 async def mark_turn_accepted(session_id: uuid.UUID, agent_id: str, usage_store: Any) -> None:

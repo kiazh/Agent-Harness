@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
 import time
@@ -17,7 +16,7 @@ from typing import Any
 
 from rich.console import Console
 
-from machina.core.assembler import PromptAssembler
+from machina.core.assembler import PromptAssembler, get_token_count
 from machina.core.background_tasks import consolidation_inflight as _consolidation_inflight
 from machina.core.background_tasks import joined_teardown
 from machina.core.background_tasks import pending_learning_reviews as _pending_learning_reviews
@@ -54,9 +53,14 @@ from machina.core.provider import LLMProvider, audit_log, get_provider
 from machina.core.request_gate import evaluate_request
 from machina.core.session import Session, session_manager
 from machina.core.session_mode import turn_scope
-from machina.core.tool_views import artifact_source_version, bounded_tool_view, mark_turn_accepted
+from machina.core.tool_views import (
+    ensure_item_artifact_view,
+    flush_pending_chunks,
+    mark_turn_accepted,
+)
 from machina.core.turn_flow import collect_pauses, stagnation_step, stopped_response
 from machina.core.usage import provider_identity, usage_store
+from machina.db.lazy import LazyDb
 from machina.memory.consolidator import MemoryConsolidator
 from machina.memory.retriever import MemoryRetriever
 from machina.memory.store import memory_store
@@ -208,6 +212,10 @@ def _notify_growth(session_id: uuid.UUID | str, stage: str, detail: str = "") ->
 # (``from machina.core.agent import _request_context_tokens`` etc.) keep working.
 # Retained evidence is separate from short previews assembled into prompts.
 _STORED_TOOL_RESULT_CHARS = 65536
+
+# C1: ambiguous batch acknowledgements are verified by chunk id before the
+# pending queue clears. LazyDb delegates to the shared asyncpg singleton.
+_context_db = LazyDb()
 
 
 MAX_PENDING_LEARNING_REVIEWS = 16
@@ -599,11 +607,12 @@ class BaseReActAgent:
         if pending_chunks is not None:
             pending_chunks.append(
                 {
+                    "id": str(uuid.uuid4()),
                     "session_id": session_id,
                     "agent_id": self.agent_id,
                     "chunk_type": "user_message",
                     "payload": payload,
-                    "token_count": len(user_message) // 4 + submitted_visual_tokens,
+                    "token_count": get_token_count(user_message) + submitted_visual_tokens,
                 }
             )
         else:
@@ -612,7 +621,7 @@ class BaseReActAgent:
                 agent_id=self.agent_id,
                 chunk_type="user_message",
                 payload=payload,
-                token_count=len(user_message) // 4 + submitted_visual_tokens,
+                token_count=get_token_count(user_message) + submitted_visual_tokens,
             )
         recent = await context_manager.get_recent_context(session_id, limit=10)
         retrieved_chunks: list[tuple] = []
@@ -682,7 +691,7 @@ class BaseReActAgent:
                             "category": m.category,
                             "persona_interpretation": rm.persona_interpretation,
                         },
-                        token_count=len(m.content) // 4,
+                        token_count=get_token_count(m.content),
                     )
                     retrieved_chunks.append((chunk, rm.score))
             except Exception as e:
@@ -854,11 +863,19 @@ class BaseReActAgent:
                 if not isinstance(tool_args, dict):
                     raise ValueError("tool arguments must be an object")
             except (TypeError, ValueError) as e:
+                # L-03: raw tool arguments can carry credentials; log a
+                # bounded, secret-redacted preview instead of the payload.
+                try:
+                    from machina.memory.redaction import redact_secrets
+
+                    raw_preview = redact_secrets(str(raw_args)[:500]).text
+                except Exception:
+                    raw_preview = "<unavailable>"
                 logger.error(
-                    "Failed to parse tool arguments for '%s': %s (raw: %s)",
+                    "Failed to parse tool arguments for '%s': %s (raw preview: %s)",
                     tool_name,
                     e,
-                    raw_args,
+                    raw_preview,
                 )
                 audit_log(
                     "tool_call_invalid_args",
@@ -1166,6 +1183,11 @@ class BaseReActAgent:
                 return item
 
             tasks = [asyncio.create_task(_bounded(item)) for item in runnable]
+            # MCH-010: Phase C finalization exists for EXCEPTIONAL exits only
+            # (cancellation/error). On the normal path Phase D must prepare the
+            # artifact handle BEFORE publishing the durable tool chunk; recording
+            # here first would freeze a payload without the handle.
+            finalize_on_exit = True
             try:
                 for coro in asyncio.as_completed(tasks):
                     try:
@@ -1215,6 +1237,7 @@ class BaseReActAgent:
                             },
                             tool_call_id=finished["call_id"],
                         )
+                finalize_on_exit = False
             finally:
                 # Ensure no task leaks on cancellation.
                 for t in tasks:
@@ -1224,13 +1247,15 @@ class BaseReActAgent:
                 # claims, reservations, and owned providers.
                 from machina.core.background_tasks import await_joined
 
-                async def finish_batch():
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    await self._finalize_completed_tools(
-                        planned, session_id, pending_chunks, tool_calls_made
-                    )
+                if finalize_on_exit:
 
-                await await_joined(finish_batch())
+                    async def finish_batch():
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        await self._finalize_completed_tools(
+                            planned, session_id, pending_chunks, tool_calls_made
+                        )
+
+                    await await_joined(finish_batch())
 
         # ── Phase D: metrics for denied + persistence in provider order ───
         # Provider message order must follow the original tool_calls order
@@ -1300,17 +1325,10 @@ class BaseReActAgent:
                         )
                         item["_hooked"] = True
 
-                # T2/T3: retain the original and append a bounded view.
-                view, artifact_id = await bounded_tool_view(
-                    tool_name,
-                    result_str,
-                    session_id=session_id,
-                    agent_id=self.agent_id,
-                    status=_tool_outcome(item),
-                    source_version=artifact_source_version(),
-                )
-                if artifact_id:
-                    item["_artifact_handle"] = artifact_id
+                # T2/T3: retain the original once and append the cached view.
+                # The helper makes the same retention decision the recorder
+                # uses, so the durable chunk carries the handle (MCH-010).
+                view = await self._ensure_artifact_view(item, session_id)
                 # Durably record the action exactly once (chunk + approval
                 # retirement + tool_calls_made entry; shared with cancellation).
                 await self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
@@ -1362,6 +1380,12 @@ class BaseReActAgent:
             self._record_tool_action_joined(item, session_id, pending_chunks, tool_calls_made)
         )
 
+    async def _ensure_artifact_view(self, item: dict[str, Any], session_id: uuid.UUID) -> str:
+        """Retain the original once; cache view + handle before recording (MCH-010)."""
+        return await ensure_item_artifact_view(
+            item, session_id, self.agent_id, status=_tool_outcome(item)
+        )
+
     async def _record_tool_action_joined(
         self, item, session_id, pending_chunks, tool_calls_made
     ) -> None:
@@ -1372,6 +1396,11 @@ class BaseReActAgent:
         await self._retire_tool_approval(item, outcome)
         if item.get("_recorded"):
             return
+        # MCH-010: retention/handle must exist BEFORE the payload is published.
+        # Cancellation finalization and Phase D share this single decision, so
+        # a completed oversized execution never persists a handle-less record.
+        if item.get("_artifact_view") is None and "elapsed_ms" in item:
+            await self._ensure_artifact_view(item, session_id)
         payload = {
             "tool": item["name"],
             "args": item["args"],
@@ -1387,11 +1416,12 @@ class BaseReActAgent:
         if pending_chunks is not None:
             pending_chunks.append(
                 {
+                    "id": str(uuid.uuid4()),
                     "session_id": session_id,
                     "agent_id": self.agent_id,
                     "chunk_type": "tool_call",
                     "payload": payload,
-                    "token_count": len(result_str) // 4,
+                    "token_count": get_token_count(result_str),
                 }
             )
         else:
@@ -1400,7 +1430,7 @@ class BaseReActAgent:
                 agent_id=self.agent_id,
                 chunk_type="tool_call",
                 payload=payload,
-                token_count=len(result_str) // 4,
+                token_count=get_token_count(result_str),
             )
         tool_calls_made.append(self._tool_entry(item))
         item["_recorded"] = True
@@ -1456,27 +1486,8 @@ class BaseReActAgent:
                 logger.warning("cancellation finalize failed for %s: %s", item["name"], exc)
 
     async def _flush_pending_chunks(self, pending_chunks: list[dict[str, Any]]) -> bool:
-        """Insert all pending chunks in a single batch operation.
-
-        R4-025/PB-1: a failing context store must never fail the turn. Returns
-        True only when every pending chunk was durably written — the list is
-        then cleared, so a later flush cannot re-insert it. Returns False when
-        the write failed: the chunks are RETAINED for the remainder of the turn
-        so a later flush can retry them (never silently dropped — code_review
-        #6). Cancellation still propagates to the caller.
-        """
-        if pending_chunks:
-            try:
-                result = context_manager.add_chunks_batch(pending_chunks)
-                if inspect.isawaitable(result):
-                    await result
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("Context flush failed (%s); continuing turn", type(exc).__name__)
-                return False
-            pending_chunks.clear()
-        return True
+        """Single batch insert; fail-open retention + C1 identity checks (tool_views)."""
+        return await flush_pending_chunks(pending_chunks, store=context_manager, db=_context_db)
 
     async def _flush_pending_cancellation_safe(
         self,
@@ -1903,11 +1914,12 @@ class ReActAgent(BaseReActAgent):
                         content = response.content or ""
                         pending_chunks.append(
                             {
+                                "id": str(uuid.uuid4()),
                                 "session_id": session_id,
                                 "agent_id": self.agent_id,
                                 "chunk_type": "assistant_message",
                                 "payload": {"content": content},
-                                "token_count": len(content) // 4,
+                                "token_count": get_token_count(content),
                             }
                         )
                         await self._flush_pending_chunks(pending_chunks)
@@ -1934,11 +1946,12 @@ class ReActAgent(BaseReActAgent):
                     if response.content:
                         pending_chunks.append(
                             {
+                                "id": str(uuid.uuid4()),
                                 "session_id": session_id,
                                 "agent_id": self.agent_id,
                                 "chunk_type": "assistant_message",
                                 "payload": {"content": response.content},
-                                "token_count": len(response.content) // 4,
+                                "token_count": get_token_count(response.content),
                             }
                         )
                         try:
@@ -2106,11 +2119,12 @@ class ReActAgent(BaseReActAgent):
                             content = "".join(streamed_text)
                             pending_chunks.append(
                                 {
+                                    "id": str(uuid.uuid4()),
                                     "session_id": session_id,
                                     "agent_id": self.agent_id,
                                     "chunk_type": "assistant_message",
                                     "payload": {"content": content, "interrupted": True},
-                                    "token_count": len(content) // 4,
+                                    "token_count": get_token_count(content),
                                 }
                             )
                         await self._flush_pending_cancellation_safe(pending_chunks, session_id)
@@ -2159,11 +2173,12 @@ class ReActAgent(BaseReActAgent):
                         content = response.content or ""
                         pending_chunks.append(
                             {
+                                "id": str(uuid.uuid4()),
                                 "session_id": session_id,
                                 "agent_id": self.agent_id,
                                 "chunk_type": "assistant_message",
                                 "payload": {"content": content},
-                                "token_count": len(content) // 4,
+                                "token_count": get_token_count(content),
                             }
                         )
                         await self._flush_pending_chunks(pending_chunks)
@@ -2195,11 +2210,12 @@ class ReActAgent(BaseReActAgent):
                     if response.content:
                         pending_chunks.append(
                             {
+                                "id": str(uuid.uuid4()),
                                 "session_id": session_id,
                                 "agent_id": self.agent_id,
                                 "chunk_type": "assistant_message",
                                 "payload": {"content": response.content},
-                                "token_count": len(response.content) // 4,
+                                "token_count": get_token_count(response.content),
                             }
                         )
                         try:

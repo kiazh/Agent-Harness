@@ -206,6 +206,13 @@ class ProjectionMessage:
     priority: int = 0
     native_blocks: Any = None
     native_key: str | None = None
+    # The original canonical provider mapping captured (deep-copied) at unit
+    # construction (MCH-004). ``None`` for hand-built units, which keeps the
+    # field-subset reconstruction shape. Unmodified units re-render ``raw``
+    # verbatim on the outgoing request so extra provider fields (``name``,
+    # caller metadata, ...) never vanish; reconstructed units (view
+    # replacement) merge the extra original fields back.
+    raw: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -343,6 +350,8 @@ def _validate(inp: ProjectionInput) -> None:
             call_ids.append(call_id)
         if len(call_ids) != len(set(call_ids)):
             raise ValueError(f"unit {unit_id}: duplicate tool-call ids in one batch")
+        if unit.raw is not None and not isinstance(unit.raw, Mapping):
+            raise ValueError(f"unit {unit_id}: raw must be a mapping or None")
 
     for block_id in inp.pins.provider_required_blocks:
         if not isinstance(block_id, str) or block_id not in seen:
@@ -528,7 +537,39 @@ def _view_eligible(unit: ProjectionMessage) -> bool:
     return "\n[machina view:" not in unit.content
 
 
+#: Fields projection explicitly renders from the unit when it must
+#: reconstruct (MCH-004); every other key of ``unit.raw`` is merged back so
+#: extra provider fields never vanish, while content-bearing fields owned by
+#: projection (``content`` and the view/role) are never resurrected.
+_FIXED_UNIT_FIELDS = frozenset({"role", "content", "tool_calls", "tool_call_id"})
+
+
 def _render_unit(
+    unit: ProjectionMessage,
+    native_cache: Mapping[str, Any],
+    *,
+    text: Any = None,
+) -> dict[str, Any]:
+    raw = unit.raw
+    if raw is not None:
+        if text is None and not unit.tool_calls and unit.native_blocks is None:
+            # Unmodified unit (MCH-004): the captured original mapping is the
+            # canonical payload — replay it verbatim instead of reconstructing
+            # a fixed-field subset. The copy keeps the plan isolated from the
+            # caller's storage (C16: never alias inputs).
+            return copy.deepcopy(dict(raw))
+        base = _reconstructed_unit(unit, native_cache, text=text)
+        # View replacement or a native/tool rewrite: the owned fields were
+        # rebuilt; merge any further original fields so nothing silently
+        # vanishes. Owned fields win (setdefault), extra fields follow.
+        for key, value in raw.items():
+            if key not in _FIXED_UNIT_FIELDS:
+                base.setdefault(key, copy.deepcopy(value))
+        return base
+    return _reconstructed_unit(unit, native_cache, text=text)
+
+
+def _reconstructed_unit(
     unit: ProjectionMessage,
     native_cache: Mapping[str, Any],
     *,
@@ -575,11 +616,7 @@ def _compose(
         if pin.kind not in _GOVERNING_PIN_KINDS
     ]
     instruction_id = next(
-        (
-            unit.unit_id
-            for unit in messages
-            if unit.kind == "required" and unit.unit_id in included
-        ),
+        (unit.unit_id for unit in messages if unit.kind == "required" and unit.unit_id in included),
         None,
     )
     plan = list(governing)
@@ -1090,7 +1127,10 @@ def provider_messages_to_units(
     Unit ids are ``m{index}`` over the absolute message position, so
     append-only history keeps stable identities between candidate and final
     projections. Callers annotate protection, artifact handles, kinds and
-    retrieval priorities by index.
+    retrieval priorities by index. Each unit also captures its original
+    mapping (deep-copied) as ``unit.raw``, so a fitting plan replays
+    unmodified messages verbatim and nothing outside the modeled fields is
+    erased (MCH-004).
     """
     protected = set(protected_indexes)
     handles = artifact_handles or {}
@@ -1113,6 +1153,9 @@ def provider_messages_to_units(
                 priority=int(priority_map.get(index, 0)),
                 native_blocks=copy.deepcopy(message.get(native_key)) if has_native else None,
                 native_key=str(native_key) if has_native else None,
+                # Capture the whole canonical mapping verbatim (deep-copied at
+                # capture time) so rendering can replay it unchanged (MCH-004).
+                raw=copy.deepcopy(dict(message)),
             )
         )
     return tuple(units)

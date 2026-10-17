@@ -104,16 +104,18 @@ _stale_tool_preview = stale_tool_preview
 
 
 def turn_model(session, provider) -> str | None:
-    """Best-known model id for capacity: session first, then provider/config.
+    """Best-known model id for capacity: provider first, then session/config.
 
-    The session pins the explicit per-turn choice; the provider object is
-    built for the session and only backs it up when the session is unpinned.
+    The provider object is the model actually serving this turn (a
+    provider-level override such as ``machina chat -m``), so it wins when it
+    diverges from the saved ``session.model``; the session pin only backs it
+    up when the provider is unpinned (F-01).
     """
     from machina.core.config import config
 
     for candidate in (
-        getattr(session, "model", None),
         getattr(provider, "model", None),
+        getattr(session, "model", None),
     ):
         if isinstance(candidate, str) and candidate:
             return candidate

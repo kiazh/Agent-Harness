@@ -126,6 +126,7 @@ _ADD_CHUNK_WITH_IMAGES_SQL = """
 _ADD_CHUNKS_BATCH_SQL = """
     INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, event_seq)
     SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[], $10::bigint[])
+    ON CONFLICT (id) DO NOTHING
     RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
     """
 
@@ -133,6 +134,7 @@ _ADD_CHUNKS_BATCH_WITH_IMAGES_SQL = """
     WITH inserted AS (
         INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, event_seq)
         SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[], $10::bigint[])
+        ON CONFLICT (id) DO NOTHING
         RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
     ), latest_images AS (
         INSERT INTO session_image_context (session_id, agent_id, images_msgpack)
@@ -295,7 +297,17 @@ class ContextManager:
             len(records),
         )
         ordinals = sorted(int(r["v"]) for r in seq_rows)
-        chunk_ids = [uuid.uuid4() for _ in records]
+        # C1: a caller may pre-assign the event id (retries must reuse the same
+        # identity). Fall back to a fresh id only when no id was supplied.
+        chunk_ids: list[uuid.UUID] = []
+        for c in chunks:
+            supplied = c.get("id")
+            if supplied is None:
+                chunk_ids.append(uuid.uuid4())
+            elif isinstance(supplied, uuid.UUID):
+                chunk_ids.append(supplied)
+            else:
+                chunk_ids.append(uuid.UUID(str(supplied)))
         records_with_ids = [
             (cid, *rec, ordinal)
             for cid, rec, ordinal in zip(chunk_ids, records, ordinals, strict=True)
@@ -318,26 +330,50 @@ class ContextManager:
         )
         if not image_updates:
             rows = await db.fetch(query, *base_args)
-            return [self._row_to_chunk(r) for r in rows]
-        for key in image_updates:
-            _NO_LEGACY_IMAGES.discard(key)
-        try:
-            rows = await db.fetch(
-                _ADD_CHUNKS_BATCH_WITH_IMAGES_SQL,
-                *base_args,
-                [key[0] for key in image_updates],
-                [key[1] for key in image_updates],
-                list(image_updates.values()),
+        else:
+            for key in image_updates:
+                _NO_LEGACY_IMAGES.discard(key)
+            try:
+                rows = await db.fetch(
+                    _ADD_CHUNKS_BATCH_WITH_IMAGES_SQL,
+                    *base_args,
+                    [key[0] for key in image_updates],
+                    [key[1] for key in image_updates],
+                    list(image_updates.values()),
+                )
+            except Exception as exc:
+                if not _is_missing_image_relation(exc):
+                    raise
+                logger.warning(
+                    "session_image_context missing; stored batch payloads intact without image-cache update",
+                    exc_info=True,
+                )
+                rows = await db.fetch(query, *base_args)
+        # C1: ON CONFLICT (id) DO NOTHING makes a retried batch a no-op for ids
+        # that are already persisted, so RETURNING reports only the newly
+        # inserted rows. Fetch the missing rows by id and verify the session
+        # binding before treating them as this batch's records: an id that
+        # belongs to another session must never be mistaken for our insert.
+        by_id = {row["id"]: row for row in rows}
+        missing = [cid for cid in chunk_ids if cid not in by_id]
+        if missing:
+            persisted = await db.fetch(
+                "SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, "
+                "embedding, created_at, accessed_at, document_source "
+                "FROM context_chunks WHERE id = ANY($1::uuid[])",
+                missing,
             )
-        except Exception as exc:
-            if not _is_missing_image_relation(exc):
-                raise
-            logger.warning(
-                "session_image_context missing; stored batch payloads intact without image-cache update",
-                exc_info=True,
-            )
-            rows = await db.fetch(query, *base_args)
-        return [self._row_to_chunk(r) for r in rows]
+            expected_sessions = {cid: rec[0] for cid, rec in zip(chunk_ids, records, strict=True)}
+            for row in persisted:
+                if row["session_id"] != expected_sessions[row["id"]]:
+                    raise RuntimeError(
+                        "context chunk id collision: the existing row belongs to another session"
+                    )
+                by_id[row["id"]] = row
+        # Callers retry by identity; return the rows in the caller's original
+        # event order (newly inserted and previously persisted alike).
+        ordered = [by_id[cid] for cid in chunk_ids if cid in by_id]
+        return [self._row_to_chunk(r) for r in ordered]
 
     async def get_latest_images(self, session_id: uuid.UUID, agent_id: str) -> list[dict[str, str]]:
         """Retrieve the latest image-bearing user turn independently of compaction.

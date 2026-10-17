@@ -3,12 +3,7 @@
 from __future__ import annotations
 
 from machina.core.agent_def import AgentDef
-from machina.soulspec.schema import SoulSpec
-
-try:
-    from machina.soulspec.schema import _NO_TOOLS_SENTINEL
-except ImportError:  # pragma: no cover - sentinel always defined
-    _NO_TOOLS_SENTINEL = object()
+from machina.soulspec.schema import _NO_TOOLS_SENTINEL, SoulSpec
 
 
 def _visible_tools(tools: list) -> list[str]:

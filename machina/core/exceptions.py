@@ -36,10 +36,6 @@ class SessionNotFoundError(MachinaError, ValueError):
     """Raised when a session is not found."""
 
 
-class ContextBudgetExceededError(MachinaError, RuntimeError):
-    """Raised when the context budget is exceeded."""
-
-
 class UsageBudgetExceededError(MachinaError, RuntimeError):
     """Raised before an LLM call when a persistent usage budget is exhausted."""
 
@@ -111,7 +107,6 @@ __all__ = [
     "DelegationAccountingError",
     "ValidationError",
     "SessionNotFoundError",
-    "ContextBudgetExceededError",
     "UsageBudgetExceededError",
     "RateLimitError",
     "StaleOwnershipError",

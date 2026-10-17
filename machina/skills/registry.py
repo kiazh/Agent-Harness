@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 # Defaults are anchored to the project root, not the current directory, so the
 # same skills are found no matter where `machina` is launched. Override with env vars.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Stale on-disk build directories from the pre-``.install-staging`` layout
+# (``<name>.install-<pid>-<hash>``, produced by older versions whose builder
+# created them at the top level) must never surface as skills; current
+# producers nest such builds under ``skills_dir/.install-staging/`` only
+# (repo_install._build_skill), which the direct-child scan cannot load. The
+# guard stays as defense against those legacy leftovers (pinned by
+# test_repo_install.py::test_registry_ignores_legacy_incomplete_install_dir).
 _LEGACY_INSTALL_BUILD_RE = re.compile(r"[a-z0-9_-]+\.install-[0-9]+-[0-9a-f]{8}")
 #: Cap on sidecar files folded into the stat-only cache signature.
 _MAX_ENRICHMENT_SIGNATURE_FILES = 128
@@ -628,9 +635,7 @@ class SkillRegistry(SkillSource):
                     sidecar_stat = sidecar.stat()
                 except OSError:
                     continue
-                enrichment.append(
-                    (sidecar.name, sidecar_stat.st_mtime_ns, sidecar_stat.st_size)
-                )
+                enrichment.append((sidecar.name, sidecar_stat.st_mtime_ns, sidecar_stat.st_size))
         except OSError:
             pass
         return (tuple(entries), telemetry, tuple(enrichment))
@@ -1277,14 +1282,18 @@ class SkillRegistry(SkillSource):
         return skill
 
     def delete_skill(self, name: str) -> bool:
-        """Delete a skill by name."""
+        """Delete a skill by name.
+
+        Publishing to the live registry happens only AFTER the persistent
+        removal succeeds (MCH-013): a manifest that refuses ownership, or an
+        unlink failure, surfaces its error while the entry stays loaded and
+        the files stay intact — never loaded-but-deleted.
+        """
         skill = self._skills.get(_skill_key(name))
         if skill and skill.source_type == "builtin-ecc":
             return False
-        skill = self._skills.pop(_skill_key(name), None)
         if not skill:
             return False
-        self._invalidate()
         skill_path = Path(skill.file_path)
         # Repo-installed skills own a whole manifest-tracked tree. Unlinking
         # only SKILL.md leaves the manifest and the resources behind, and
@@ -1296,6 +1305,9 @@ class SkillRegistry(SkillSource):
         from machina.skills.repo_install import remove_installed_skill
 
         if remove_installed_skill(skill_path.parent):
+            # The manifest-owned tree is gone from disk; now publish to memory.
+            self._skills.pop(_skill_key(name), None)
+            self._invalidate()
             return True
         if skill_path.exists():
             skill_path.unlink()
@@ -1303,6 +1315,9 @@ class SkillRegistry(SkillSource):
         parent = skill_path.parent
         if parent.exists() and not any(parent.iterdir()):
             parent.rmdir()
+        # Persistent removal completed; drop the live entry last.
+        self._skills.pop(_skill_key(name), None)
+        self._invalidate()
         return True
 
     @classmethod

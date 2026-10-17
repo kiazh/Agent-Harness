@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from machina.core.config import Config
 from machina.core.exceptions import (
-    ContextBudgetExceededError,
     DatabaseError,
     MachinaError,
     ProviderError,
@@ -23,7 +22,6 @@ from machina.core.models import (
 
 __all__ = [
     "MachinaError",
-    "ContextBudgetExceededError",
     "DatabaseError",
     "ProviderError",
     "SessionNotFoundError",

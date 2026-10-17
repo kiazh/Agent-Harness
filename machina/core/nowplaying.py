@@ -43,7 +43,6 @@ __all__ = [
     "detect_now_playing",
     "send_now_playing_command",
     "describe_sources",
-    "NowPlayingUnavailable",
 ]
 
 OSASCRIPT_TIMEOUT_S = 3.0
@@ -96,10 +95,6 @@ def _mr_read(started: float) -> tuple[Any, Any, Any]:
             return None
 
         return get("info"), get("playing"), get("pid")
-
-
-class NowPlayingUnavailable(RuntimeError):
-    """The platform has no usable now-playing detection."""
 
 
 def _run(command: list[str], timeout: float) -> tuple[int, str, str]:

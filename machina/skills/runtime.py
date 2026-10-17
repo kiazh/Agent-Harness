@@ -23,13 +23,11 @@ from machina.skills.registry import Skill, SkillRegistry
 from machina.skills.revisions import RevisionRegistry, task_state_revision
 
 _INDEXES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
-# Alias normalization (stopwords, synonyms, C++/C#/.NET folding) now lives in
+# Alias normalization (stopwords, synonyms, C++/C#/.NET folding) lives in
 # ``machina.skills.search`` so the ranking and the explanations it builds use
-# one home. ``_TECHNOLOGIES`` is re-exported for workflow/task_descriptor;
-# ``_SPECIALTIES`` stays a plain alias because the search module's
-# legacy-parity note references it by name.
+# one home. ``_TECHNOLOGIES`` is re-exported here because
+# ``machina.core.task_descriptor`` imports it from this module.
 _TECHNOLOGIES = search_module.TECHNOLOGY_MARKERS
-_SPECIALTIES = search_module.SPECIALTY_MARKERS
 
 
 def _words(text: str) -> list[str]:
@@ -86,7 +84,24 @@ def search_skills(
     skills.load_all()
     all_skills = skills.list_skills()
     # Registry replaces its objects on reload; telemetry changes retain them.
-    signature = tuple((s.name, s.description, tuple(s.triggers), s.enabled) for s in all_skills)
+    # The signature must therefore cover what the cached index serves: the
+    # routing fields AND the content-derived revision (body + version + bundle
+    # metadata + typed metadata digest, ``search.content_revision``). Without
+    # the digest an out-of-band SKILL.md body or v2-metadata edit that leaves
+    # name/description/triggers/enabled unchanged would keep serving the stale
+    # index: candidates would carry a ``content_revision`` that the very next
+    # section read rejects as stale (P0-8 / spec §11 freshness contract).
+    signature = tuple(
+        (
+            s.name,
+            s.description,
+            tuple(s.triggers),
+            s.enabled,
+            getattr(s, "source_type", "local"),
+            search_module.content_revision(s),
+        )
+        for s in all_skills
+    )
     cached = _INDEXES.get(skills)
     if cached is None or cached[0] != signature:
         cached = (signature, SkillIndex(all_skills))

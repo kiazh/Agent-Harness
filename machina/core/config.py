@@ -135,7 +135,6 @@ DEFAULTS: dict[str, Any] = {
     # Legacy storage/config compatibility only; runtime uses model context capacity.
     "context_budget": 8000,
     "turn_timeout": 300,
-    "verbose": True,
     "agent_id": "harness",
     "temperature": 0.7,
     "max_tokens": 4096,
@@ -177,7 +176,6 @@ DEFAULTS: dict[str, Any] = {
     # path (one-key rollback; read lazily by runtime._disclosure_planner_enabled).
     "skills_disclosure_planner": True,
     "rag_enabled": True,
-    "streaming": True,
     # Embedding backend for dense retrieval (RAG documents + memory).
     # Default "off": the LoCoMo archive replay showed keyword-only (recall@5
     # 0.425/MRR 0.345) beating static-model hybrids (potion 0.422/MRR 0.316)
@@ -546,7 +544,6 @@ class Config:
     provider: str = "openrouter"
     context_budget: int = 8000
     turn_timeout: int = 300
-    verbose: bool = True
     agent_id: str = "harness"
     temperature: float = 0.7
     max_tokens: int = 4096
@@ -573,7 +570,6 @@ class Config:
     # one-key rollback); contract documented in DEFAULTS.
     skills_disclosure_planner: bool = True
     rag_enabled: bool = True
-    streaming: bool = True
     # Embedding backend selection for dense retrieval (RAG + memory).
     # Default "off": LoCoMo measurement kept dense models opt-in (see DEFAULTS).
     embedding_backend: str = "off"
