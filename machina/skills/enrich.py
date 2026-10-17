@@ -236,7 +236,10 @@ async def ensure_skill_metadata(
     target = registry if registry is not None else skill_registry
     try:
         target.persist_skill_metadata(skill, metadata)
-    except OSError as exc:
+    except Exception as exc:
+        # Persistence can raise ValueError/YAML/encoding errors as well as
+        # OSError. The documented contract is fail-open: report and leave the
+        # skill unchanged (combined #49 / original #62).
         record_failure("skills.enrich.persist", exc)
         return False
     return True
