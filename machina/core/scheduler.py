@@ -926,6 +926,7 @@ class JobRunner:
         if not job_turn:
             raise RuntimeError("session turn busy; job rescheduled")
         claim_renewal: asyncio.Task | None = None
+        previous_owner: str | None = None
         try:
             # R12: keep the session claim alive for the whole effect lifetime
             # (quarantine included), so a long or resistant run cannot outlive
@@ -1046,8 +1047,10 @@ class JobRunner:
                 if ownership_lost is not None and ownership_lost.is_set():
                     raise RuntimeError("job ownership lost")
                 # H03: persist the job's selected identity before the run so
-                # the agent's durable ownership check accepts it.
-                await self._reconcile_session_owner(job)
+                # the agent's durable ownership check accepts it. The original
+                # owner is restored in the finally block; this is a run-scoped
+                # override, never a permanent session mutation.
+                previous_owner = await self._reconcile_session_owner(job)
                 response = await agent.run(job.session_id, prompt, verbose=False)
                 # Headless jobs never hang on hidden prompts (Phase E):
                 # AH-AUDIT-022: pause detection uses the typed
@@ -1094,6 +1097,13 @@ class JobRunner:
                         # Optional fallback preserves the primary outcome; report no payload.
                         record_failure("scheduler._execute", _boundary_error)
         finally:
+            if previous_owner is not None:
+                try:
+                    await self._restore_session_owner(job, previous_owner)
+                except Exception as _boundary_error:
+                    # The durable run already finished; report restoration
+                    # failure without masking the primary outcome.
+                    record_failure("scheduler.restore_session_owner", _boundary_error)
             if claim_renewal is not None:
                 # Stop/join the claim renewal before releasing the claim itself
                 # (order mirrors the transports' engine cleanup).
@@ -1183,7 +1193,7 @@ class JobRunner:
             model_override=model,
         )
 
-    async def _reconcile_session_owner(self, job: Job) -> None:
+    async def _reconcile_session_owner(self, job: Job) -> str | None:
         """Reconcile the durable session owner with the executed job identity (H03).
 
         R5-C: the JOB's identity governs the run. ``ReActAgent.run`` reloads the
@@ -1208,16 +1218,16 @@ class JobRunner:
             or not job.agent_name
             or getattr(job, "no_agent", False)
         ):
-            return
+            return None
         from machina.core.provider import audit_log
         from machina.core.session import session_manager
         from machina.db.connection import db
 
         if not db.connected:
-            return
+            return None
         session = await session_manager.get_fresh(job.session_id)
         if session is None or session.agent_id == job.agent_name:
-            return
+            return None
         previous = session.agent_id
         await db.execute(
             "UPDATE sessions SET agent_id = $2 WHERE id = $1",
@@ -1233,4 +1243,44 @@ class JobRunner:
             previous_agent=previous,
             agent=job.agent_name,
             job_id=str(job.id),
+        )
+        return previous
+
+    async def _restore_session_owner(self, job: Job, previous: str) -> None:
+        """Restore the interactive owner after a run-scoped job override.
+
+        The UPDATE is conditional on the job's identity still owning the row,
+        so a concurrent legitimate ownership change is never clobbered. The
+        cache is refreshed afterwards so ordinary ``session_manager.get``
+        reads see the restored owner immediately (combined #17 / original #42).
+        """
+        if not job.session_id:
+            return
+        from machina.core.provider import audit_log
+        from machina.core.session import session_manager
+        from machina.db.connection import db
+
+        if not db.connected:
+            return
+        result = await db.execute(
+            "UPDATE sessions SET agent_id = $2 WHERE id = $1 AND agent_id = $3",
+            job.session_id,
+            previous,
+            job.agent_name,
+        )
+        try:
+            from machina.db.connection import parse_command_count
+
+            restored = parse_command_count(result) > 0
+        except Exception:
+            restored = True
+        if restored:
+            await session_manager.get_fresh(job.session_id)
+        audit_log(
+            "job_agent_owner_restored",
+            session_id=str(job.session_id),
+            agent=previous,
+            previous_agent=job.agent_name,
+            job_id=str(job.id),
+            restored=restored,
         )
