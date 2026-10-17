@@ -56,7 +56,7 @@ from typing import Any
 
 from machina.workspace import lsp as lsp_module
 from machina.workspace import quickopen as quickopen_module
-from machina.workspace.documents import DocumentMirrorStore, utf16_full_range
+from machina.workspace.documents import DocumentMirrorStore
 from machina.workspace.files import WorkspaceFiles
 from machina.workspace.intelligence import (
     DEFAULT_INTELLIGENCE_TIMEOUTS,
@@ -977,8 +977,11 @@ class WorkspaceService:
         version, changes}`` and is used only when the server sits exactly at
         ``base_version`` and the change reaches the mirror's newest version.
         Any gap falls back to a deliberate full snapshot (full-text
-        ``didChange`` for sync kind 1, whole-document range replacement for
-        kind 2) — never a change whose base the server does not have.
+        ``didChange`` for sync kind 1, rangeless whole-document replacement for
+        kind 2) — never a change whose base the server does not have. The
+        fallback must not compute a range from the new snapshot: when the
+        document shrinks that range describes the new extent, not the text the
+        server currently holds, so old content survives the replacement.
         """
         store = self._documents
         if store is None or connection.state != STATE_READY:
@@ -1021,11 +1024,11 @@ class WorkspaceService:
             connection.did_change(uri, mirror_version, [{"text": snapshot["text"]}])
             record.version = mirror_version
         elif sync_kind == 2:
-            connection.did_change(
-                uri,
-                mirror_version,
-                [{"range": utf16_full_range(snapshot["text"]), "text": snapshot["text"]}],
-            )
+            # LSP permits the full-text variant of a content change even for
+            # an incremental server; it has no range to mis-describe the
+            # server-held text and is the only safe recovery when the old
+            # server text is not retained here.
+            connection.did_change(uri, mirror_version, [{"text": snapshot["text"]}])
             record.version = mirror_version
         # else: the server negotiated no text synchronization (kind 0/absent);
         # nothing may be sent and nothing is recorded as synced.
