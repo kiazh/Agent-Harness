@@ -524,10 +524,14 @@ def _recursive_traversal(argv: list[str], cwd: str) -> bool:
     if name == "git":
         # R4-060: `git grep` reads tracked file contents recursively, and
         # `--untracked`/`--no-exclude-standard` reach ignored files (.env);
-        # it gates exactly like the grep/rg walks. Other git reads are
-        # name/diff output and keep their existing classification.
-        if args and args[0] == "grep":
-            return _git_grep_directory_walk(args[1:], cwd)
+        # it gates exactly like the grep/rg walks. Normalize the global pager
+        # flag the same way routine_project_command does, so a command cannot
+        # be routine to one classifier and invisible to the other.
+        git_args = args
+        while git_args and git_args[0] in {"--no-pager", "-P"}:
+            git_args = git_args[1:]
+        if git_args and git_args[0] == "grep":
+            return _git_grep_directory_walk(git_args[1:], cwd)
         return False
     return False
 
@@ -728,7 +732,14 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
     )
 
     found = [c for c in (req.capabilities or []) if c in REVIEW_CAPABILITIES]
-    first = executable_name(req.argv[0]) if req.argv else ""
+    # `uv run <tool>` must classify as the tool it launches. Leaving `first`
+    # as "uv" made writes_paths and the privilege/destructive checks miss
+    # `uv run ruff --fix .machina/...`, which the routine classifier unwraps
+    # and would otherwise auto-allow.
+    argv = req.argv
+    while len(argv) > 2 and executable_name(argv[0]) == "uv" and argv[1] == "run":
+        argv = argv[2:]
+    first = executable_name(argv[0]) if argv else ""
     root = Path(req.workspace_root).resolve() if req.workspace_root else workspace_root()
     if req.shell_payload:
         from dataclasses import replace
@@ -745,7 +756,7 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         found.append("opaque_execution_review")
     paths = list(req.targets)
     if req.operation == "process.exec":
-        for value in command_path_values(req.argv):
+        for value in command_path_values(argv):
             path = Path(value).expanduser()
             paths.append(str((path if path.is_absolute() else Path(req.cwd) / path).resolve()))
     if req.operation in {"file.read", "file.write", "process.exec"}:
@@ -792,7 +803,7 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
             "set-executionpolicy",
         }
         or first == "chmod"
-        and "777" in req.argv
+        and "777" in argv
     ):
         found.append("privilege_escalation")
     if first in {
@@ -813,11 +824,11 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         found.append("destructive_system")
     if (
         first == "git"
-        and len(req.argv) > 1
-        and req.argv[1] in {"reset", "clean", "restore", "checkout", "rebase"}
+        and len(argv) > 1
+        and argv[1] in {"reset", "clean", "restore", "checkout", "rebase"}
     ):
         found.append("destructive_system")
-    if first == "find" and "-delete" in req.argv:
+    if first == "find" and "-delete" in argv:
         found.append("destructive_system")
     # A recursive traversal's match set is unknown at approval time; the
     # pattern never names the files it reaches, so descendant dotfiles can
@@ -998,12 +1009,20 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
             req,
         )
     # Default ask is risk-based: ordinary project edits and known tool reads
-    # proceed. Sensitive actions were handled above in every mode.
-    if req.operation == "file.read" and all(_inside_workspace(t, req_root) for t in req.targets):
+    # proceed. Sensitive actions were handled above in every mode. An empty
+    # target set cannot be proven inside the workspace: ``all(...)`` is
+    # vacuously true there, so callers with an unrecognized path argument must
+    # go to approval rather than inherit project authority.
+    if (
+        req.operation == "file.read"
+        and req.targets
+        and all(_inside_workspace(t, req_root) for t in req.targets)
+    ):
         return Decision("allowed", "trusted project read", req)
     if (
         req.mode in ("ask", "workspace", "sandbox")
         and req.operation in ("file.read", "file.write")
+        and req.targets
         and all(_inside_workspace(t, req_root) for t in req.targets)
     ):
         return Decision("allowed", "routine project file operation", req)

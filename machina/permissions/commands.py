@@ -54,6 +54,18 @@ _GIT_COMMANDS = frozenset(
         "commit",
     }
 )
+
+
+def _strip_git_pager_flags(args: list[str]) -> list[str]:
+    """Drop git's global ``--no-pager``/``-P`` before subcommand checks.
+
+    The capability classifiers must agree on the real subcommand: stripping
+    here without stripping in ``_recursive_traversal`` would turn
+    ``git --no-pager grep`` into a routine command that skips review.
+    """
+    while args and args[0] in {"--no-pager", "-P"}:
+        args = args[1:]
+    return args
 _WORKFLOWS = frozenset({"test", "build", "lint", "typecheck", "check", "format"})
 _ESCAPE_ARGS = frozenset(
     {
@@ -163,6 +175,7 @@ def routine_project_command(argv: list[str], cwd: str, root: Path) -> bool:
                 return False
     command, args = executable_name(argv[0]), argv[1:]
     if command == "git":
+        args = _strip_git_pager_flags(args)
         if not args:
             return False
         return args[0] in _GIT_COMMANDS and not any(
