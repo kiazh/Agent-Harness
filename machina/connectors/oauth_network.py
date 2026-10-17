@@ -119,6 +119,10 @@ def classify_url_host(host: str, *, local_access: bool) -> tuple[str, ...]:
         )
     kinds = set()
     for ip in ips:
+        # Dual-stack sockets can route mapped IPv6 addresses to IPv4 targets.
+        # Apply the same destination policy while retaining the resolved dial address.
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
         if str(ip) in _METADATA_HOSTS:
             raise OAuthNetworkError(
                 "cloud metadata endpoints are never oauth targets",
