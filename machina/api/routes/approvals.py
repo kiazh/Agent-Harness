@@ -90,6 +90,7 @@ async def resolve_approval(request_id: str, req: ResolveApprovalRequest) -> dict
 
 @router.post("/api/v1/approvals/{request_id}/resume", dependencies=[Depends(require_api_key)])
 async def resume_approval(request_id: str, req: ResumeApprovalRequest) -> StreamingResponse:
+    from machina.connectors.models import ConnectorError
     from machina.core.approval_resume import matches_approval, resumed_request
     from machina.permissions import store
     from machina.tools.base import registry
@@ -111,6 +112,14 @@ async def resume_approval(request_id: str, req: ResumeApprovalRequest) -> Stream
         action = await resumed_request(record, req.toolArgs)
     except ValueError:
         raise HTTPException(400, "invalid continuation arguments") from None
+    except ConnectorError:
+        raise HTTPException(
+            409,
+            {
+                "type": "approval.continuation_unavailable",
+                "message": "connector state or arguments changed; request fresh approval",
+            },
+        ) from None
     if not matches_approval(action, record):
         fresh = await store.create_approval(action, principal="http")
         raise HTTPException(
