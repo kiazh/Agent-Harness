@@ -153,7 +153,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                 model,
                 messages,
                 tools or [],
-                max_tokens,
+                int(payload.get("max_tokens", max_tokens)),
             )
         settlement = ReservationSettlement(reservation_id, usage_store)
 
@@ -381,7 +381,7 @@ class OpenRouterProvider(LLMProvider, RateLimitBinding):
                 model,
                 messages,
                 tools or [],
-                max_tokens,
+                payload_max,
             )
         settlement = ReservationSettlement(reservation_id, usage_store)
 
