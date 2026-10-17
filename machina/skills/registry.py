@@ -22,7 +22,7 @@ import re
 import tempfile
 import threading
 import unicodedata
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -610,6 +610,89 @@ class SkillParser:
         )
 
 
+def _supports_dir_fd_creation() -> bool:
+    """Whether this platform can create a child anchored to a directory fd."""
+    try:
+        return os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd
+    except AttributeError:  # pragma: no cover - non-POSIX
+        return False
+
+
+def _create_skill_file_contained(
+    root: Path, safe_name: str, skill_content: str, display_name: str
+) -> Path:
+    """Create ``<root>/<safe_name>/SKILL.md`` without following symlinks.
+
+    The previous ``mkdir(exist_ok=True)`` + ``open("x")`` pair accepted a
+    pre-existing ``<root>/<safe_name>`` directory symlink and created the file
+    at its target (combined finding #5 / original #36). Walk from the root with
+    ``openat`` + ``O_NOFOLLOW|O_DIRECTORY`` and create the file with
+    ``O_EXCL|O_NOFOLLOW`` from the verified directory descriptor, so a symlink
+    component fails closed even if it is swapped in concurrently.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    skill_dir = root / safe_name
+    skill_file = skill_dir / "SKILL.md"
+
+    if not _supports_dir_fd_creation():  # pragma: no cover - Windows fallback
+        if skill_dir.is_symlink():
+            raise ValueError(f"skill '{display_name}' directory traverses a symlink")
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        if skill_file.is_symlink():
+            raise ValueError(f"skill '{display_name}' already exists")
+        try:
+            with skill_file.open("x", encoding="utf-8") as output:
+                output.write(skill_content)
+        except FileExistsError:
+            raise ValueError(f"skill '{display_name}' already exists") from None
+        return skill_file
+
+    dflags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    root_fd = os.open(root, dflags)
+    skill_fd = -1
+    try:
+        try:
+            skill_fd = os.open(safe_name, dflags | nofollow, dir_fd=root_fd)
+        except FileNotFoundError:
+            try:
+                os.mkdir(safe_name, dir_fd=root_fd)
+            except FileExistsError:
+                # Raced creation: re-open below and let O_NOFOLLOW decide.
+                pass
+            try:
+                skill_fd = os.open(safe_name, dflags | nofollow, dir_fd=root_fd)
+            except OSError:
+                raise ValueError(
+                    f"skill '{display_name}' directory traverses a symlink"
+                ) from None
+        except OSError:
+            raise ValueError(f"skill '{display_name}' directory traverses a symlink") from None
+
+        file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow
+        try:
+            file_fd = os.open("SKILL.md", file_flags, 0o600, dir_fd=skill_fd)
+        except FileExistsError:
+            raise ValueError(f"skill '{display_name}' already exists") from None
+        except OSError:
+            raise ValueError(f"skill '{display_name}' cannot be created safely") from None
+
+        try:
+            with os.fdopen(file_fd, "w", encoding="utf-8") as output:
+                output.write(skill_content)
+        except BaseException:
+            with suppress(OSError):
+                os.unlink("SKILL.md", dir_fd=skill_fd)
+            raise
+        return skill_file
+    finally:
+        if skill_fd >= 0:
+            with suppress(OSError):
+                os.close(skill_fd)
+        with suppress(OSError):
+            os.close(root_fd)
+
+
 class SkillRegistry(SkillSource):
     """Load, match, and manage skills.
 
@@ -1169,8 +1252,6 @@ class SkillRegistry(SkillSource):
         for other_root in self._skill_dirs():
             if other_root != target_root and (other_root / safe_name / "SKILL.md").exists():
                 raise ValueError(f"skill '{name}' already exists")
-        skill_dir = target_root / safe_name
-        skill_dir.mkdir(parents=True, exist_ok=True)
 
         # Build SKILL.md content
         created_at = datetime.now(UTC)
@@ -1187,14 +1268,12 @@ class SkillRegistry(SkillSource):
         yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
         skill_content = f"---\n{yaml_text}---\n{content}\n"
 
-        skill_file = skill_dir / "SKILL.md"
         # Exclusive creation is the final read-before-write guard when two
         # reviews (or a manual learn) target the same skill concurrently.
-        try:
-            with skill_file.open("x", encoding="utf-8") as output:
-                output.write(skill_content)
-        except FileExistsError:
-            raise ValueError(f"skill '{name}' already exists") from None
+        # The anchored helper also refuses a pre-existing directory symlink:
+        # mkdir/follow-then-open would otherwise create the file outside the
+        # skill root.
+        skill_file = _create_skill_file_contained(target_root, safe_name, skill_content, name)
 
         skill = Skill(
             name=name,
