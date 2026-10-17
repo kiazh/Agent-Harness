@@ -1,619 +1,737 @@
 # Machina
 
-![Machina terminal UI](docs/ImagePub.png)
+**An AI workspace in your terminal, with memory, tools, and a choice of models.**
 
-A self-hosted, multi-agent AI orchestration framework: an agent with a terminal UI, PostgreSQL-backed conversations, memory and durable context, a tool registry with a permission broker, a skills system with deterministic routing, and a JSON-RPC gateway that the UI, the HTTP API, and external harnesses all speak to.
+Machina helps you work on code, research questions, and automate recurring tasks. Chat beside your files, ask specialist agents to help, and return to saved conversations later. You run the application and its database yourself; connect a cloud AI provider, a supported subscription account, or a local model.
 
-Machina runs against frontier APIs (OpenRouter, OpenAI, Anthropic, DeepSeek, xAI, Groq, Together, Mistral, Google, OpenCode Zen, Kimi), subscription seats (`chatgpt`, `copilot`), any OpenAI-compatible endpoint (`custom`), and local models (`ollama`). State — sessions, context chunks, memories, skills, usage, approvals — lives in PostgreSQL, so it survives restarts and is shared across the CLI, the TUI, and the HTTP API.
+![Machina terminal UI with chat, editor, and file explorer](docs/ImagePub.png)
 
-**Status: `0.2.0` development release candidate.** Verified in this checkout: the budgeted request projector wired into both agent loops against a real DeepSeek turn ([docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md](docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md) §10) and the live macOS now-playing bar (real PTY + gateway + detector, [docs/verification/NOWPLAYING_NATIVE_VERIFICATION.md](docs/verification/NOWPLAYING_NATIVE_VERIFICATION.md)). **Environment-gated / unverified:** native Anthropic/OpenAI signed-block replay at the provider transport (`DETERMINISTIC_SKILLS_B3_EVIDENCE.md` §73, §116), hosted CI runs, and any live-provider quality or performance claim — fixture tests are not evidence of model quality. There is **no Python test suite in this repository**; the backend suite lives in the sibling [Machina-DevTools](../Machina-DevTools) checkout.
+- **Work in one place.** Chat, edit files, browse your project, and review changes in the terminal.
+- **Keep useful context.** Save conversations, search documents, and carry preferences and lessons into future work.
+- **Choose your AI.** Switch providers and models, including local models through Ollama.
+- **Give agents practical tools.** Read and write files, run commands, research the web, and connect external services.
+- **Control sensitive actions.** Review approvals and choose how much authority each session has.
+- **Build on the same backend.** Use the interactive UI, command line, HTTP API, or integrations with other AI tools.
 
-## How it fits together
-
-End-to-end view of the surfaces, transport, gateway, agent core, provider layer, and storage (GitHub renders this diagram; the second screenshot is [docs/screenshot.png](docs/screenshot.png)).
-
-```mermaid
-flowchart TB
-    subgraph surfaces["Entry surfaces"]
-        TUI["Terminal UI - TypeScript / pi-tui<br/>chat, workspace editor + LSP, menus, music bar"]
-        CLI["Typer CLI - chat, repl, serve, init, skills, memory, usage"]
-        API["HTTP API - FastAPI + SSE<br/>/health /ready /metrics"]
-        EXT["External harnesses - OpenCode, Codex, Hermes via MCP"]
-    end
-
-    subgraph transport["Transport"]
-        RPC["JSON-RPC over stdio<br/>ui-gateway-protocol.md"]
-        HTTP["HTTP / RPC"]
-        MCP["MCP server + connector manager"]
-    end
-
-    subgraph gateway["Gateway - machina/gateway"]
-        FEAT["Feature handlers<br/>sessions, workspace + LSP, skills.search / preview_route / section,<br/>memory, usage, approvals, jobs, music, auth, interop"]
-    end
-
-    subgraph core["Agent core - machina/core"]
-        LOOP["Agent loops<br/>run / run_stream"]
-        GATE["Request gate + budgeted projector<br/>pins, round groups, recoverable views"]
-        COMPACT["Compression + post-turn auto-compaction<br/>+ honest status counters"]
-        SKILLS["Skills<br/>registry + provenance, metadata v2 + enrichment sidecar,<br/>canonical search/ranking, planned steps + sections + disclosure,<br/>install-time enrichment, revisions + observed events"]
-        MEM["Context assembly, memory,<br/>consolidation + approval, dense+sparse retrieval, reranker"]
-        TOOLS["Tool registry + result reducers + durable artifacts<br/>store-before-publish, completeness, recovery cursors"]
-        PERM["Permission broker + approval modes + sandbox"]
-        DELEG["Subagents / families / delegation"]
-        SELF["Self-knowledge, growth, RSI"]
-        USAGE["Usage ledger + dated pricing + prompt cache"]
-    end
-
-    subgraph providers["Providers"]
-        CLOUD["Cloud APIs<br/>OpenRouter, OpenAI, Anthropic, DeepSeek, xAI, Groq,<br/>Together, Mistral, Google, Kimi, OpenCode Zen"]
-        SEAT["Subscription seats<br/>ChatGPT, Copilot"]
-        LOCALP["Custom OpenAI-compatible endpoints<br/>Ollama local models"]
-    end
-
-    DB["PostgreSQL + pgvector<br/>sessions, context chunks, memories, skills + telemetry,<br/>usage, approvals, artifacts"]
-    DEV["Machina-DevTools<br/>backend suite, benchmarks, architecture ratchets, CI"]
-
-    TUI --> RPC --> FEAT
-    CLI --> FEAT
-    API --> HTTP --> FEAT
-    EXT --> MCP --> FEAT
-    FEAT --> LOOP
-    LOOP --> GATE --> COMPACT
-    LOOP --> SKILLS
-    LOOP --> MEM
-    LOOP --> TOOLS
-    TOOLS --> PERM
-    LOOP --> DELEG
-    LOOP --> SELF
-    LOOP --> USAGE
-    GATE --> CLOUD
-    GATE --> SEAT
-    GATE --> LOCALP
-    SKILLS --> DB
-    MEM --> DB
-    TOOLS --> DB
-    GATE --> DB
-    USAGE --> DB
-    PERM --> DB
-    DEV -. verifies .-> core
-```
+**Release status:** 0.2.0 development release candidate. See [release evidence and remaining deployment gates](docs/verification/RELEASE_READINESS.md) before operating a public service.
 
 ## Contents
 
-- [How it fits together](#how-it-fits-together)
-- [Highlights](#highlights)
-- [Requirements](#requirements)
-- [Install](#install)
-- [Quickstart](#quickstart)
-- [The terminal UI](#the-terminal-ui)
-- [Skills system](#skills-system)
-- [Rolling context & token efficiency](#rolling-context--token-efficiency)
-- [Memory & retrieval](#memory--retrieval)
-- [Providers & models](#providers--models)
-- [Configuration](#configuration)
-- [Gateway & integrations](#gateway--integrations)
-- [Security & permissions](#security--permissions)
-- [Testing & development](#testing--development)
-- [Repository layout](#repository-layout)
-- [Docs map](#docs-map)
-- [Troubleshooting](#troubleshooting)
-- [License & credits](#license--credits)
+- [Get started](#get-started): requirements, installation, and your first conversation
+- [Features](#features): workspace, saved sessions, context, search, skills, agents, and automation
+- [How it works](#how-it-works): the agent loop, architecture, and where data goes
+- [Providers and models](#providers-and-models): connections, credentials, and model selection
+- [Permissions and security](#permissions-and-security): modes, approvals, scripts, and secrets
+- [Configuration](#configuration): settings, defaults, and environment variables
+- [HTTP API and Docker](#http-api-and-docker): application integration and deployment
+- [Development](#development): tests, CI, and the source tree
+- [Documentation](#documentation) · [Troubleshooting](#troubleshooting) · [License and credits](#license-and-credits)
 
-## Highlights
+## Get started
 
-Each item below is grounded in the tree, not aspirational.
+### Requirements
 
-- **One backend, three front doors.** A Python CLI (`machina`, [machina/cli/__init__.py](machina/cli/__init__.py)), a TypeScript terminal UI ([ui/src/main.ts](ui/src/main.ts)), and a FastAPI HTTP server ([machina/api/app.py](machina/api/app.py)) share the same core services. The TUI and HTTP API both drive the agent through the same JSON-RPC gateway ([machina/gateway/server.py](machina/gateway/server.py)).
-- **40+ CLI commands** for chat, sessions, memory, skills, usage, config, providers, growth, harness interop — see [the command surface](#cli-command-surface).
-- **35 built-in agent tools** (file I/O, terminal, web search/crawl/extract/research, RAG indexing, memory, skills, artifacts, repo staging, delegation, MCP), registered in [machina/tools/__init__.py](machina/tools/__init__.py).
-- **Integrated code workspace** in the TUI: editor with file tabs, right-edge explorer, problems pane, Quick Open, and optional Python/TypeScript language intelligence via real LSP servers ([docs/design/WORKSPACE.md](docs/design/WORKSPACE.md)).
-- **Rolling context with durable evidence.** Oversized tool results are stored verbatim as session-scoped artifacts with re-authorized, paged recovery; deterministic reducers shrink them; a budgeted request projector plans the model-visible view ([docs/TOKEN_EFFICIENCY.md](docs/TOKEN_EFFICIENCY.md)).
-- **Deterministic skills routing.** A provenance-aware registry, schema-v2 catalog metadata with bounded diagnostics, a conflict-free selector, and stage-aware instruction disclosure ([machina/skills/](machina/skills/); catalog RPCs in [communications/ui-gateway-protocol.md](communications/ui-gateway-protocol.md)).
-- **Permission broker, not ad-hoc prompts.** Every execution path is evaluated against declared effects, with exact action digests, decision/execution separation, and execution modes `ask | workspace | sandbox | full` ([SECURITY.md](SECURITY.md)).
-- **Human-in-the-loop everywhere it matters:** approval cards in the TUI, `POST /api/v1/approvals/{id}/resolve|resume`, and memory approve/reject gates.
-- **Runtime learning, bounded and revertible:** persona notes, growth episodes, a bounded RSI loop, and post-turn learned skills with an auto-apply cap and a revert path.
+| Component | Required for |
+|---|---|
+| Python 3.11+ | The backend and command line |
+| PostgreSQL 16+ with pgvector | Saved conversations, memory, and application state |
+| Node.js 22.19+ and npm | The interactive terminal UI |
+| An AI provider or local model | Generating responses and using agent tools |
 
-## Requirements
+The installer supports macOS, Linux, and Git Bash on Windows. It can provision a local database with Docker, or Homebrew on macOS. The terminal UI needs an interactive terminal; Node.js is optional for command-line and HTTP use.
 
-| Component | Requirement | Source |
-|---|---|---|
-| Python | **3.11+** | `pyproject.toml` `requires-python` |
-| PostgreSQL | **16+ with pgvector** | [docker-compose.yml](docker-compose.yml), install help |
-| Node.js | **≥ 22.19** (TUI only) | `ui/package.json` `engines`, [machina/cli/launcher.py](machina/cli/launcher.py) |
-| Optional Python extras | `secrets`, `connectors`, `embeddings-local`, `embeddings-onnx`, `rerank`, `workflow-trial`, `dev` | `pyproject.toml` |
-
-The base install runs **keyword-only** retrieval: dense embeddings and cross-encoder reranking are opt-in extras (see [Memory & retrieval](#memory--retrieval)). The backend wheel installs the CLI, gateway, bundled skills, and Docker-side HTTP API, but **not** Node dependencies or the TUI.
-
-## Install
-
-### One-command installer
-
-[install.sh](install.sh) reuses a checkout or clones one, creates a Python virtual environment, installs backend and UI dependencies, creates/fills `.env`, runs `machina init`, and installs a `machina` launcher on your `PATH`. On `init` failure it tries to provision local pgvector Postgres (Docker, then Homebrew on macOS) unless told otherwise.
+### Install and launch
 
 ```bash
-# Zero-friction install from anywhere (clones the repo, creates .venv, installs
-# backend + UI deps, fills .env, runs init, bootstraps local Postgres if needed,
-# and puts `machina` on your PATH):
 curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash
 
-# With options (the `--` separates bash's args from the script's flags):
-curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --dir ~/machina --dev
-curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --interactive
-
-# From a checkout you already have:
-bash install.sh
-
-# Options (see `bash install.sh --help`):
-#   --dir DIR            install directory (default ./machina)
-#   --dev                install Python dev extras
-#   --no-ui              skip UI dependencies
-#   --interactive        prompt via /dev/tty (keys + interop) even when piped
-#   -y, --yes            non-interactive
-#   --with-docker-db     force Docker Postgres on init failure
-#   --no-docker-db       never use Docker Postgres
-#   --no-auto-db         never auto-provision Postgres (Docker or Homebrew)
-#   --no-shell-rc        don't edit shell rc files; print a PATH hint
-#   --skip-init          skip automatic `machina init`
+machina setup     # choose a provider and configure credentials
+machina init      # initialize the configured database
+machina doctor    # check the database, provider setup, and prerequisites
+machina           # open the terminal UI
 ```
 
-It supports macOS/Linux and Git Bash on Windows.
+The [installer](install.sh) creates a Python environment, installs backend and UI dependencies, prepares `.env`, attempts database initialization, and adds a `machina` launcher to your path. Open a new shell if the launcher is not found. From an existing checkout, use `bash install.sh`.
 
-### Manual source install
+For more control, download the installer and use `--help`. The main options are:
+
+| Option | What it changes |
+|---|---|
+| `--dir DIR` | Choose where Machina is installed. |
+| `--dev` | Include Python development and testing tools. |
+| `--no-ui` | Install only the backend and command line. |
+| `--interactive` | Allow setup questions even when the script is piped into Bash. |
+| `--yes` | Run without setup questions. |
+| `--with-docker-db` | Use Docker for database provisioning if initialization fails. |
+| `--no-docker-db` | Do not use Docker to provision a database. |
+| `--no-auto-db` | Leave all database provisioning to you. |
+| `--no-shell-rc` | Do not edit your shell startup files. |
+| `--skip-init` | Leave database initialization to you. |
+| `--interop auto\|all\|none` | Control registration with detected external AI assistants. |
+
+<details>
+<summary>Install manually from source</summary>
+
+Create a PostgreSQL database with pgvector available, then:
 
 ```bash
-git clone <your-fork-or-checkout-url> machina && cd machina
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"                 # add extras as needed, e.g. ".[dev,connectors,embeddings-onnx,rerank]"
-npm ci --ignore-scripts --prefix ui     # TUI dependencies (Node 22.19+)
-umask 077                               # .env holds credentials: create it owner-only
-cp .env.example .env                    # fill in DATABASE_URL and provider keys
-chmod 600 .env                          # also fixes a file created before umask 077
-machina setup                           # interactive first-run configuration
-machina init                            # create the database schema
-machina doctor                          # check prerequisites, keys, DB health
+git clone https://github.com/kiazh/Machina-Harness.git machina
+cd machina
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+npm ci --ignore-scripts --prefix ui
+
+umask 077
+cp .env.example .env
+chmod 600 .env
+# Set DATABASE_URL in .env to your PostgreSQL database.
+machina setup
+machina init
+machina doctor
+machina
 ```
 
-`.env.example` keeps every secret placeholder commented out, so copying it
-never satisfies Compose's required-key guard and never shadows a mounted
-`<ENV_NAME>_FILE` or Vault/AWS secret; `machina setup` (or `install.sh`) fills
-the keys it needs.
+The activation command above is for macOS/Linux shells. Omit the npm step for backend-only use. A Python wheel includes the backend and bundled skills; the terminal UI and its Node dependencies require a source checkout or a separately configured `MACHINA_UI_DIR`.
 
-CI and container builds install the exact `uv.lock` resolution
-(`uv export --frozen` → pip). The editable source install above intentionally
-uses pip's own resolver so local `pyproject.toml` changes take effect; do not
-use it for release automation.
+Optional Python extras install additional dependencies. For example, `pip install -e ".[dev,embeddings-onnx,rerank]"` adds development tools, local embedding support, and reranking.
 
-Local skill installs and learned skills read `MACHINA_SKILLS_DIR` / `MACHINA_LEARNED_SKILLS_DIR` when overridden; otherwise they are discovered from the package. The TUI directory can be pointed at with `MACHINA_UI_DIR` for non-editable wheel installs.
+| Extra | What it adds |
+|---|---|
+| `dev` | Python testing, formatting, linting, and security tools |
+| `embeddings-local` | Model2Vec for local search by meaning |
+| `embeddings-onnx` | FastEmbed/ONNX for local embedding models |
+| `rerank` | Local ONNX models that reorder search results |
+| `secrets` | AWS Secrets Manager dependencies |
+| `connectors` | Compatibility extra; MCP is already in the base installation |
+| `workflow-trial` | Dependencies for the separate workflow-trial tooling |
 
-### Docker (HTTP backend)
+CI and container builds install dependencies from `uv.lock`; a manual `pip install -e .` uses pip's resolver. Local skill directories can be selected with `MACHINA_SKILLS_DIR` and `MACHINA_LEARNED_SKILLS_DIR`.
 
-[docker-compose.yml](docker-compose.yml) starts `pgvector/pgvector:pg16` plus the app container, which runs `machina init && exec machina serve --host 0.0.0.0 --port 8000`. The `app` block is the documented allowlist of host `.env` variables forwarded into the container (provider keys, retrieval/reranker/RRF knobs, rate limits, timeouts, persona/learning settings, SearXNG, OAuth master key, usage budgets); a variable added to `.env.example` must also be added there. Python dependencies come from `uv.lock` (`uv export --frozen`), as in CI.
+</details>
+
+### Try a first task
+
+In the UI, ask something concrete:
+
+```text
+Explain how this project is organized and where its main entry point is.
+```
+
+Use `/help` for the searchable command menu. Open `/workspace open .` to browse the current project, `/models` to choose a model, and `/sessions` to return to earlier work.
+
+For a single response without opening the UI:
 
 ```bash
-export MACHINA_API_KEY="$(openssl rand -hex 32)"   # required by compose
+machina chat "Summarize the repository layout"
+machina chat -c "Continue from the last session"
+machina chat -s "<session-id>" "Resume this conversation"
+```
+
+## Features
+
+Jump to [the workspace](#chat-and-code-side-by-side), [saved sessions](#save-search-and-resume-conversations), [long-task context](#keep-long-tasks-within-the-models-reading-limit), [usage](#track-usage-and-set-budgets), [document search](#search-documents-and-research-the-web), [memory](#remember-useful-information-between-conversations), [skills](#reuse-task-instructions-with-skills), [personality](#shape-personality-and-learn-from-feedback), [specialists](#delegate-to-specialist-agents), [scheduled work](#schedule-recurring-work), or [integrations](#connect-tools-and-other-ai-assistants).
+
+### Chat and code side by side
+
+The terminal UI combines **streaming chat**—responses appear as they are generated—with a file editor, tabs, a project explorer, and a problems panel. You can keep a conversation beside the code it concerns, expand either pane, and switch focus without leaving the terminal.
+
+Quick Open finds files by a partial name. Tabs can be temporary previews or pinned files you want to keep open. Modified, conflicting, and read-only files have visible text labels. Layout, open-file locations, and cursor positions are saved per project; this layout state does not store document contents.
+
+When a file changes on disk after you opened it, saving offers a choice: reload, explicitly overwrite, or keep editing. Closing a modified tab or quitting with unsaved files also gives you a chance to save or cancel. Binary and oversized files open in a read-only view rather than an unsuitable text editor.
+
+**Language intelligence** comes from optional language servers: separate programs that understand a programming language. Machina supports `pyright-langserver` for Python and `typescript-language-server` for JavaScript/TypeScript. They can provide completion, hover explanations, definitions, references, symbols, and diagnostics. A missing server is reported as missing; ordinary editing still works. Only install and enable servers you trust, since they run with your operating-system privileges.
+
+Paste or drop supported images into chat, attach selected code, or ask the agent to inspect files with its tools. Opening a file in the editor does not automatically send its contents to the model. The explicit attachment flow shows the file, range, version, and whether the text includes unsaved edits. Agent file reads remain subject to tool permissions.
+
+| Action | Command or shortcut |
+|---|---|
+| Send a message / add a new line | `Enter` / `Shift+Enter` |
+| Find commands | `/help` |
+| Open a project | `/workspace open <path>` |
+| Find a file | `Ctrl+P` or `/quickopen` |
+| Save / close the active editor tab | `Ctrl+S` / `Ctrl+W` |
+| Show or hide the file explorer | `Ctrl+T` or `/explorer` |
+| Change pane focus | `F6` / `Shift+F6` |
+| Show code completion | `Ctrl+Space` or `/editor complete` |
+| Go to definition / find references | `F12` / `Shift+F12` |
+| Preview a symbol rename, when supported | `F2` |
+| Maximize chat from the editor | `Ctrl+Right` |
+| Restore the split from the editor or maximized chat | `Ctrl+Left` or `/workspace split` |
+| Paste an image | `Ctrl+V` |
+| Stop a response | `Esc` after dismissing any open popup |
+| See keyboard shortcuts | `F1` or `?` on empty input |
+| Change appearance / editor preferences | `/theme` / `/settings` |
+
+Some terminals or operating systems intercept shortcuts. The slash commands provide fallbacks. In split mode, the chat input keeps its normal `Ctrl+Left/Right` word movement; `Ctrl+W` closes tabs only outside the chat input.
+
+The UI includes theme previews, a transparent-background option, syntax highlighting, soft wrap, and tab-width preferences. An optional **now-playing bar** shows local music or media information. On macOS, detection can use system media interfaces, installed helper tools, Spotify/Music, or supported browser tabs; some methods need Automation permission. Use `/music off` to hide it. Detection is local and does not send media metadata to the model.
+
+See the [workspace guide](docs/design/WORKSPACE.md), [UI design](docs/design/TUI_DESIGN.md), and [theme reference](docs/design/THEME_COLORS.md). Machina's terminal command tool is separate from the editor; there is no embedded terminal pane.
+
+### Save, search, and resume conversations
+
+A **session** is a saved conversation and its working state. PostgreSQL stores the messages and context needed to return to it after a restart. The command line, UI, and HTTP API use the same saved state when configured for the same database.
+
+You can name a session, give it a goal, search older conversations, resume one, export it as Markdown, or **fork** it to explore another direction in a new session. Delegated work gets its own child sessions, so specialist conversations do not have to take over the main thread.
+
+| Task | UI command |
+|---|---|
+| Start fresh / return to earlier work | `/new` / `/sessions` or `/resume` |
+| Find a conversation / recall earlier content | `/search` / `/recall` |
+| Name the conversation / set its goal | `/rename` / `/goal` |
+| Explore a separate branch | `/fork` |
+| Save a readable copy / delete a session | `/export` / `/delete` |
+
+The CLI also supports `machina sessions`, `sessions-search`, `export`, `fork`, and `delete`. Run a command with `--help` for its arguments. `machina chat -c` continues the last session, while `-s <session-id>` selects one explicitly.
+
+### Keep long tasks within the model's reading limit
+
+A model can read only a limited amount of text per request. That limit is its **context window**, measured in **tokens**: small units of text that do not correspond exactly to words. Long conversations and large command outputs can fill that window quickly.
+
+Machina combines several approaches instead of resending every detail forever:
+
+| Mechanism | What it does |
+|---|---|
+| Context compression | Summarizes older material so recent work has room. |
+| Automatic compaction | Checks for compaction after turns, reducing the need to do it manually. |
+| Saved artifacts | Retains large tool results so omitted detail can be retrieved later. |
+| Format-aware reduction | Produces smaller views of test output, logs, JSON, CSV, diffs, and code. |
+| Request projection | Chooses the working view sent to the model while preserving required instructions and related tool messages. |
+| Retrieval selection | Removes duplicate retrieved excerpts and fits evidence into a separate reading budget. |
+
+For example, a long test log can be stored in full while the model receives failure details and a recovery handle. It can then ask for a specific part of the original instead of running the tests again merely to recover omitted text.
+
+**Recovery has explicit limits.** A smaller, recoverable view is published only after the original result has been stored. If storage fails, a quota is reached, or the result exceeds the storage limit, Machina falls back to its ordinary bounded output without claiming the missing text is recoverable. A source that was already truncated upstream remains marked as such. A summary is not a guarantee that every detail is still in the current prompt.
+
+Saved artifacts support paged reads, literal search, and metadata inspection through `artifact_read`, `artifact_search`, and `artifact_describe`. Reads are authorized again each time. Related parent/child sessions can recover evidence within their delegation tree; unrelated sessions cannot. Paging cursors identify the source version, and expired evidence is reported as unavailable. Defaults are 30 days of retention, 500 artifacts per session, and 2,000,000 characters per artifact; quotas refuse new stores rather than evicting existing evidence to make room.
+
+The request planner keeps pinned instructions intact and preserves related tool-call groups together. It can substitute a verified smaller view for an older observation, but only when its stored source is available and complete. Retrieval selection similarly removes exact duplicates without treating conflicting passages as duplicates, and tells the model when lower-ranked excerpts were omitted.
+
+Use `/context` to inspect working context and `/compress` for manual compaction. [Context and token efficiency](docs/TOKEN_EFFICIENCY.md) explains the mechanisms and failure behavior. [Projection evidence](docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md) records a real DeepSeek run; it does not establish correct replay of every provider's protected or signed message format.
+
+### Track usage and set budgets
+
+`/usage` and `machina usage` show recorded model usage. Machina normalizes provider reports so ordinary input, cached input, cache writes, and output can be accounted for consistently. It also records which session and agent made a call and whether the call was for the main task, a summary, memory processing, or skill learning.
+
+Missing usage is not treated as zero. Costs are estimates from known price records or configured overrides; an unknown model price remains unknown. Retries and supporting model calls can consume tokens even if the final answer fails. Session and agent limits can cap token consumption or request counts; `0` means unlimited. These are application budgets, not a replacement for a provider-side spending limit.
+
+**Prompt caching** is a separate, optional feature. Where a provider supports it, stable instructions and repeated request prefixes may be reused by that provider. Machina's explicit prompt-cache integration is off by default and only adds cache markers for supported provider/model paths. It does not cache answers to arbitrary questions, and no fixed cost or speed improvement is promised.
+
+Automatic model switching based on task difficulty, semantic answer caching, cache warmers, and learned token-pruning models are not enabled features. The current efficiency work focuses on measuring usage and reducing repeated text while keeping omitted evidence recoverable where possible.
+
+### Search documents and research the web
+
+Machina can index documents and retrieve relevant passages while answering a question. This is often called **retrieval-augmented generation (RAG)**: give the model selected source material alongside the question instead of expecting it to know your documents already.
+
+The document tools split material into searchable pieces and keep it associated with the session. `index_document` adds material and `search_documents` finds it. Web tools provide search, page extraction, bounded multi-page crawls, and research workflows. A crawl can add the collected pages to the session's document search.
+
+Search is **keyword-only by default**. Optional search components add other ways to find and order results:
+
+| Search component | Plain-language meaning | Available backends |
+|---|---|---|
+| Embeddings | Turn text into numerical representations so similar meanings can match even with different words. | Local Model2Vec, local ONNX/FastEmbed, an OpenAI-compatible embedding API, or automatic selection |
+| Hybrid search | Combine keyword matches with meaning-based matches. | Configurable keyword and embedding weights |
+| Reranking | Take retrieved candidates and evaluate which best match the question. | Local ONNX, Cohere, an HTTP reranking service, or automatic selection |
+
+Local embeddings need `embeddings-local` or `embeddings-onnx`; local reranking needs `rerank`. Remote backends require their endpoint or credentials and send the relevant text to that service. Selecting a local chat model alone does not configure local embeddings or reranking.
+
+The default hybrid weights are `1.0` for keywords and `0.25` for embedding results, applied only when embeddings are enabled. Memory retrieval uses relevance ranking, with recency and importance as tie-breakers. Additional search components are optional because they add cost and latency and do not improve every dataset; see the [retrieval-quality review](docs/verification/RAG_QUALITY_REVIEW.md).
+
+### Remember useful information between conversations
+
+**Memory** is distinct from both the current conversation and document search. It stores useful facts, preferences, and lessons for later retrieval. For example, a conversation may establish a lasting project convention that should be available when a later task needs it.
+
+Conversation consolidation can extract candidate memories, score their importance, and check for duplicates before saving. You can inspect, search, and forget entries through `/memory` or the CLI. User profiles and agent lessons have separate roles; persona-aware retrieval uses the active persona to help select relevant memories.
+
+**Memory approval is off by default.** With `memory_approval_enabled` enabled, writes go to a pending queue where you can approve or reject them. Without it, accepted writes are saved directly. CLI controls include `memory-pending`, `memory-approve`, `memory-reject`, and their bulk variants.
+
+Memory text is passed through secret redaction before storage; if that redaction cannot be completed, a marker replaces the content. This is a safeguard, not a reason to put credentials into conversations. Memories can also be incomplete or wrong: use the inspection and forgetting controls to correct them.
+
+### Reuse task instructions with skills
+
+A **skill** is an instruction package, usually a `SKILL.md` file, that explains how to approach a type of task. A code-review skill might describe what to inspect and how to present findings. Skills provide guidance; they are different from executable tools, model training, or permission grants.
+
+Machina includes first-party skills and a curated [ECC collection](docs/ECC_SKILLS.md). `/skills` lets you browse, search, inspect, learn, review proposals, revert changes, and manage the catalog. Each skill's source and revision are tracked so the system can distinguish bundled, installed, and learned content.
+
+Routing uses catalog metadata—task types, languages, tools, exclusions, and relevant sections—to rank candidates with repeatable rules. Once the task description is formed, this matching does not require another model call. **Stage-aware loading** means a planning stage can receive planning instructions and their prerequisites without loading every later implementation or review section at once. This makes large skill collections easier to use within a limited context window.
+
+Metadata is validated separately from the instruction body. Invalid values, circular section dependencies, excessive sizes, and fields that pretend to grant authority are rejected or ignored according to the metadata format. Bundled ECC routing additions are stored in a separate, revision-bound file; if it no longer matches the bundle, Machina reports the mismatch and uses baseline metadata instead.
+
+Newly installed or learned skills without the newer metadata can receive a one-time model-generated metadata block. The instruction body is preserved. If generation or validation fails, the skill keeps its original form rather than blocking installation. Later loads reuse persisted metadata instead of generating it again. Browsing, searching, and previewing catalog routes do not themselves run the skill or install anything.
+
+**Learning new skills after turns is opt-in** (`learning_review_enabled: false`). When enabled, its automatic-publishing policy defaults to on, with a cap of five auto-applied skills per agent in a rolling 24-hour period. Set `learning_review_auto_apply: false` or the daily cap to `0` to stage proposals for review. Published learned skills have revisions and a revert path.
+
+The registry also performs a best-effort scan for suspicious instructions. A scan cannot make an untrusted skill safe; skill instructions never bypass tool permissions. See the [skill registry](machina/skills/registry.py), [routing implementation](machina/skills/runtime.py), and [enrichment rules](machina/skills/enrichment/README.md).
+
+### Shape personality and learn from feedback
+
+`/persona` sets the communication style you want, such as “explain clearly, use concrete examples, and keep a warm tone.” This human style override applies across the installation; it does not change the agent's tool permissions or replace its core role.
+
+**Personality growth** stores bounded preferences and lessons owned by an agent. These notes can affect later conversations, including after a restart or provider change. Growth is enabled by default. Use `/growth` to view progress, teach a note, give feedback, forget a note, or restore an earlier revision:
+
+```text
+/growth teach style verbosity Explain decisions with one concrete example
+/growth teach lesson testing Run focused tests before reporting success
+/growth feedback good
+/growth show
+/growth rollback
+```
+
+The related **RSI** feature—runtime self-improvement—uses recorded outcomes and feedback to adjust bounded strategy guidance and memory-retrieval policy. Revisions and trial history make those adjustments inspectable and reversible. This updates saved guidance and policy, not the underlying AI model's weights, and does not grant extra authority.
+
+**SoulSpec packages** let you import or export a structured identity: persona, voice, workflows, and related resources. Export excludes learned notes unless you explicitly include them. Importing an identity preserves the selected agent's ownership and execution settings; the documented restore option is needed to restore an included learned-note snapshot. These packages do not move all chat history or execute bundled scripts.
+
+Read [personality, growth, and identity](docs/PERSONALITY_GROWTH.md) for ownership, disabling learning, package commands, and rollback behavior. This is shared agent persistence within an installation, not isolated user accounts.
+
+### Delegate to specialist agents
+
+An **agent** combines a role or identity with a model/provider choice and an allowed set of tools. Machina provides general-purpose, research, and coding agents, a bundled [ECC specialist collection](docs/ECC_AGENTS.md), and support for custom definitions.
+
+A **subagent** is an agent working on a delegated part of a larger task. For example, a main coding agent can ask a research specialist to inspect an unfamiliar dependency. The specialist gets a child session, returns its result, and remains subject to its own tool restrictions and the permission system.
+
+Delegation can run sequentially when one result is needed by the next step, or in parallel for independent work. The main session can inspect delegated results without combining every child message into its own conversation. `/agents` browses definitions and related sessions; `/delegate` starts an assignment. Delegated work can still pause for approval or fail; creating a subagent does not guarantee a better answer or bypass a budget.
+
+### Schedule recurring work
+
+`/jobs` manages work that should run again while the backend is active:
+
+| Job type | Example use |
+|---|---|
+| Interval prompt | Check a project every set number of seconds. |
+| Cron prompt | Run a task on a five-field UTC schedule. |
+| Heartbeat | Nudge an agent to continue its current goal. |
+| Script job | Run a specific operator-approved script on a schedule. |
+
+Jobs are saved so their configuration survives restarts, but scheduling needs a running backend. They use the normal agent and permission paths. Script jobs have a separate operator policy specifying allowed entry files and dependencies; adding a path to a prompt is not enough to authorize a script.
+
+### Connect tools and other AI assistants
+
+**MCP (Model Context Protocol)** is a standard way for AI applications to connect to tools. Machina supports it in two directions:
+
+- **Bring tools into Machina.** Add a local program or HTTP MCP server through `/mcp`, review its connection details, and choose which tools the agent can use. Configuration and inspection do not by themselves launch it. Connecting starts the selected program or contacts the endpoint after the required review.
+- **Use Machina from another assistant.** `machina harnesses` can register Machina's MCP server with supported OpenCode, Codex, and Hermes installations. That server exposes status, session creation, and a bounded text chat task. It is a focused integration surface, not a remote copy of every UI feature. Machina can also delegate a bounded prompt to a supported external assistant.
+
+For incoming tools, the agent first browses the available catalog, reads a selected tool's description, then requests a specific call. This avoids putting every remote tool description into every model request. Remote tool calls still use ordinary approvals; server-provided descriptions and results do not grant authority.
+
+Supported HTTP servers can use browser-based OAuth sign-in. Machina implements the authorization-code flow with PKCE, which binds the login exchange to the client that started it. A usable desktop credential store or a configured `MACHINA_OAUTH_MASTER_KEY` is needed to protect stored OAuth credentials. Local stdio servers must already be installed; Machina does not download them automatically.
+
+See [MCP setup](docs/MCP.md), [MCP OAuth](docs/MCP_OAUTH.md), and `machina harnesses --help` for connection fields, secret references, trust settings, and supported external-assistant commands.
+
+### Command reference
+
+You can discover commands through `/help` without memorizing them. The main groups are:
+
+| Group | UI commands |
+|---|---|
+| Session | `/new`, `/resume`, `/sessions`, `/search`, `/recall`, `/rename`, `/fork`, `/delete`, `/export`, `/clear` |
+| Task | `/goal`, `/review`, `/init`, `/delegate`, `/agents` |
+| Workspace | `/workspace`, `/editor`, `/explorer`, `/lsp`, `/problems`, `/quickopen`, `/attach` |
+| Memory and instructions | `/memory`, `/growth`, `/persona`, `/skills` |
+| Context | `/context`, `/compress` |
+| Automation | `/jobs` |
+| Models and setup | `/auth`, `/keys`, `/models`, `/default-model`, `/provider`, `/effort`, `/config`, `/theme`, `/profile`, `/profiles`, `/mode`, `/approvals`, `/interop`, `/harnesses` |
+| Information | `/status`, `/usage`, `/output`, `/mcp`, `/music`, `/help`, `/exit` |
+
+Aliases include `/settings` → `/config`, `/model` → `/default-model`, `/providers` → `/provider`, and `/compact` → `/compress`.
+
+For scripting, `machina --help` lists the CLI. In addition to chat and session commands, it includes memory approval/search, skill management, providers/authentication, growth, usage, configuration, and external-assistant integration. `machina`, `machina repl`, and `machina chat -i` open the same terminal UI. Headless `machina chat` exits with `0` for completion, `1` for failure, `3` for an approval pause, and `130` for interruption.
+
+## How it works
+
+Machina runs the agent locally and connects it to your selected model. The model can request tools; Machina checks permissions, executes permitted actions, and returns their results so the conversation can continue.
+
+```mermaid
+flowchart TB
+    UI["Terminal UI"] -->|"JSON-RPC over stdio"| GW["Gateway"]
+    CLI["Command line"] --> CORE["Agent and shared services<br/>context, memory, skills, delegation, jobs"]
+    API["HTTP API"] -->|"REST and streamed replies"| CORE
+    API -->|"/rpc feature methods"| GW
+    HOST["Other AI assistants"] -->|"MCP"| MCP["Machina MCP server"]
+    MCP -->|"Headless CLI and shared services"| CORE
+    GW --> CORE
+    CORE <-->|"Requests and responses"| MODEL["Cloud provider or local model"]
+    CORE <-->|"Saved application state"| DB["PostgreSQL + pgvector"]
+    CORE --> PERM["Permission checks and approvals"]
+    PERM --> TOOLS["Files, commands, web, and MCP tools"]
+    TOOLS -->|"Results"| CORE
+```
+
+The UI uses the gateway. The CLI and HTTP chat routes call shared services directly; HTTP also exposes gateway feature methods through `/rpc`. The MCP server uses shared services and headless CLI chat. These are different entry points into the same application.
+
+A typical conversation turn follows this sequence:
+
+1. Machina loads the session, its agent definition, and the configured authority.
+2. It assembles instructions, selected skills, recent conversation, and relevant memory or document excerpts.
+3. It fits that working context to the selected model's input limit and sends the request.
+4. If the model requests a tool, Machina checks the action. It runs permitted actions or pauses for a human decision.
+5. Tool results are saved and added to the conversation, using smaller recoverable views when appropriate. The model can continue from those results.
+6. When the turn finishes, Machina records usage and performs enabled context, memory, and growth maintenance. Optional skill-learning reviews run only when enabled.
+
+The **gateway** is the authenticated message interface used by the terminal UI. **JSON-RPC** describes a named operation and its arguments; **stdio** means those messages travel through the local child process's input and output streams. The HTTP API instead uses normal HTTP requests and **server-sent events (SSE)** to stream progress. Sharing core services does not mean every surface takes the same transport path.
+
+**Your data:** conversations, memories, documents, approvals, and usage records live in your database. Configuration and credentials also use local files or configured secret stores. When you choose a cloud model, the request's selected context is sent to that provider; web tools and external connectors contact their respective services. Self-hosting the application does not make those services local.
+
+## Providers and models
+
+Choose a provider in `machina setup`, or use `/provider` and `/models` in the UI. The default configuration selects OpenRouter's `openrouter/free` model and needs an OpenRouter key. Model availability, account access, pricing, and tool support depend on the provider.
+
+The table lists provider IDs used in commands, credential names, and the defaults bundled with this source version. These model IDs are application defaults, not a list of the newest models or a guarantee of account access.
+
+| Provider ID | Credential or connection | Bundled default / selection |
+|---|---|---|
+| `openrouter` | `OPENROUTER_API_KEY` | `openrouter/free` |
+| `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-3-5-sonnet-20241022` |
+| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-chat` |
+| `xai` | `XAI_API_KEY` | `grok-4` |
+| `groq` | `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
+| `together` | `TOGETHER_API_KEY` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` |
+| `mistral` | `MISTRAL_API_KEY` | `mistral-small-latest` |
+| `google` | `GOOGLE_API_KEY` | `gemini-2.0-flash` |
+| `opencode` | `OPENCODE_API_KEY`; optional `OPENCODE_BASE_URL` | `big-pickle` through OpenCode Zen |
+| `kimi` | `KIMI_API_KEY` | `kimi-for-coding` |
+| `chatgpt` | `machina auth login` | Choose from the account's model catalog. |
+| `copilot` | `machina auth copilot login` | Choose a model available to your account. |
+| `ollama` | A running Ollama service | `llama3.1`; the model must be available locally. |
+| `custom` | `CUSTOM_BASE_URL`, optional `CUSTOM_API_KEY` | Supply your server's model ID. |
+
+Override the provider and model for one command:
+
+```bash
+machina chat -p deepseek -m deepseek-chat "Explain this project"
+```
+
+Or select them interactively:
+
+| Command | Purpose |
+|---|---|
+| `/provider` | Show or change the provider. |
+| `/provider list` | List built-in and user-added connections. |
+| `/provider add` | Save a named OpenAI-compatible endpoint. |
+| `/models` | Choose a model from provider-grouped catalogs and fallback entries. |
+| `/models catalog` | Inspect the selected provider's catalog. |
+| `/default-model` | Save a default model choice; `/model` is an alias. |
+| `/effort` | Adjust reasoning effort where supported. |
+| `/auth` / `/keys` | Manage account sign-in or provider keys. |
+
+Named endpoints store a base URL, optional key, and a discovered model catalog. Keys use the secret boundary rather than being written into the provider catalog file. Keyless compatible servers are supported. Catalog discovery can fail or return no models; an explicit model ID may be needed.
+
+New sessions resolve explicit choices first, then applicable agent-definition defaults, then global defaults. Existing saved session pins remain in force until changed. Provider and model are resolved together so switching a provider does not silently carry over a model that belonged to another one.
+
+Reasoning effort is a provider-specific setting for how much reasoning work a model should attempt. Common tiers include `low`, `medium`, and `high`; some ChatGPT catalog models expose additional tiers. The available options depend on the route, and the UI validates supported choices. A higher tier is not a promise of better results.
+
+The [provider registry](machina/core/provider/specs.py) and [factory](machina/core/provider/factory.py) define these connections. Machina does not include a model inference server: Ollama and other compatible servers run separately.
+
+## Permissions and security
+
+Machina can change files and execute commands, so choose a mode that fits the task:
+
+| Mode | Behavior |
+|---|---|
+| `ask` (default) | Routine project actions can proceed; risky or unclassified actions require review. |
+| `workspace` | Project work can proceed; actions crossing the configured boundaries require review. |
+| `sandbox` | Terminal commands run through the configured Docker sandbox. |
+| `full` | An explicit session grant allows host operations without further approval, including destructive actions. |
+
+`ask` does **not** ask before every file write or command. Tools are checked against their declared effects and the specific requested action. Approvals bind to that action; changing it can require a new decision.
+
+Use `/mode` to inspect or change the session mode and `/approvals` to review pending requests. `/approvals revoke` revokes session grants and returns the session to `ask`. Headless chat pauses when approval is needed; it returns exit code `3` so automation can handle the decision rather than wait indefinitely.
+
+Keep credentials in `.env`, environment variables, protected mounted files, or supported Vault/AWS secret backends. Non-secret settings belong in `~/.machina/config.yaml`. Known credentials are redacted from supported output paths, but you should still avoid placing secrets in prompts or shared documents.
+
+### What an approval covers
+
+The permission broker is the shared decision point for agent tool actions. Tools declare effects such as reading files, writing files, executing a process, contacting a network service, changing memory, or delegating work. The broker checks both those effects and the specific action.
+
+An approval identifies more than a tool name. It binds the operation, targets, command or arguments, working directory, execution backend, timeout, network declarations, relevant content, and workspace identity. Approval and execution are separate recorded steps; a one-time approval is consumed for the action it authorized. Agent principals cannot approve their own requests.
+
+For example, approving a command in one project does not authorize a changed command in another directory. A changed or stale request may need a fresh approval. The UI shows approval cards; headless and HTTP callers receive a pause they can resolve and resume explicitly.
+
+### Shell commands and scripts
+
+Routine command classification handles literal commands joined by `;`, newlines, `&&`, `||`, or pipes. More complex shell features—expansion, redirection, background jobs, compound syntax, or unknown commands—require review rather than being assumed routine. Even a redirection such as `2>/dev/null` changes the classification. Quoted operators remain ordinary argument text.
+
+Script jobs require an operator-owned `.script-policy.json` outside the agent workspace. The policy lists entry scripts and dependencies; their hashes are checked again before execution. `MACHINA_SCRIPTS_DIR` selects the script directory. The Compose setup mounts `./scripts` read-only into the container.
+
+### Files, credentials, and isolation
+
+Workspace file access uses a server-created workspace identity and resolved paths. Symlinks and `..` are resolved before checking containment; a similar-looking path prefix is not enough. Language-server messages, repository comments, skills, and remote tool output are data, not permission to expand authority.
+
+Managed `.env` updates validate names and values, reject newline injection, replace files atomically, and use owner-only permissions on POSIX systems. Environment variables and mounted files can also supply secrets, with supported Vault/AWS backends for managed deployments. Credential rotation affects newly resolved credentials; already-running requests may finish with credentials they previously acquired.
+
+The HTTP API uses a shared API key. This is a shared installation model, not separate accounts with per-user data isolation. Docker terminal execution is a specific sandbox backend; the normal host process and language servers are not sandboxed merely because a workspace is open.
+
+Read [SECURITY.md](SECURITY.md), the [workspace trust model](docs/design/WORKSPACE_SECURITY.md), and [OPERATIONS.md](OPERATIONS.md) for detailed boundaries and deployment controls.
+
+## Configuration
+
+Use `machina config` to inspect settings and `machina config-set <key> <value> --persist` to save a non-secret setting. `/config` and `/settings` provide interactive controls.
+
+### Where settings come from
+
+For ordinary settings, explicit overrides take precedence over environment variables, which override saved configuration and defaults. Model/provider resolution also considers saved session pins and agent-definition defaults as described above. Most environment settings use `MACHINA_<KEY>`, such as `MACHINA_EXECUTION_MODE`; documented legacy names include `DATABASE_URL` and provider key variables.
+
+Secrets resolve separately through explicit overrides, environment variables, mounted `<ENV_NAME>_FILE` files, and configured secret backends. YAML credential fields are ignored. An invalid explicitly selected secret file reports an error rather than silently choosing another credential. `.env` fills absent environment values; it does not override values already supplied by the process environment.
+
+Examples:
+
+```bash
+machina config
+machina config-set memory_approval_enabled true --persist
+machina config-set learning_review_auto_apply_per_day 0 --persist
+```
+
+The tables below describe the defaults in this source version. Empty string means “no explicit choice”; it is shown as `""`.
+
+### Models, execution, and budgets
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `provider` / `model` | `openrouter` / `openrouter/free` | Global fallback AI connection |
+| `temperature` | `0.7` | Provider sampling setting; supported range is 0–2. |
+| `max_tokens` | `4096` | Response token ceiling, subject to provider limits. |
+| `reasoning_effort` | `""` | Use the provider default unless a supported effort is selected. |
+| `execution_mode` | `ask` | Default authority preset for new sessions |
+| `turn_timeout` / `approval_timeout` | `300` / `300` | Turn and approval-wait limits, in seconds |
+| `rate_limit_calls_per_minute` | `10` | Model-call throttle; `0` disables it. |
+| `usage_session_token_limit` / `usage_agent_token_limit` | `0` / `0` | Lifetime token budgets; `0` is unlimited. |
+| `usage_session_request_limit` / `usage_agent_request_limit` | `0` / `0` | Lifetime request budgets; `0` is unlimited. |
+| `pricing_table_json` | `""` | Optional per-provider or per-model price overrides for estimates |
+
+### Context and saved tool results
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `compression_enabled` | `true` | Allow older context to be compressed. |
+| `compression_threshold` / `compression_target_ratio` | `0.8` / `0.5` | Trigger and target proportions for compression |
+| `compression_preserve_recent` | `3` | Recent context chunks preserved by compression |
+| `auto_compaction_enabled` | `true` | Check for automatic compaction after turns. |
+| `eviction_max_tokens` | `0` | Optional eviction ceiling; `0` disables the ceiling. |
+| `artifacts_enabled` | `true` | Save large tool results for authorized recovery. |
+| `artifact_retention_days` | `30` | Retention period; `0` disables expiry. |
+| `artifact_max_per_session` | `500` | Artifact quota; `0` removes the quota. |
+| `artifact_max_chars` | `2000000` | Largest individual result retained as an artifact |
+| `reducers_enabled` | `true` | Create format-aware smaller views of large results. |
+| `request_projection_enabled` | `true` | Send the budgeted working view to the model. |
+| `retrieval_selection_enabled` | `true` | Deduplicate and select retrieved evidence. |
+| `retrieval_token_budget` | `6000` | Retrieved-evidence reading budget; `0` disables this budget. |
+| `output_policy` | `legacy` | Use `concise` to request answer-first responses while respecting requested detail. |
+| `prompt_cache_enabled` | `false` | Opt into supported provider prompt-cache markers. |
+
+### Memory, search, and learning
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `memory_enabled` | `true` | Enable long-term memory integration. |
+| `memory_approval_enabled` | `false` | Hold memory writes for approval when enabled. |
+| `memory_consolidation_enabled` | `true` | Extract candidate memories from conversations. |
+| `persona_memory_enabled` | `true` | Use persona-aware memory retrieval. |
+| `rag_enabled` | `true` | Enable document-search integration. |
+| `embedding_backend` | `off` | `off`, `local`, `onnx`, `openai`, or `auto` |
+| `reranker_backend` | `none` | `none`, `local`, `cohere`, `http`, or `auto` |
+| `rrf_keyword_weight` / `rrf_dense_weight` | `1.0` / `0.25` | Keyword and embedding ranking weights when hybrid search is active |
+| `personality_growth_enabled` / `rsi_enabled` | `true` / `true` | Learned notes and bounded strategy improvement |
+| `learning_review_enabled` | `false` | Opt into post-turn reviews that can propose new skills. |
+| `learning_review_auto_apply` | `true` | Publish eligible proposals automatically when learning reviews are enabled. |
+| `learning_review_auto_apply_per_day` | `5` | Per-agent rolling 24-hour publishing cap; `0` stages proposals for review. |
+| `skills_disclosure_planner` | `true` | Load skill sections appropriate to the current task stage. |
+
+### Interface preferences
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `theme` | `codex` | Terminal color palette |
+| `transparent_background` | `false` | Use the terminal's own background when enabled. |
+| `nowplaying_enabled` | `true` | Show the optional media bar. |
+| `ui_preferences` | `""` | Saved editor preferences, managed through the UI |
+| `workspace_ui_state` | `""` | Saved per-project layout and file/cursor locations; excludes document text. |
+
+### Environment reference
+
+See [.env.example](.env.example) for the documented variables and [config.py](machina/core/config.py) for all settings and validation rules. Common groups include:
+
+| Purpose | Variables |
+|---|---|
+| Database | `DATABASE_URL` or `MACHINA_DATABASE_URL`; separate `MACHINA_TEST_DATABASE_URL` for tests |
+| Default model | `MACHINA_PROVIDER`, `MACHINA_MODEL` |
+| HTTP authentication | `MACHINA_API_KEY` |
+| Workspace and scripts | `MACHINA_WORKSPACE_ROOT`, `MACHINA_SCRIPTS_DIR` |
+| Embeddings | `MACHINA_EMBEDDING_BACKEND`, `MACHINA_EMBEDDING_MODEL`, `MACHINA_EMBEDDING_BASE_URL` |
+| Reranking | `MACHINA_RERANKER_BACKEND`, `MACHINA_RERANKER_HTTP_URL`, `COHERE_API_KEY` |
+| Search weighting | `MACHINA_RRF_KEYWORD_WEIGHT`, `MACHINA_RRF_DENSE_WEIGHT` |
+| Token/request budgets | `MACHINA_USAGE_SESSION_TOKEN_LIMIT`, `MACHINA_USAGE_SESSION_REQUEST_LIMIT`, `MACHINA_USAGE_AGENT_TOKEN_LIMIT`, `MACHINA_USAGE_AGENT_REQUEST_LIMIT` |
+| Learning | `MACHINA_LEARNING_REVIEW_ENABLED`, `MACHINA_LEARNING_REVIEW_AUTO_APPLY`, `MACHINA_LEARNING_REVIEW_AUTO_APPLY_PER_DAY` |
+| Skill directories | `MACHINA_SKILLS_DIR`, `MACHINA_LEARNED_SKILLS_DIR` |
+| Web services | `SEARXNG_URL`; optional Firecrawl stack settings in config |
+| MCP OAuth storage | `MACHINA_OAUTH_MASTER_KEY`: base64-encoded 32-byte encryption key |
+
+Optional `firecrawl_autostart`, `firecrawl_stop_on_exit`, and `firecrawl_home` settings control the UI's opt-in Firecrawl/SearXNG stack lifecycle. They do not start an external stack by default. [OPERATIONS.md](OPERATIONS.md) covers deployment precedence, secret rotation, and environment variables forwarded by Compose.
+
+## HTTP API and Docker
+
+### Run the API locally
+
+With the backend installed and database initialized, set a strong API key in your environment or `.env`, then start the server:
+
+```bash
+export MACHINA_API_KEY="$(openssl rand -hex 32)"
+machina serve --host 127.0.0.1 --port 8000
+```
+
+The API includes sessions, streamed chat, memory, documents, jobs, usage, agents, and approvals. Authenticate requests with `Authorization: Bearer <MACHINA_API_KEY>`. `/health` and `/ready` are public; `/metrics` requires authentication.
+
+A minimal integration first creates a session, then sends a prompt to that session:
+
+```bash
+curl -sS http://127.0.0.1:8000/api/v1/sessions \
+  -H "Authorization: Bearer $MACHINA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"API example"}'
+
+# Replace <session-id> with the returned session ID.
+curl -N "http://127.0.0.1:8000/api/v1/sessions/<session-id>/prompt" \
+  -H "Authorization: Bearer $MACHINA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Explain this project","protocolVersion":2}'
+```
+
+The prompt response uses SSE: progress and result events arrive as the task runs. If it pauses for approval, resolve the pending request through `POST /api/v1/approvals/{id}/resolve`, then use the corresponding `/resume` endpoint with the required session, turn, and reviewed arguments. Resolving a decision and executing it are separate operations.
+
+Gateway feature methods are also available through `POST /rpc`; `prompt.submit`, `prompt.cancel`, and `shutdown` are not dispatched through that HTTP bridge. Turns use the session prompt endpoints.
+
+<details>
+<summary>Gateway method families for client developers</summary>
+
+| Family | Example methods |
+|---|---|
+| Sessions | `session.create`, `session.list`, `session.resume`, `session.rename`, `session.setGoal`, `session.setModel`, `session.export`, `session.fork` |
+| Turns and configuration | `initialize`, `prompt.submit`, `prompt.cancel`, `usage.get`, `config.get`, `config.set`, `shutdown` |
+| Permissions | `mode.get`, `mode.set`, `mode.revoke`, `approvals.list`, `approvals.resolve` |
+| Memory and growth | `memory.*`, `profile.*`, `growth.*` |
+| Skills | `skills.list`, `skills.show`, `skills.search`, `skills.section`, `skills.preview_route` |
+| Workspace | `workspace.open`, `workspace.read`, `workspace.save`, document, Quick Open, and language-server methods |
+| Connections | `mcp.*`, `models.list`, `models.setEffort`, `providers.list`, `providers.add`, `providers.remove` |
+| Automation and integrations | `jobs.*`, `agents.*`, `secrets.*`, `interop.*`, `nowplaying.get`, `nowplaying.command` |
+
+The local gateway uses JSON-RPC 2.0 and authenticates with `MACHINA_GATEWAY_TOKEN`; the UI launcher creates a token for each run. A standalone `python -m machina.gateway` creates and reports a token to stderr when one is not supplied. Gateway events use notifications; HTTP chat uses SSE. Version 2 turn events identify their session and turn so clients can associate updates with the correct conversation.
+
+See [the gateway protocol](communications/ui-gateway-protocol.md), [canonical event definitions](machina/protocol/events.json), and [HTTP routes](machina/api/routes/) for exact request and response shapes.
+
+</details>
+
+### Run with Docker Compose
+
+From a source checkout, prepare `.env` from [.env.example](.env.example), configure your provider, and set the required API key. For MCP OAuth in a headless container, also provide the encryption key:
+
+```bash
+export MACHINA_API_KEY="$(openssl rand -hex 32)"
 export MACHINA_OAUTH_MASTER_KEY="$(python3 -c 'import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())')"
-docker compose up -d
-# HTTP API on 127.0.0.1:8000; health: GET /ready
+docker compose up -d --build
 ```
 
-`MACHINA_OAUTH_MASTER_KEY` is required for MCP OAuth on hosts without a desktop keyring (headless Linux/Docker); without it OAuth reports `storage_unavailable`. The application home volume is `machina-home` (formerly `ahhome`); [OPERATIONS.md](OPERATIONS.md) has the one-time copy command for existing deployments.
+Persist these keys in your protected deployment configuration for subsequent starts. Compose launches PostgreSQL and the HTTP backend on `127.0.0.1:8000`; it does not launch the terminal UI. Database and application-home volumes preserve state. Code changes require rebuilding the image.
 
-The app container is read-only, drops all capabilities, and only exposes a writable `~/.machina` volume. [Dockerfile.sandbox](Dockerfile.sandbox) builds the separate `machina-tool-sandbox:latest` image for `execution_mode: sandbox` / `terminal_sandbox: docker`:
+The app container runs with a read-only root filesystem, dropped capabilities, a writable application-home volume, and temporary storage. This HTTP container and the terminal tool sandbox are separate deployment components. Configure the sandbox backend separately if you want terminal tools to execute there.
+
+The tool sandbox is a separate image:
 
 ```bash
 docker build -f Dockerfile.sandbox -t machina-tool-sandbox:latest .
 ```
 
-### Environment file
+Use [OPERATIONS.md](OPERATIONS.md) for deployment configuration, migrations, backups, restore checks, monitoring, and upgrades.
 
-Secrets belong in `.env` (git-ignored) or a supported secret backend — never in `~/.machina/config.yaml`. `.env.example` documents the variable names; notable groups:
+## Development
 
-| Group | Variables (names only) |
-|---|---|
-| Database | `DATABASE_URL`, `MACHINA_TEST_DATABASE_URL` |
-| Default model | `MACHINA_MODEL`, `MACHINA_PROVIDER` |
-| Provider keys | `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `TOGETHER_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `OPENCODE_API_KEY`, `KIMI_API_KEY`, `COHERE_API_KEY`, `CUSTOM_API_KEY`, `CUSTOM_BASE_URL` |
-| HTTP / provenance | `MACHINA_API_KEY`, `MACHINA_PROVENANCE_KEY` |
-| Embeddings / rerank | `MACHINA_EMBEDDING_BACKEND`, `MACHINA_EMBEDDING_MODEL`, `MACHINA_EMBEDDING_BASE_URL`, `MACHINA_RERANKER_BACKEND`, `MACHINA_RERANKER_HTTP_URL`, `MACHINA_RRF_KEYWORD_WEIGHT`, `MACHINA_RRF_DENSE_WEIGHT` |
-| Budgets | `MACHINA_USAGE_SESSION_TOKEN_LIMIT`, `MACHINA_USAGE_SESSION_REQUEST_LIMIT`, `MACHINA_USAGE_AGENT_TOKEN_LIMIT`, `MACHINA_USAGE_AGENT_REQUEST_LIMIT` |
-| Learning / memory | `MACHINA_PERSONA_MEMORY_ENABLED`, `MACHINA_PERSONA_DEFAULT_EMOTION`, `MACHINA_LEARNING_REVIEW_AUTO_APPLY`, `MACHINA_LEARNING_REVIEW_AUTO_APPLY_PER_DAY`, `MACHINA_LEARNED_SKILLS_DIR` |
-| Ops | `MACHINA_WORKSPACE_ROOT`, `MACHINA_SCRIPTS_DIR`, `MACHINA_TURN_TIMEOUT`, `MACHINA_APPROVAL_TIMEOUT`, `MACHINA_HTTP_RATE_LIMIT`, `SEARXNG_URL` |
-| MCP OAuth | `MACHINA_OAUTH_MASTER_KEY` (base64, 32 bytes; generated by `install.sh` when absent) |
-
-Value precedence: session override → `MACHINA_<KEY>` → legacy provider env var → mounted secret file → secret backend → non-secret YAML → default (`.env.example`).
-
-## Quickstart
-
-### 1. One-shot chat
+The Python backend suite lives in the separate [Machina-DevTools repository](https://github.com/kiazh/Machina-DevTools). The terminal UI tests live here in [ui/test/](ui/test/).
 
 ```bash
-machina chat "Summarize the repository layout"
-machina chat -c "Continue from the last session"     # -c/--continue
-machina chat -s <session-id> "Resume this session"   # -s/--session
-machina chat -m deepseek-chat -p deepseek "Hello"    # override model/provider
-```
+# From a Machina-DevTools checkout, point its runner at this source tree:
+MACHINA_REPO=/path/to/machina ./run-tests.sh tests/ -q
 
-Headless exit codes (`machina chat --help`): `0` completed, `1` failed (including a session already busy with a live turn), `3` paused for an approval decision, `130` interrupted.
-
-### 2. Interactive UI
-
-```bash
-machina          # no subcommand opens the TUI
-machina repl     # same UI, explicitly
-machina chat -i  # same UI
-```
-
-`machina`, `machina repl`, and `machina chat -i` all call the launcher ([machina/cli/launcher.py](machina/cli/launcher.py)), which checks Node ≥ 22.19, requires a real TTY, generates a per-run `MACHINA_GATEWAY_TOKEN`, and spawns `node ui/src/main.ts` (which itself spawns `python -m machina.gateway`).
-
-### 3. HTTP server
-
-```bash
-export MACHINA_API_KEY="$(openssl rand -hex 32)"
-machina serve --host 127.0.0.1 --port 8000
-# or: machina serve --reload
-```
-
-Routes under `/api/v1` (sessions, memory, documents, jobs, approvals, models, plus `POST /rpc`), with `/health` and `/ready` unauthenticated and `/metrics` requiring the API key.
-
-### CLI command surface
-
-`python -m machina --help` lists the top-level commands. Selected groups:
-
-```text
-Session    status, sessions, sessions-search, export, fork, delete, context, compress
-Chat       chat, repl, serve
-Skills     skills, learn, curator, hub
-Memory     memory-list, memory-search, memory-forget, memory-pending,
-           memory-approve, memory-reject, memory-approve-all, memory-reject-all, memory-stats
-Persona    user-profile, user-profile-update, user-profile-list, growth
-Providers  providers, auth, models via the TUI/gateway
-Setup      setup, init, doctor, config, config-set, version, uninstall, mode, usage
-Interop    harnesses (alias: interop)
-```
-
-`machina repl` accepts `--model/-m`, `--provider/-p`, `--session/-s`, and `--mode`; bare `machina` accepts the global `--mode` flag (`ask|workspace|sandbox|full`), which also applies to one-shot commands.
-
-## The terminal UI
-
-The TUI is a Node program built on `@earendil-works/pi-tui` (`ui/package.json`, dependency pinned at `1.0.0`). It launches the Python gateway over JSON-RPC on stdio. Render the command palette with `/help` (searchable; group order in [ui/src/commands.ts](ui/src/commands.ts)).
-
-### Slash commands
-
-`/help` opens the searchable palette; the same command set is grouped as:
-
-| Group | Commands |
-|---|---|
-| Session | `/new` `/resume` `/sessions` `/search` `/recall` `/rename` `/fork` `/delete` `/export` `/clear` |
-| Task | `/goal` `/review` `/init` `/delegate` `/agents` |
-| Workspace | `/workspace` `/editor` `/explorer` `/lsp` `/problems` `/quickopen` |
-| Memory | `/memory` `/growth` `/persona` `/skills` |
-| Context | `/context` `/compress` |
-| Automation | `/jobs` |
-| Setup | `/auth` `/keys` `/models` `/default-model` `/provider` `/effort` `/config` `/theme` `/profile` `/profiles` `/mode` `/approvals` `/interop` `/harnesses` |
-| Info | `/status` `/usage` `/output` `/mcp` `/help` `/exit` |
-
-Aliases resolve in [ui/src/commands.ts](ui/src/commands.ts) (`settings`→`config`, `skill`→`skills`, `model`→`default-model`, `providers`→`provider`, `compact`→`compress`, …).
-
-- **`/skills`** — opens the interactive skills directory (browse / list / search / show / learn / proposals / approve / reject / revert / delete / curator). See [Skills system](#skills-system).
-- **`/settings`** — global editor preferences (syntax highlighting, soft wrap, tab width), stored as the bounded `ui_preferences` JSON document; also surfaces Appearance (theme, transparent background) and workspace rows.
-- **`/theme`** — preview one of **53 palettes** live; arrows preview, Enter saves, Escape restores. Persisted through the single `config.theme` path.
-- **`/workspace`** — `open <path>` / `split` / `chat` / `editor` / `ratio` / `side` / `status` / `close`; creates the backend-issued workspace identity.
-- **`/music`** — now-playing status and transport (`nowplaying.get` / `nowplaying.command` behind the bar).
-
-### Keybindings
-
-From the `?` / F1 shortcut picker ([ui/src/app.ts](ui/src/app.ts) `shortcutItems`):
-
-| Key | Action |
-|---|---|
-| `Enter` | Send a message / run a command |
-| `Shift+Enter` | New line |
-| `Ctrl+V` (or drop an image) | Paste image (PNG/JPEG/GIF/WebP) |
-| `Esc` | Stop reply; twice on empty input edits the last prompt |
-| `Ctrl+C` | Stop reply / clear draft / exit when empty |
-| `Ctrl+D` | Exit (idle + empty input) |
-| `Ctrl+L` | Clear chat (idle) |
-| `Tab` | Complete commands and arguments |
-| `↓` | Subagent menu (empty input) |
-| `Ctrl+Shift+←/→` | Switch between main session and subagents |
-| `Ctrl+P` | Quick Open (fuzzy file search) |
-| `Ctrl+S` | Save active editor buffer |
-| `Ctrl+W` | Close active editor tab (dirty → save/discard/cancel) |
-| `Ctrl+T` | Toggle right-edge file explorer |
-| `Ctrl+Space` | Completion (macOS may steal it; fallback `/editor complete`) |
-| `F12` / `Shift+F12` / `F2` | Definition / references / rename preview |
-| `F6` / `Shift+F6` | Cycle focus: composer → editor → explorer → problems |
-| `Ctrl+→` / `Ctrl+←` | Maximize chat / return to 50/50 split (editor focus) |
-| `?` / `F1` | Keyboard-shortcuts picker |
-| `□` / `▪` | Activity + learning indicator (bottom-right pulse) |
-
-### Integrated editor, LSP, problems, Quick Open
-
-The workspace is a separate event family from chat and never enters the transcript reducer. The UI talks to it through `workspace.*` gateway methods ([communications/ui-gateway-protocol.md](communications/ui-gateway-protocol.md)). From [docs/design/WORKSPACE.md](docs/design/WORKSPACE.md):
-
-- Default split at ≥ 89 columns: chat left, workbench right (~50/50); collapse to one pane below the minimum and restore automatically.
-- Tabs are preview (single click) vs pinned (double click); dirty/conflict/read-only states are labelled in text, not only color.
-- **Save is compare-and-swap** (`sha256-hex[0:32]:<size-bytes>` revisions); conflicts prompt Reload / Overwrite / Keep editing — unsaved buffers are never silently replaced.
-- **Two LSP profiles** out of the box: `pyright-langserver --stdio` (Python) and `typescript-language-server --stdio` (TS/JS). A missing server is reported honestly (`missing`); nothing is auto-installed.
-- `workspace.intelligence` is a closed allowlist (`completion`, `hover`, `definition`, `references`, `symbols`, `diagnostics`), never a raw LSP tunnel.
-- Opening or viewing a file never sends its contents to the model; content reaches chat only through the explicit `/attach` selection flow.
-- `MACHINA_WORKSPACE=0` disables the workspace entirely (chat-only app).
-
-**Terminal split note:** there is no in-app terminal pane in the workspace. The `terminal` tool is a separate agent tool (sandboxable via `terminal_sandbox` / `execution_mode: sandbox`).
-
-### Now-playing bar
-
-A pinned bar shows what is playing on this machine, from any app (browser video, Spotify, Music, …). Detection is layered and local ([machina/core/nowplaying.py](machina/core/nowplaying.py)): MediaRemote (private framework, silent-empty when gated), `nowplaying-cli`/`media-control` if installed, Spotify/Music via AppleScript, then a Chromium/Safari YouTube tab. Metadata never leaves the machine.
-
-**macOS Automation permission is real.** The first AppleScript query (layers 3–4) triggers the standard Automation prompt; while unanswered, the layer times out and an explicit denial is reported as a named `permission` state. On the verified machine, Spotify was already authorized (layer 3 reached permission-free) and MediaRemote was gated; the browser layer (layer 4) would prompt, so it was shimmed off during verification. See [docs/verification/NOWPLAYING_NATIVE_VERIFICATION.md](docs/verification/NOWPLAYING_NATIVE_VERIFICATION.md). Hide the bar with `/music off` or `nowplaying_enabled: false`.
-
-## Skills system
-
-Skills are `SKILL.md` instruction packages. The registry ([machina/skills/registry.py](machina/skills/registry.py)) discovers them, tracks provenance, and does a best-effort injection scan (NFKC folding, invisible characters, homoglyphs, leetspeak, base64 blobs) — explicitly **one layer of defense, never a security boundary**.
-
-- **Built-in catalog.** The repo ships 34 first-party skills under [skills/](skills/) plus a curated **42-skill ECC bundle** under `skills/ecc/` ([docs/ECC_SKILLS.md](docs/ECC_SKILLS.md)). Both are packaged into the wheel (`packages = ["machina", "skills"]`).
-- **Deterministic selector.** Ranking and explanations live in [machina/skills/search.py](machina/skills/search.py); task routing and stage-aware disclosure in [machina/skills/runtime.py](machina/skills/runtime.py) and [machina/skills/planned_steps.py](machina/skills/planned_steps.py). A `TaskDescriptor` selects skills and produces stable planned-step ids; the disclosure plan serves chosen sections and prerequisites keyed by revision identities.
-- **Metadata schema v2.** Authored front matter and bundled sidecars parse into an inert `SkillMetadata` object ([machina/skills/metadata.py](machina/skills/metadata.py)). v1 front matter is untouched; unknown fields are preserved as opaque data; authority-shaped field names are dropped; closed vocabularies (task families, capabilities, stages) reject unknown values with bounded diagnostics; cycles/over-depth dependency graphs reject the whole metadata.
-- **ECC enrichment sidecar.** [machina/skills/enrichment/`<revision>`.json](machina/skills/enrichment/) holds local routing enrichment for bundled ECC content, keyed by skill id and bound to the bundle revision — a mismatch yields `stale-enrichment` and baseline fallback. Sidecars cannot alter provenance/trust or grant permissions.
-- **Install-time, once-only metadata generation.** A freshly installed or learned skill (a v1 `SKILL.md` with no metadata) gets one model-generated v2 metadata block merged into its front matter, preserving the body byte-for-byte ([machina/skills/enrich.py](machina/skills/enrich.py)). Because the persisted document then carries `schema_version`, later loads never regenerate. Generation is fail-open: an invalid answer or provider error leaves the skill as-is.
-- **Catalog reads over the gateway.** `skills.search`, `skills.preview_route`, and `skills.section` provide bounded, call-free catalog reads (no model/embedding/tool/install). The native `skill_read` tool gained optional `section`/`revision` parameters with the same semantics; legacy offset reads stay byte-identical ([communications/ui-gateway-protocol.md](communications/ui-gateway-protocol.md)).
-- **`/skills` UX.** `/skills`, `/skills list`, and `/skills search` open the interactive directory; hosts without that surface fall back to the bounded `skills.search` table.
-
-## Rolling context & token efficiency
-
-Machina keeps durable state and sends a *planned* view, never a destructive rewrite. Full contract: [docs/TOKEN_EFFICIENCY.md](docs/TOKEN_EFFICIENCY.md); operational evidence: [docs/verification/TOKEN_EFFICIENCY_2026-10-16.md](docs/verification/TOKEN_EFFICIENCY_2026-10-16.md).
-
-- **Durable artifacts (on; fail-open).** Oversized tool results are stored verbatim *before* any lossy view is published ([machina/core/artifacts.py](machina/core/artifacts.py)). Recovery is re-authorized through the session delegation tree via `artifact_read` (character paging with true totals), `artifact_search`, and `artifact_describe`. Every record carries an honest **completeness** flag (`complete` / `upstream_truncated` / unknown, never silently complete), and paged reads/searches use **bound cursors** that pin the source revision and retention observed at issue time. Store failure/quota/oversize falls back to the legacy append cap with no recovery claim. Retention: `artifact_retention_days` (default 30, `0` = no expiry), `artifact_max_per_session`, `artifact_max_chars`.
-- **Deterministic reducers (on; fail-open).** [machina/core/reducers.py](machina/core/reducers.py) turns over-cap results into bounded, dense views — tests/logs/JSON/CSV/diff/code outlines, with a head+tail fallback whose omission seam is marked. A reduced view is published only when the exact original was durably retained first; parse failure or no net saving keeps the original behavior. View construction and disclosure of recovery handles live in [machina/core/tool_views.py](machina/core/tool_views.py).
-- **Budgeted request projector.** [machina/core/request_projection.py](machina/core/request_projection.py) plans the model-visible request: pins are never truncated, provider-required/protected (native/signed) blocks are preserved, tool-call batches stay atomic, and bulky older observations are replaced by verified views only when the artifact lookup reports `available` and `complete`. The gate that invokes it is [machina/core/request_gate.py](machina/core/request_gate.py).
-- **`request_projection_enabled` (default `true`).** When on, both live loops (`run()` and `run_stream()`) send the projected payload. Verified against a real `deepseek/deepseek-chat` turn (`run()` and `run_stream()` accepted the projected payload — pins-first system messages plus verified `[machina view: …]` units), see [docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md](docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md) §10. When off, projection reverts to shadow-only (bounded comparison log; outgoing payloads byte-identical). **Not verified:** native signed-block replay at a real Anthropic/OpenAI transport (`DETERMINISTIC_SKILLS_B3_EVIDENCE.md` §73, §116).
-- **Evidence projection (on; fail-open).** [machina/core/projection.py](machina/core/projection.py) removes exact duplicates across memory/RAG/archive excerpts, then keeps entries in priority order until `retrieval_token_budget` (default 6000) is spent; omissions are disclosed in the prompt (`[N lower-ranked retrieved excerpts omitted by the token budget]`), and the first entry always survives.
-- **Usage ledger (always on).** One accounting path ([machina/core/usage.py](machina/core/usage.py), `llm_usage` table) normalizes prompt tokens as `uncached + cache_read + cache_write` (missing ≠ zero) and records the basis, task purpose, session/agent ancestry, cost, and accepted-completion marker. Prices come from dated snapshots ([machina/core/pricing.py](machina/core/pricing.py)); unknown models keep NULL cost, and overrides are extendable via `pricing_table_json`. Inspect with `machina usage`.
-- **Prompt cache (opt-in, default off).** `prompt_cache_enabled` attaches Anthropic-style ephemeral `cache_control` breakpoints to stable-prefix ends; unknown providers are treated as unsupported until verified (capability profiles in [machina/core/provider/prompt_cache.py](machina/core/provider/prompt_cache.py)). Off-path payloads are byte-identical.
-
-Deliberately **not enabled** (no task-specific evidence yet, per the plan doc): learned compression/LLMLingua-style pruning, model routing/reasoning-effort adaptation, semantic answer caching, cache warmers, and progressive native-tool schema deferral.
-
-## Memory & retrieval
-
-- **What persists.** Memory entries, persona notes, user profiles, consolidation decisions, and RAG documents/chunks all live in PostgreSQL ([machina/memory/](machina/memory/), [machina/rag/](machina/rag/)). Memory content is secret-redacted before storage; a fail-closed marker replaces text that could not be redacted.
-- **Consolidation & approval.** Conversations are consolidated into candidate memories by extracting → importance-scoring → dedup → write ([machina/memory/consolidator.py](machina/memory/consolidator.py)). With `memory_approval_enabled` (default **off**), writes route to a pending queue for human approve/reject (CLI `memory-pending`/`memory-approve`/`memory-reject`, or the `/memory` menu); with it off, writes are durable directly. Typed consolidation outcomes (`complete`/`empty`/`partial`/`failed`) drive retryable checkpoints.
-- **Persona-conditioned retrieval** is on by default (`persona_memory_enabled: true`, `persona_default_emotion: trust`) and stores user preferences separately from agent lessons.
-- **Retrieval ranking.** [machina/memory/retriever.py](machina/memory/retriever.py) merges dense and sparse (keyword) candidates, demotes catalog/echo content (never drops it), and uses recency/importance only to break ties. Hybrid fusion uses reciprocal-rank weights `rrf_keyword_weight` (1.0) and `rrf_dense_weight` (0.25); weights apply only when dense retrieval is enabled.
-- **Dense/sparse + reranking are opt-in.** Default `embedding_backend: "off"` (keyword-only) and `reranker_backend: "none"`. Enable dense with `onnx` (in-process fastembed), `local` (static model2vec, pure NumPy), `openai`, or `auto` (explicit endpoint → ONNX → model2vec → OpenAI/OpenRouter keys). Enable reranking with `local` (ONNX cross-encoder), `cohere`, or `http` (a `llama-server --reranking` endpoint). These require the matching extras (`embeddings-onnx`, `embeddings-local`, `rerank`).
-- **RAG indexing.** [machina/rag/](machina/rag/) handles ingestion, chunking, embedding, and search; the agent tools `index_document` and `search_documents` are session-scoped, and `web_crawl` indexes bounded multi-page crawls into session RAG.
-- **Forgetting / RSI / growth.** `machina/memory/forgetting.py`, `rl.py`, `rsi.py`, and `growth.py` back the `growth` commands and gateway methods; growth is enabled by default and reversible.
-
-## Providers & models
-
-The provider registry is in [machina/core/provider/specs.py](machina/core/provider/specs.py) (`PROVIDER_SPECS`, `PROVIDERS`, `provider_names`) and the factory in [machina/core/provider/factory.py](machina/core/provider/factory.py).
-
-| Provider | Key / auth | Default model | Notes |
-|---|---|---|---|
-| `openrouter` | `OPENROUTER_API_KEY` | `openrouter/free` | multi-model gateway (default) |
-| `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` | |
-| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-chat` | |
-| `xai` | `XAI_API_KEY` | `grok-4` | |
-| `groq` | `GROQ_API_KEY` | `llama-3.3-70b-versatile` | |
-| `together` | `TOGETHER_API_KEY` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | |
-| `mistral` | `MISTRAL_API_KEY` | `mistral-small-latest` | |
-| `google` | `GOOGLE_API_KEY` | `gemini-2.0-flash` | OpenAI-compat endpoint |
-| `opencode` | `OPENCODE_API_KEY` | `big-pickle` | OpenCode Zen gateway; override with `OPENCODE_BASE_URL` |
-| `kimi` | `KIMI_API_KEY` | `kimi-for-coding` | Kimi Code |
-| `anthropic` | `ANTHROPIC_API_KEY` | `claude-3-5-sonnet-20241022` | native Anthropic API |
-| `chatgpt` | `machina auth` (Codex OAuth) | live per-account catalog | no API key |
-| `copilot` | `machina auth` (GitHub device flow) | — | no API key |
-| `custom` | `CUSTOM_BASE_URL` (+ optional `CUSTOM_API_KEY`) | your model id | any OpenAI-compatible endpoint; keyless supported |
-| `ollama` | none | `llama3.1` | local models |
-
-- **Adding a provider.** `machina providers` manages user-added OpenAI-compatible providers (name + base URL + optional key); the catalog is pulled from `GET {base}/models`. Gateway methods `providers.list|add|remove` and `models.list|setEffort` back the `/provider` and `/models` menus; keys are written to git-ignored `.env`, never to the JSON store.
-- **Reasoning effort.** `reasoning_effort` accepts `low|medium|high` wire-wide plus catalog tiers (`minimal|xhigh|max` for validated ChatGPT models); unsupported tiers are ignored per provider.
-- **Streaming usage.** Provider transports normalize usage blocks across Anthropic, OpenAI-compatible, DeepSeek, ChatGPT, Copilot, and OpenRouter ([machina/core/provider/usage_map.py](machina/core/provider/usage_map.py)).
-- **Serving.** There is no in-repo model server; the HTTP API serves agent turns (`machina serve`), and `custom`/`ollama` point at your own inference stack.
-
-## Configuration
-
-Config file: **`~/.machina/config.yaml`** (`DEFAULT_CONFIG_PATH` in [machina/core/config.py](machina/core/config.py)). Environment variables (`MACHINA_<KEY>`) override file values; secrets always resolve from the environment/backend, never the file. View and set values with `machina config` / `machina config-set`, or the TUI `/config`/`/settings`.
-
-Curated keys (defaults from `DEFAULTS` in [machina/core/config.py](machina/core/config.py)):
-
-| Key | Default | Meaning |
-|---|---|---|
-| `model` | `openrouter/free` | active model id |
-| `provider` | `openrouter` | active provider |
-| `temperature` | `0.7` | sampling temperature (0–2) |
-| `max_tokens` | `4096` | output ceiling (≤ 32768) |
-| `reasoning_effort` | `""` | provider default; `low\|medium\|high` (+ catalog tiers) |
-| `execution_mode` | `ask` | `ask \| workspace \| sandbox \| full` |
-| `turn_timeout` | `300` | seconds per turn |
-| `approval_timeout` | `300` | seconds to wait for an approval |
-| `rate_limit_calls_per_minute` | `10` | throttle (0 = off) |
-| `streaming` | `true` | stream provider output |
-| `theme` | `codex` | UI skin |
-| `transparent_background` | `false` | render on the terminal's own background |
-| `nowplaying_enabled` | `true` | show the now-playing bar |
-| `ui_preferences` | `""` | bounded JSON: editor prefs (syntax highlight, soft wrap, tab width) |
-| `workspace_ui_state` | `""` | bounded JSON: per-root layout/URIs/cursors |
-| `compression_enabled` | `true` | context compression |
-| `compression_threshold` / `compression_target_ratio` | `0.8` / `0.5` | when to compress / target size |
-| `compression_preserve_recent` | `3` | recent chunks kept |
-| `auto_compaction_enabled` | `true` | automatic compaction |
-| `eviction_max_tokens` | `0` | eviction ceiling (0 = unlimited) |
-| `artifacts_enabled` | `true` | durable artifacts + recovery tools |
-| `artifact_retention_days` | `30` | `0` = no expiry |
-| `artifact_max_per_session` | `500` | quota refuses, never evicts |
-| `artifact_max_chars` | `2000000` | larger results keep legacy truncation |
-| `reducers_enabled` | `true` | format reducers for over-cap results |
-| `request_projection_enabled` | `true` | wire the budgeted request projector |
-| `retrieval_selection_enabled` | `true` | dedup + budgeted evidence selection |
-| `retrieval_token_budget` | `6000` | `0` disables the budget |
-| `output_policy` | `legacy` | `legacy` or `concise` |
-| `prompt_cache_enabled` | `false` | capability-gated prompt-cache pilot |
-| `embedding_backend` | `off` | `auto\|local\|onnx\|openai\|off` |
-| `reranker_backend` | `none` | `auto\|local\|cohere\|http\|none` |
-| `rrf_keyword_weight` / `rrf_dense_weight` | `1.0` / `0.25` | hybrid fusion |
-| `memory_enabled` | `true` | long-term memory |
-| `memory_approval_enabled` | `false` | route writes through approve/reject |
-| `memory_consolidation_enabled` | `true` | extract memories from turns |
-| `persona_memory_enabled` | `true` | persona-conditioned retrieval |
-| `personality_growth_enabled` / `rsi_enabled` | `true` / `true` | runtime learning |
-| `learning_review_auto_apply` | `true` | publish learned skills within caps |
-| `learning_review_auto_apply_per_day` | `5` | rolling 24h cap (0 = stage-only) |
-| `skills_disclosure_planner` | `true` | stage-aware instruction disclosure |
-| `rag_enabled` | `true` | document RAG |
-| `usage_session_token_limit` / `usage_agent_token_limit` | `0` / `0` | lifetime budgets (0 = unlimited) |
-
-`pricing_table_json` holds optional per-provider price overrides; `firecrawl_autostart` / `firecrawl_stop_on_exit` / `firecrawl_home` control the opt-in Firecrawl/SearXNG stack lifecycle for the UI (off by default).
-
-## Gateway & integrations
-
-The UI and HTTP API share one authenticated **JSON-RPC 2.0** gateway ([machina/gateway/server.py](machina/gateway/server.py), feature families in [machina/gateway/features/](machina/gateway/features/)). The protocol, events, and every method family are specified in [communications/ui-gateway-protocol.md](communications/ui-gateway-protocol.md) (event schema source of truth: `machina/protocol/events.json`, version 2).
-
-Core and feature method families:
-
-| Family | Methods (examples) |
-|---|---|
-| Core | `initialize`, `session.create/list/resume`, `prompt.submit/cancel`, `usage.get`, `config.get/set`, `shutdown` |
-| Session | `session.delete/export/fork/recall/rename/search/setGoal/setModel` |
-| Mode & approvals | `mode.get/set/revoke`, `approvals.list/resolve` |
-| Memory & growth | `memory.*`, `profile.*`, `growth.*` |
-| Skills | `skills.list/show/search/section/preview_route/learn/delete/curator` |
-| Workspace | `workspace.open/list/read/save/document*/quickOpen/quickOpenCancel/intelligence/lsp*/close` |
-| Connectors & providers | `mcp.*`, `models.list/setEffort`, `providers.list/add/remove` |
-| Ops | `jobs.*`, `agents.*`, `secrets.*`, `nowplaying.get/command`, `interop.*` |
-
-- **Events.** Gateway notifications use method `event` with the event in `params`; HTTP uses SSE (`data:` frames, `[DONE]` on normal retirement). Every v2 event carries `protocolVersion: 2`, `type`, `sessionId`, `turnId`.
-- **Standalone gateway.** `python -m machina.gateway` mints a token and prints it to stderr when `MACHINA_GATEWAY_TOKEN` is unset ([SECURITY.md](SECURITY.md)).
-- **HTTP API.** FastAPI routes under `/api/v1` plus `POST /rpc` ([machina/api/routes/](machina/api/routes/)): sessions, chat/prompt, context, usage, memory, documents, jobs, approvals (`resolve`/`resume`), models/agents. `/health` and `/ready` are unauthenticated; everything else, including `/metrics`, requires the `MACHINA_API_KEY` bearer.
-- **MCP.** Part of the default backend (`mcp==2.3.0`): `mcp.configure/remove/preview/connect/disconnect/tools` plus read-only `mcp.list/status`, and native `mcp_list`/`mcp_describe`/`mcp_call` agent tools. Streamable-HTTP OAuth (Authorization Code + S256 PKCE) is implemented locally. See [docs/MCP.md](docs/MCP.md) and [docs/MCP_OAUTH.md](docs/MCP_OAUTH.md).
-- **External harness interop.** `machina harnesses` (alias `machina interop`) detects and registers Machina's MCP server with OpenCode/Codex/Hermes, and can delegate one bounded prompt into a harness. Gateway methods `interop.list/enable/disable/run`.
-
-## Security & permissions
-
-Full model and trust boundaries: [SECURITY.md](SECURITY.md) and [docs/design/WORKSPACE_SECURITY.md](docs/design/WORKSPACE_SECURITY.md).
-
-- **Execution modes.** New sessions snapshot the configured default (`ask`). `ask`/`workspace` approve routine project reads/writes, built-in web tools, retrieval, local Git, and common test/build/lint commands automatically, and require review for risky or unclassified effects. `sandbox` routes terminal execution through Docker. `full` issues an explicit session-scoped grant for no-approval host authority and is revocable (`/approvals revoke`); routing mode alone authorizes nothing.
-- **The permission broker.** Every execution path (file/RAG/skill/terminal/jobs/delegation/plugins) goes through `PermissionBroker.guard` ([machina/permissions/broker.py](machina/permissions/broker.py)). Tools declare effects (`fs.read`, `fs.write`, `exec`, `net`, `memory`, `delegate`); the broker evaluates declared effects plus the exact action.
-- **Exact approvals.** Action digest v2 binds tool, operation, mode, capabilities, canonical targets, argv/shell, cwd, backend, timeout, network declarations, content digest, and workspace identity. Decision and execution are separate atomic transitions; approval is consumed exactly once; changed actions require fresh approval; agent principals cannot resolve approvals.
-- **Shell grammar.** Only literal stages joined by `;`, newline, `&&`, `||`, or `|` are parsed for routine review. Expansion, redirection (including `2>/dev/null` — there is no `/dev/null` allowlist), background jobs, compound syntax, and unknown commands are opaque and require broker approval; quoted operators are data, not syntax.
-- **Secrets.** Resolved through the environment, mounted files, or a Vault/AWS backend ([machina/security/](machina/security/)); `.env` writes validate names/content, reject newline injection, replace atomically, and use POSIX `0600`. Manual installs must create `.env` under `umask 077` (or `chmod 600`). Configured credential values are redacted on outbound paths, including streaming.
-- **Scripts.** Script jobs require an administrator-owned `.script-policy.json` outside the agent workspace (allowlisted entry files + declared dependencies, hashed and re-checked before execution). Set `MACHINA_SCRIPTS_DIR` (docker-compose mounts `./scripts` read-only at `/app/scripts`).
-- **Workspace trust.** Workspace identity is minted server-side; file access is resolved-path containment under the returned `resolvedRoot` (symlinks and `..` resolved and verified), never a textual prefix.
-
-## Testing & development
-
-**There is no Python test suite in this repository.** The backend suite and its runner live in the sibling **Machina-DevTools** checkout; `run-tests.sh` there resolves a Machina checkout via `$MACHINA_REPO` or a sibling directory, makes it importable through `PYTHONPATH`, and runs pytest under a disposable `HOME`/`MACHINA_HOME` so it never touches your config.
-
-```bash
-# From the Machina-DevTools checkout:
-./run-tests.sh                       # uses ../machina or $MACHINA_REPO
-MACHINA_REPO=/path/to/machina ./run-tests.sh tests/test_skill_runtime.py -q
-```
-
-Test paths in that command are relative to the Machina-DevTools checkout; this
-repository has no `tests/` directory of its own.
-
-The UI has its own Node test suite inside this repo ([ui/test/](ui/test/), run by `npm test`).
-
-Local checks used in this repo (mirroring CI):
-
-```bash
+# From this repository, with development dependencies installed:
 python -m ruff check machina/ tools/
 python -m ruff format --check machina/ tools/
-bandit -r machina/ tools/ -ll
-uv lock --check
-python -m hatchling build && python tools/check_release_artifacts.py dist/*
-npm --prefix ui run check          # typecheck + tests + lint
+npm --prefix ui run check
 ```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs these as three jobs:
+Database-backed tests require a separate test database configured with `MACHINA_TEST_DATABASE_URL`. Test paths are relative to the DevTools checkout. Its runner isolates `HOME` and `MACHINA_HOME`; do not point test configuration at an application database.
 
-- **lint-and-test** — install the `uv.lock` resolution (`uv export --frozen`, dev+connectors extras), `uv lock --check`, ruff check/format, bandit over `machina/` and `tools/`, build the wheel + sdist, verify wheel contents and isolated imports, upload distributions.
-- **ui** — Node 24 + Python 3.11, a `pgvector/pgvector:pg16` service (`pg_isready -h 127.0.0.1 -d machina_test`), base + runtime schema init (`initialize_schema`, `initialize_runtime_schema`), locked Python install, `npm ci --ignore-scripts`, `npm audit`, then `npm run check` (including tests against a restarted real gateway).
-- **docker** — builds `machina:ci` and `machina-tool-sandbox:ci`, smoke-tests the CLI/`create_app` and executes the sandbox image as `65534:65534` (including that `/build` was removed).
+Additional release checks include Bandit security scanning, `uv lock --check`, wheel/source-distribution builds with Hatchling, and `tools/check_release_artifacts.py`. Build tooling comes from the lockfile's build dependency group. A normal runtime installation does not imply every developer tool is installed.
 
-Architecture ratchets and layer/pair checks live in the DevTools suite (for example `test_architecture_layers.py`, `test_architecture_pairs.py`); their documented-delta expectations are cited in [docs/TOKEN_EFFICIENCY.md](docs/TOKEN_EFFICIENCY.md).
+[CI](.github/workflows/ci.yml) has three main jobs:
 
-## Repository layout
+| Job | What it checks |
+|---|---|
+| `lint-and-test` | Locked Python dependencies, style/formatting, security scanning, release artifacts and isolated imports, then a pinned DevTools backend suite against this source checkout and a test PostgreSQL service. |
+| `ui` | TypeScript checks, Node tests, lint, dependency audit, and tests using a real Python gateway with a test database. |
+| `docker` | Application and tool-sandbox image builds plus targeted CLI, import, and sandbox smoke checks. |
+
+DevTools also contains architecture checks that detect unwanted dependencies between layers. A CI workflow definition describes intended checks; current release evidence and environment-gated limitations remain in [the release review](docs/verification/RELEASE_READINESS.md).
+
+### Source map
 
 ```text
-machina/            Python package (backend)
-  cli/              Typer CLI and the TUI launcher
-  core/             agent loop, context, compression, config, request projection/reducers,
-                    artifacts, tool_views, usage, prompt, nowplaying, provider/
-  api/              FastAPI app and per-resource routes
-  gateway/          JSON-RPC gateway server + feature method families
-  protocol/         canonical event schema (events.json) and TS codegen
-  db/               asyncpg connection + schema
-  memory/           memory store, consolidation, approval, persona, retriever, growth
-  rag/              ingestion, chunking, embeddings, reranking, hybrid search
-  skills/           registry, metadata v2, search, runtime, revisions, enrich, enrichment/
-  tools/            built-in agent tool registry (35 tools)
-  permissions/      broker, policy, shell, store
-  security/         secret handling, auth (chatgpt/copilot), env files
-  connectors/       MCP client, OAuth, HTTP transport
-  workspace/        workspace file adapter and identity
-  observability/    diagnostics, tracing, metrics, safe logging
-  interop.py        external harness detection/registration/delegation
-  bundled_agents/   core agents + bundled ECC subagents (71)
-skills/             34 first-party skills + curated ECC bundle (42 skills in skills/ecc/)
-ui/                 TypeScript terminal UI (src/) + Node tests (test/)
-communications/     ui-gateway-protocol.md (protocol source of truth)
-docs/               design/, verification/, and topical docs (see Docs map)
-research/           example identity-scenario data
-scripts/            host-side operator scripts mount point (README only by default)
-tools/              repo-side tooling: release artifact checks, e2e gate, ECC vendoring
-Dockerfile          backend HTTP image
-Dockerfile.sandbox  terminal tool-sandbox image
-docker-compose.yml  pgvector + app (HTTP backend)
-install.sh          one-command installer
-pyproject.toml      packaging, dependencies, optional extras, entry point
+machina/
+  cli/              Commands, setup, and the terminal UI launcher
+  core/             Agent loop, context, compression, artifacts, usage, providers, jobs
+  api/              HTTP application and resource routes
+  gateway/          Local JSON-RPC server and feature handlers
+  protocol/         Shared event definitions and TypeScript generation
+  db/               PostgreSQL connection and schema
+  memory/           Memory storage, retrieval, growth, and consolidation
+  rag/              Document ingestion, embeddings, search, and reranking
+  skills/           Skill discovery, metadata, routing, learning, and revisions
+  tools/            Agent tools and their registry
+  permissions/      Action policy, approval broker, and durable decisions
+  security/         Credentials, provider sign-in, and secret storage
+  connectors/       MCP clients, HTTP transport, and OAuth
+  mcp_server/       Machina tools exposed to other AI assistants
+  workspace/        Project file access and language-server integration
+  observability/    Logging, diagnostics, tracing, and metrics
+  bundled_agents/   Shipped specialist definitions
+skills/             Bundled instruction packages, including curated ECC skills
+ui/                 TypeScript UI source and Node tests
+communications/     Gateway protocol reference
+docs/               Feature guides, design details, and verification records
+tools/              Release checks and repository maintenance tools
+scripts/            Operator script mount point and setup guidance
 ```
 
-`FEATURE_LEDGER.md` and `CHANGELOG.md` record runtime/feature surfaces and release notes; `OPERATIONS.md` documents the deployment/recovery contract.
+[pyproject.toml](pyproject.toml) defines packaging and Python extras; `uv.lock` records the dependency resolution. [FEATURE_LEDGER.md](FEATURE_LEDGER.md) maps implementation surfaces, and [CHANGELOG.md](CHANGELOG.md) records release changes.
 
-## Docs map
+## Documentation
 
-| Document | Contents |
+| Guide | What you will find |
 |---|---|
-| [SECURITY.md](SECURITY.md) | Trust boundaries, modes, exact approvals, secrets, failure semantics |
-| [OPERATIONS.md](OPERATIONS.md) | Deployment, retention, monitoring, backup/restore contract |
-| [communications/ui-gateway-protocol.md](communications/ui-gateway-protocol.md) | JSON-RPC events, negotiation, and every method family |
-| [docs/TOKEN_EFFICIENCY.md](docs/TOKEN_EFFICIENCY.md) | Artifacts, reducers, projection, output policy, config keys |
-| [docs/design/TUI_DESIGN.md](docs/design/TUI_DESIGN.md) | Terminal UI visual/interaction contract |
-| [docs/design/THEME_COLORS.md](docs/design/THEME_COLORS.md) | The 53 palettes and color roles |
-| [docs/design/WORKSPACE.md](docs/design/WORKSPACE.md) | Editor, explorer, problems, LSP, Quick Open, persistence |
-| [docs/design/WORKSPACE_SECURITY.md](docs/design/WORKSPACE_SECURITY.md) | STRIDE threat model for the workspace feature |
-| [docs/ECC_SKILLS.md](docs/ECC_SKILLS.md) | The 42-skill curated ECC bundle |
-| [docs/ECC_AGENTS.md](docs/ECC_AGENTS.md) | The 71 bundled ECC subagents and tool mappings |
-| [docs/MCP.md](docs/MCP.md) / [docs/MCP_OAUTH.md](docs/MCP_OAUTH.md) | MCP setup; Streamable-HTTP OAuth (PKCE) |
-| [docs/PERMISSION_POLICY_REVIEW.md](docs/PERMISSION_POLICY_REVIEW.md) | The `ask`-mode risk policy |
-| [docs/PERSONALITY_GROWTH.md](docs/PERSONALITY_GROWTH.md) | Persona, growth, and runtime self-improvement |
-| [docs/SELF_IMPROVEMENT_PLAN.md](docs/SELF_IMPROVEMENT_PLAN.md) | The dogfooding self-improvement loop |
-| [docs/verification/RELEASE_READINESS.md](docs/verification/RELEASE_READINESS.md) | Local 0.2.0 release-candidate review |
-| [docs/verification/TOKEN_EFFICIENCY_2026-10-16.md](docs/verification/TOKEN_EFFICIENCY_2026-10-16.md) | Token-efficiency operational evidence |
-| [docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md](docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md) | Wired request-projection release evidence |
-| [docs/verification/NOWPLAYING_NATIVE_VERIFICATION.md](docs/verification/NOWPLAYING_NATIVE_VERIFICATION.md) | Native macOS now-playing verification |
-| [docs/verification/](docs/verification/) | CI, codebase, RAG-quality, OAuth-risk, and workspace review records |
+| [Workspace](docs/design/WORKSPACE.md) | Editor, files, language servers, layout, and shortcuts |
+| [UI design](docs/design/TUI_DESIGN.md) / [themes](docs/design/THEME_COLORS.md) | Interface behavior, appearance, and color roles |
+| [Context and token efficiency](docs/TOKEN_EFFICIENCY.md) | Summaries, saved tool output, recovery, and usage accounting |
+| [Personality and growth](docs/PERSONALITY_GROWTH.md) | Preferences, feedback, rollback, and SoulSpec identities |
+| [Bundled skills](docs/ECC_SKILLS.md) / [specialist agents](docs/ECC_AGENTS.md) | Included ECC collections and how they are mapped |
+| [MCP](docs/MCP.md) / [MCP OAuth](docs/MCP_OAUTH.md) | Tool connections and browser sign-in |
+| [Gateway protocol](communications/ui-gateway-protocol.md) | JSON-RPC methods, events, and client integration |
+| [Security](SECURITY.md) | Permissions, secrets, and trust boundaries |
+| [Operations](OPERATIONS.md) | Deployment, backups, migrations, and recovery |
+| [Release evidence](docs/verification/RELEASE_READINESS.md) | Verification scope and open operational gates |
+| [Token-efficiency evidence](docs/verification/TOKEN_EFFICIENCY_2026-10-16.md) | Recorded checks for context, recovery, and accounting |
+| [Request-projection evidence](docs/verification/DETERMINISTIC_SKILLS_B3_EVIDENCE.md) | Implementation verification and provider replay limits |
+| [Native media-bar evidence](docs/verification/NOWPLAYING_NATIVE_VERIFICATION.md) | What was checked on macOS and which permissions were involved |
+| [Changelog](CHANGELOG.md) | Release changes |
 
 ## Troubleshooting
 
-| Symptom | Check |
+| Problem | Start here |
 |---|---|
-| `machina init`/`serve` fails to connect | `DATABASE_URL` in `.env`; Postgres running with pgvector; then `machina init`. Run `machina doctor`. |
-| `database_url` DSN error / driver error | `asyncpg` needs a `postgresql://` URL (not `postgres://`); confirm the DB user/db exist and pgvector is installed. |
-| Now-playing bar raises an Automation dialog or stays empty | macOS Automation permission for the source app (Spotify/Music/browser). Unanswered queries time out and are reported as a named `permission` state; grant it in System Settings → Privacy & Security → Automation, or use `/music off`. |
-| Completion/definition do nothing | `/lsp status` shows each profile's state; a missing server is reported as `missing` (nothing is auto-installed). macOS may intercept `Ctrl+Space` — use `/editor complete`. |
-| Dense retrieval seems inert | Dense is opt-in: set `embedding_backend` and install the matching extra (`embeddings-onnx` or `embeddings-local`); default is keyword-only. Reranking needs `rerank`. |
-| RAG/search quality questions | See [docs/verification/RAG_QUALITY_REVIEW.md](docs/verification/RAG_QUALITY_REVIEW.md); dense stays off by default because measured runs did not clear the go/no-go bars. |
-| TUI won't start | Node **≥ 22.19** on `PATH`, and `npm ci --ignore-scripts --prefix ui` run. Set `MACHINA_UI_DIR` for non-editable installs. |
-| Approvals seem stuck | A headless transport never hangs — it returns a `needs_approval` result and pauses. Resolve in the TUI card or `POST /api/v1/approvals/{id}/resolve`; resume via `.../resume`. |
-| Docker app ignores code edits | The compose mount of `./machina` is read-only and inert for the console entry point; rebuild the image (see comments in [docker-compose.yml](docker-compose.yml)). |
+| Database connection or initialization fails | Check `DATABASE_URL`, confirm PostgreSQL and pgvector are available, then run `machina init` and `machina doctor`. |
+| Terminal UI will not start | Check Node.js 22.19+, an interactive terminal, and installed UI dependencies. For a source install, run `npm ci --ignore-scripts --prefix ui`. |
+| A model will not respond | Check `/provider`, `/models`, and `/keys`; confirm the chosen account has access and available quota. |
+| Code completion is missing | Check `/lsp status`. Language servers must be installed separately; macOS may intercept `Ctrl+Space`, so try `/editor complete`. |
+| Search only matches keywords | That is the default. Configure an embedding backend and the appropriate extras for search by meaning. |
+| A headless task pauses for approval | Resolve the pending request, then resume through the approval API. See the [protocol](communications/ui-gateway-protocol.md) and [security guide](SECURITY.md). |
+| The music bar is empty or prompts for permission | Check platform support and macOS Automation permissions, or hide it with `/music off`. |
 
-## License & credits
+## License and credits
 
-Machina is released under the **MIT License** ([LICENSE](LICENSE), © 2026 Kiarad). Third-party provenance and licenses are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md):
-
-- **ECC (Everything Claude Code)** — curated skills (`skills/ecc/`, MIT) and bundled subagents (`machina/bundled_agents/ecc/`, MIT), pinned to specific upstream revisions.
-- **AI Research Skills (Orchestra Research)** — the 98-skill set is **not** vendored here; it has moved to the operator's agent skills directory.
-
-Security reports and release limits are described at the end of [SECURITY.md](SECURITY.md); current release evidence and open operational gates are in [docs/verification/RELEASE_READINESS.md](docs/verification/RELEASE_READINESS.md).
+Machina is [MIT licensed](LICENSE). The bundled ECC skills and agents retain their upstream attribution and licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
