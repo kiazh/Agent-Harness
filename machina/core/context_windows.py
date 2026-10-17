@@ -103,7 +103,13 @@ def _is_chatgpt(provider) -> bool:
     return _provider_name(provider) == "chatgpt"
 
 
-def context_window_for(model: str | None, provider=None) -> int:
+def context_window_for(
+    model: str | None,
+    provider=None,
+    *,
+    account_id: str = "",
+    base_url: str = "",
+) -> int:
     """Documented context window for *model*, or the default for unknown ids.
 
     Provider-scoped metadata: OpenRouter catalog windows and the ChatGPT
@@ -126,23 +132,28 @@ def context_window_for(model: str | None, provider=None) -> int:
     if _is_chatgpt(provider):
         # Function-level import: context_windows stays a dependency-light
         # leaf for its many lazy importers (see architecture guard).
-        from machina.core.provider.catalog import window_for
+        from machina.core.provider.catalog import CATALOG_BASE_URL, window_for
 
         # R6-1: account-scoped callers must pass the serving account so one
         # account's live catalog never answers another account's capacity
-        # check. Duck-typed here (both the prompt gate and the provider method
-        # route through this function) so the provider class ceilings stay put.
+        # check. Provider instances expose a best-effort hint; string routes
+        # (compaction/session budgets) get an explicit scope from the caller.
         hint = getattr(provider, "_account_hint", None)
-        account_id = ""
         if callable(hint):
             try:
-                account_id = str(hint() or "")
+                account_id = str(hint() or "") or account_id
             except Exception:
-                account_id = ""
+                pass
         base_url = str(
-            getattr(provider, "BASE_URL", "") or getattr(provider, "base_url", "") or ""
+            getattr(provider, "BASE_URL", "")
+            or getattr(provider, "base_url", "")
+            or base_url
+            or CATALOG_BASE_URL
         )
-        window = window_for(name, account_id=account_id, base_url=base_url)
+        # A bare provider name has no account hint: keying on the endpoint
+        # (never the empty scope) keeps cached_catalog from serving the
+        # most-recently-fetched account's live list.
+        window = window_for(name, account_id=str(account_id or ""), base_url=base_url)
         if window:
             return window
     best = 0

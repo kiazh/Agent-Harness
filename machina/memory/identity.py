@@ -110,7 +110,7 @@ _NEGATORS = frozenset(
         "barely",
     }
 )
-_NEGATION_WINDOW = 3
+_NEGATION_WINDOW = 2
 
 
 def _content_tokens(text: str) -> list[str]:
@@ -126,10 +126,15 @@ def _content_tokens(text: str) -> list[str]:
 
 
 def _fact_pattern(fact: str) -> re.Pattern[str] | None:
-    """Whole-word (or whole-phrase) matcher for a known fact."""
+    """Whole-word (or whole-phrase) matcher for a known fact.
+
+    The final word accepts a plural suffix ("API" matches "APIs") without
+    enabling arbitrary substring matches.
+    """
     words = [re.escape(part) for part in str(fact).strip().lower().split()]
     if not words:
         return None
+    words[-1] = words[-1] + r"(?:s|es)?"
     return re.compile(r"(?<!\w)" + r"\s+".join(words) + r"(?!\w)", re.UNICODE)
 
 
@@ -594,7 +599,9 @@ class IdentityGate:
                 matching_facts += 1
 
         denominator_cap = max(1, math.ceil(1 / self.RELEVANCE_THRESHOLD))
-        return matching_facts / min(len(belief.known_facts), denominator_cap)
+        return min(
+            1.0, matching_facts / min(len(belief.known_facts), denominator_cap)
+        )
 
     def _compute_consistency(self, content: str, belief: AgentBelief) -> float:
         """Compute consistency between memory content and agent beliefs.

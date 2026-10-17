@@ -161,6 +161,21 @@ async def session_context_window(session: Session) -> int:
     from machina.core.context_windows import context_window_for
 
     provider, model = await _effective_session_route(session)
+    if isinstance(provider, str) and provider.lower() == "chatgpt":
+        # The string route carries no provider instance, so resolve the
+        # configured account exactly once here (compaction/session budgets).
+        try:
+            from machina.core.provider.chatgpt import ChatGPTProvider, chatgpt_auth
+
+            account_id = str(chatgpt_auth.status().get("account_id") or "")
+            base_url = ChatGPTProvider.BASE_URL
+        except Exception:
+            account_id, base_url = "", ""
+        return context_window_for(
+            model, provider, account_id=account_id, base_url=base_url
+        )
+    # Keep the historical call shape for every other provider (patch targets
+    # and custom providers override the two-argument form).
     return context_window_for(model, provider)
 
 

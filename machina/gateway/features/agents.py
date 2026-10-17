@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError
 from machina.gateway.features._common import _int, _str, _uuid
-from machina.memory.redaction import redact_secrets
+from machina.memory.redaction import redact_diagnostic
 
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
@@ -77,9 +77,7 @@ def _delegation(r: Any) -> dict[str, Any]:
         "agent": r.agent,
         "task": r.task,
         "response": (
-            redact_secrets(str(r.response)).text
-            if r.status in ("error", "failed")
-            else r.response
+            redact_diagnostic(r.response) if r.status in ("error", "failed") else r.response
         ),
         "sessionId": str(r.session_id),
         "tokens": r.tokens,
@@ -132,7 +130,7 @@ async def agents_run(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
                 {
                     "agent": agent,
                     "task": task,
-                    "response": f"{type(result).__name__}: {redact_secrets(str(result)).text}",
+                    "response": f"{type(result).__name__}: {redact_diagnostic(result)}",
                     "sessionId": None,
                     "tokens": 0,
                     "iterations": 0,

@@ -24,7 +24,7 @@ from machina.core.context import context_manager
 from machina.core.exceptions import DelegationAccountingError
 from machina.core.session import session_manager
 from machina.db.connection import db
-from machina.memory.redaction import redact_secrets
+from machina.memory.redaction import redact_diagnostic
 from machina.observability.diagnostics import record_failure
 
 __all__ = ["DelegationResult", "Orchestrator", "AgentNotFoundError"]
@@ -41,7 +41,7 @@ def _redacted(text: str) -> str:
     fails, emit an explicit placeholder rather than the raw text.
     """
     try:
-        return redact_secrets(str(text)).text
+        return redact_diagnostic(text)
     except Exception:
         return "[redaction unavailable]"
 delegation_depth: ContextVar[int] = ContextVar("delegation_depth", default=0)
@@ -468,6 +468,11 @@ class Orchestrator:
             if not _ok:
                 status = "error"
                 final_content = _reason
+        if status == "error":
+            # Typed child failure (not a raised exception): the same redaction
+            # contract applies to the durable row, the parent chunk, and the
+            # returned result.
+            final_content = _redacted(final_content)
         await self._record_end(message_id, status=status, response=final_content, tokens=tokens)
         if parent_session_id is not None:
             await context_manager.add_chunk(
