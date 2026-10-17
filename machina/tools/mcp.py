@@ -187,8 +187,8 @@ async def mcp_list(connector: str = "", offset: int = 0) -> str:
     agent_id, _ = await active_agent_scope()
     service = _service()
     await service.refresh()
-    if type(offset) is not int or offset < 0 or offset > 200:
-        raise ToolError("offset must be between 0 and 200")
+    if type(offset) is not int or offset < 0:
+        raise ToolError("offset must be a non-negative integer")
     if not connector:
         servers = [s for s in await service.list() if not s["owner"] or s["owner"] == agent_id]
         page = servers[offset : offset + 20]
