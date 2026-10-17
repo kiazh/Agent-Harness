@@ -130,6 +130,27 @@ async def _retire_manager_bounded(gw: Gateway, manager: Any) -> None:
         )
 
 
+async def retire_active_lsp_manager(gw: Gateway) -> None:
+    """Retire and boundedly stop the gateway's currently active manager.
+
+    ``Gateway.close`` and ``workspace.close`` both need this: the active
+    manager is only moved into the retired-stop set when a *new* workspace
+    open replaces it, so shutdown otherwise left its child language servers
+    running (combined #13 / original #40).
+    """
+    manager = getattr(gw, "_workspace_lsp_manager", None)
+    if manager is None:
+        return
+    gw._workspace_lsp_manager = None
+    service = getattr(gw, "workspace_service", None)
+    if service is not None:
+        try:
+            service.set_lsp_manager(None)
+        except Exception:
+            logger.debug("workspace service refused LSP detach", exc_info=True)
+    await _retire_manager_bounded(gw, manager)
+
+
 async def drain_retired_lsp_managers(
     gw: Gateway, *, timeout: float = MANAGER_STOP_TIMEOUT
 ) -> None:
@@ -517,4 +538,9 @@ async def workspace_lsp_control(gw: Gateway, params: dict[str, Any]) -> dict[str
 
 async def workspace_close(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     service = _require(gw, params)
-    return service.close()
+    try:
+        return service.close()
+    finally:
+        # The active manager is not in the retired-stop set until shutdown;
+        # retire it here so `/workspace close` also stops its child servers.
+        await retire_active_lsp_manager(gw)

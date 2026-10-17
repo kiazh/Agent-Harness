@@ -399,8 +399,12 @@ class Gateway:
         # a workspace reopen; join them bounded (never cancelled) before the
         # loop closes so their process teardown is observed.
         try:
-            from machina.gateway.features.workspace import drain_retired_lsp_managers
+            from machina.gateway.features.workspace import (
+                drain_retired_lsp_managers,
+                retire_active_lsp_manager,
+            )
 
+            await retire_active_lsp_manager(self)
             await drain_retired_lsp_managers(self, timeout=timeout)
         except asyncio.CancelledError:
             raise
