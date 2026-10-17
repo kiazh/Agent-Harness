@@ -293,6 +293,9 @@ class LearningReviewer:
         max_reviews = max(0, int(config.get("learning_review_max_per_session")))
         if not max_reviews:
             return None
+        # This worker's claim identity. Every completion update requires it, so
+        # a worker whose lease expired and was reclaimed cannot publish late.
+        lease_token = uuid.uuid4().hex
         # Serialize reviews for this session while deciding whether the cost
         # cap has room. Release the lock before the provider call.
         async with db.acquire() as conn:
@@ -317,7 +320,8 @@ class LearningReviewer:
                         # FOR UPDATE SKIP LOCKED ensures only one concurrent caller wins.
                         claimed = await conn.fetchrow(
                             """UPDATE learning_reviews
-                               SET lease_expires_at = now() + ($2 * interval '1 second')
+                               SET lease_expires_at = now() + ($2 * interval '1 second'),
+                                   lease_token = $3
                                WHERE id = (
                                    SELECT id FROM learning_reviews
                                    WHERE id = $1 AND status = 'reviewing'
@@ -327,6 +331,7 @@ class LearningReviewer:
                                RETURNING *""",
                             existing["id"],
                             LEASE_SECONDS,
+                            lease_token,
                         )
                         if claimed is None:
                             # Another process claimed it first, or lease hasn't expired
@@ -342,12 +347,13 @@ class LearningReviewer:
                     if count >= max_reviews:
                         return None
                     row = await conn.fetchrow(
-                        """INSERT INTO learning_reviews (session_id, agent_id, turn_hash, status, lease_expires_at)
-                           VALUES ($1, $2, $3, 'reviewing', now() + ($4 * interval '1 second')) RETURNING *""",
+                        """INSERT INTO learning_reviews (session_id, agent_id, turn_hash, status, lease_expires_at, lease_token)
+                           VALUES ($1, $2, $3, 'reviewing', now() + ($4 * interval '1 second'), $5) RETURNING *""",
                         session_id,
                         agent_id,
                         digest,
                         LEASE_SECONDS,
+                        lease_token,
                     )
 
         # Redact before sending to the provider; bound both input and output.
@@ -379,8 +385,9 @@ class LearningReviewer:
             normalized = self._validate(candidate)
             if normalized is None:
                 await db.execute(
-                    "UPDATE learning_reviews SET status = 'none', reason = 'no valid novel skill', lease_expires_at = NULL WHERE id = $1",
+                    "UPDATE learning_reviews SET status = 'none', reason = 'no valid novel skill', lease_expires_at = NULL, lease_token = NULL WHERE id = $1 AND lease_token = $2 AND status = 'reviewing'",
                     row["id"],
+                    lease_token,
                 )
                 return None
             name, description, triggers, content = normalized
@@ -389,15 +396,16 @@ class LearningReviewer:
                 # CREATION ONLY: an existing name is dropped, never merged or
                 # overwritten. Auto-apply must not edit existing skills.
                 await db.execute(
-                    "UPDATE learning_reviews SET status = 'none', reason = 'skill already exists', lease_expires_at = NULL WHERE id = $1",
+                    "UPDATE learning_reviews SET status = 'none', reason = 'skill already exists', lease_expires_at = NULL, lease_token = NULL WHERE id = $1 AND lease_token = $2 AND status = 'reviewing'",
                     row["id"],
+                    lease_token,
                 )
                 return None
             if config.get("learning_review_auto_apply") and await self._auto_apply_allowed(
                 agent_id
             ):
                 applied, metadata_generated, metadata_error = await self._auto_publish(
-                    row["id"], name, description, triggers, content, agent_id
+                    row["id"], name, description, triggers, content, agent_id, lease_token
                 )
                 if applied is not None:
                     payload = self._serialize(applied)
@@ -415,23 +423,31 @@ class LearningReviewer:
             staged = await db.fetchrow(
                 """UPDATE learning_reviews SET status = 'pending', name = $2,
                           description = $3, triggers = $4::jsonb, content = $5,
-                          lease_expires_at = NULL
-                   WHERE id = $1 RETURNING *""",
+                          lease_expires_at = NULL, lease_token = NULL
+                   WHERE id = $1 AND lease_token = $6 AND status = 'reviewing' RETURNING *""",
                 row["id"],
                 name,
                 description,
                 json.dumps(triggers),
                 content,
+                lease_token,
             )
+            if staged is None:
+                logger.info(
+                    "learning review %s lost its lease before staging; discarding late result",
+                    row["id"],
+                )
+                return None
             return self._serialize(staged)
         except Exception as exc:
             logger.warning(
                 "Post-turn learning review failed for %s: %s", session_id, exc, exc_info=True
             )
             await db.execute(
-                "UPDATE learning_reviews SET status = 'error', reason = $2, lease_expires_at = NULL WHERE id = $1",
+                "UPDATE learning_reviews SET status = 'error', reason = $2, lease_expires_at = NULL, lease_token = NULL WHERE id = $1 AND lease_token = $3 AND status = 'reviewing'",
                 row["id"],
                 type(exc).__name__,
+                lease_token,
             )
             return None
 
@@ -490,6 +506,7 @@ class LearningReviewer:
         triggers: list[str],
         content: str,
         agent_id: str,
+        lease_token: str | None = None,
     ) -> tuple[Any | None, bool, str]:
         """Publish a validated proposal as an enabled, source-tagged skill.
 
@@ -542,12 +559,16 @@ class LearningReviewer:
                     applied = await conn.fetchrow(
                         "UPDATE learning_reviews SET status = 'approved', auto_applied = TRUE, "
                         "name = $2, description = $3, triggers = $4::jsonb, content = $5, "
-                        "reviewed_at = now(), reason = 'auto-applied' WHERE id = $1 RETURNING *",
+                        "reviewed_at = now(), reason = 'auto-applied', lease_expires_at = NULL, "
+                        "lease_token = NULL "
+                        "WHERE id = $1 AND ($6::text IS NULL OR "
+                        "(lease_token = $6 AND status = 'reviewing')) RETURNING *",
                         review_id,
                         name,
                         description,
                         json.dumps(triggers),
                         content,
+                        lease_token,
                     )
                     if applied is None:
                         raise RuntimeError("learning review update returned no row")

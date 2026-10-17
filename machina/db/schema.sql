@@ -589,6 +589,10 @@ CREATE INDEX IF NOT EXISTS idx_learning_reviews_agent
 -- Lease-based recovery: a 'reviewing' row whose lease has expired is orphaned
 -- (process died mid-call) and can be re-claimed by a new process.
 ALTER TABLE learning_reviews ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+-- Claim-owner fence: a worker may only complete the row while it still owns
+-- this token. Reclaims rotate it, so an expired worker's late completion
+-- cannot overwrite its successor's result.
+ALTER TABLE learning_reviews ADD COLUMN IF NOT EXISTS lease_token TEXT;
 CREATE INDEX IF NOT EXISTS idx_learning_reviews_lease
     ON learning_reviews(status, lease_expires_at) WHERE status = 'reviewing';
 
