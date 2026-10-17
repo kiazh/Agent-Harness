@@ -30,6 +30,7 @@ import hashlib
 import logging
 import threading as _threading
 import uuid
+import weakref
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -61,6 +62,13 @@ CLAIM_RECONCILE_TIMEOUT_SECONDS = 5.0
 
 _locks: dict[str, asyncio.Lock] = {}
 _mutation_locks: dict[str, asyncio.Lock] = {}
+# Which in-process task holds each mutex. A locked mutex whose holder is still
+# running is never stale, even when the durable claim is not visible yet (the
+# holder may be awaiting _db_claim). Only a finished/unknown holder may be
+# recovered as a leaked lock.
+_lock_holders: weakref.WeakKeyDictionary[asyncio.Lock, asyncio.Task] = (
+    weakref.WeakKeyDictionary()
+)
 
 _guard = _threading.Lock()
 
@@ -233,8 +241,16 @@ async def _acquire_or_steal(
 
     if not lock.locked():
         await lock.acquire()
+        _lock_holders[lock] = asyncio.current_task()
         return True
     if not db.connected:
+        return False
+    # A locked mutex with a live in-process holder is not stale. The holder
+    # may be between lock.acquire() and its durable _db_claim commit, so
+    # _live_claim would correctly read "no claim" while the critical section
+    # is active; stealing here would let two turns run concurrently.
+    holder = _lock_holders.get(lock)
+    if holder is not None and not holder.done():
         return False
     try:
         if await _live_claim(session_id, kinds):
@@ -248,6 +264,7 @@ async def _acquire_or_steal(
     except RuntimeError:
         _note_lock_contention("acquire_steal")
     await lock.acquire()
+    _lock_holders[lock] = asyncio.current_task()
     return True
 
 
