@@ -14,7 +14,7 @@ import ipaddress
 import json
 import socket
 from typing import Any
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import ParseResult, quote_plus, urlparse
 
 from machina.connectors.http_transport import run_dns_check
 from machina.connectors.oauth_models import (
@@ -46,6 +46,15 @@ class OAuthNetworkError(Exception):
         self.reason = reason
 
 
+def _parse_url(url: str) -> ParseResult:
+    try:
+        parts = urlparse(url)
+        _ = parts.port  # urllib defers authority/port validation until access.
+        return parts
+    except ValueError:
+        raise OAuthNetworkError("invalid oauth URL authority or port") from None
+
+
 def _authority_host(host: str | None) -> str:
     """Format a parsed hostname for URL authority reconstruction.
 
@@ -60,7 +69,7 @@ def _authority_host(host: str | None) -> str:
 
 
 def normalize_resource(url: str) -> str:
-    parts = urlparse(url)
+    parts = _parse_url(url)
     scheme = parts.scheme.lower()
     host = _authority_host((parts.hostname or "").lower().rstrip("."))
     port = parts.port
@@ -165,7 +174,7 @@ def awaitable_dns(host: str):
 
 def validate_outbound_url(url: str, *, local_access: bool, allow_http_loopback: bool = True) -> str:
     """HTTPS only, except literal-loopback http with explicit local_access."""
-    parts = urlparse(url)
+    parts = _parse_url(url)
     if parts.username or parts.password:
         raise OAuthNetworkError(
             "oauth url must not embed userinfo", reason="oauth_unsafe_destination"
@@ -266,7 +275,7 @@ def _scope_list(value: str | None) -> tuple[str, ...]:
 
 
 def protected_resource_candidates(endpoint: str) -> list[str]:
-    parts = urlparse(endpoint)
+    parts = _parse_url(endpoint)
     base = f"{parts.scheme}://{_authority_host(parts.hostname)}"
     if parts.port:
         base += f":{parts.port}"
@@ -279,7 +288,7 @@ def protected_resource_candidates(endpoint: str) -> list[str]:
 
 
 def issuer_metadata_candidates(issuer: str) -> list[str]:
-    parts = urlparse(issuer)
+    parts = _parse_url(issuer)
     base = f"{parts.scheme}://{_authority_host(parts.hostname)}"
     if parts.port:
         base += f":{parts.port}"
