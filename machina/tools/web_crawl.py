@@ -163,7 +163,7 @@ async def web_crawl(
                     else "saved to this session"
                 )
                 lines.append(f"\n{saved}. {stored_page} ({state})")
-                lines.append(content[:1200].replace("\n", " "))
+                lines.append(redact_secrets(content).text[:1200].replace("\n", " "))
                 if wants_links:
                     for link in _extract_links(html, page):
                         if attempted + len(queue) >= page_budget:

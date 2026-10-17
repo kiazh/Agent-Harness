@@ -134,7 +134,7 @@ async def web_research(query: str, limit: int = 3) -> str:
                 lines.extend(
                     (
                         f"\n{saved}. {title} — {stored_url} ({state})",
-                        content[:1200].replace("\n", " "),
+                        redact_secrets(content).text[:1200].replace("\n", " "),
                     )
                 )
             except Exception as error:
