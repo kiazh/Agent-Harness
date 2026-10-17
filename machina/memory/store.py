@@ -435,6 +435,8 @@ class MemoryStore:
         Quarantined memories are excluded, matching ``batch_update_access``:
         they are not retrievable, so they must not accrue access evidence.
         """
+        if not db.connected:
+            return
         await db.execute(
             """
             UPDATE memories
@@ -446,7 +448,7 @@ class MemoryStore:
 
     async def batch_update_access(self, memory_ids: list[uuid.UUID]) -> None:
         """Batch update last_accessed and increment access_count for multiple memories."""
-        if not memory_ids:
+        if not memory_ids or not db.connected:
             return
         await db.execute(
             """
