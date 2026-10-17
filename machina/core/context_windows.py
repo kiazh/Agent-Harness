@@ -128,7 +128,19 @@ def context_window_for(model: str | None, provider=None) -> int:
         # leaf for its many lazy importers (see architecture guard).
         from machina.core.provider.catalog import window_for
 
-        window = window_for(name)
+        account_id = ""
+        base_url = ""
+        scope = getattr(provider, "catalog_scope", None)
+        if callable(scope):
+            try:
+                account_id, base_url = scope()
+            except Exception:
+                account_id, base_url = "", ""
+        window = window_for(
+            name,
+            account_id=str(account_id or ""),
+            base_url=str(base_url or ""),
+        )
         if window:
             return window
     best = 0
