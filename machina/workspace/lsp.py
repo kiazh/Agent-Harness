@@ -883,6 +883,12 @@ class LspConnection:
         except LspError:
             self._pending.pop(request_id, None)
             raise
+        except BaseException:
+            # Serialization/encoding failures (and any other untyped failure)
+            # happen after the waiter is registered. Without this cleanup they
+            # accumulate until _pending_limit blocks every later request.
+            self._pending.pop(request_id, None)
+            raise
 
     def cancel(self, request_id: int) -> bool:
         """Cancel a pending request: drop the waiter and send ``$/cancelRequest``.
