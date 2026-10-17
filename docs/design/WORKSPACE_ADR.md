@@ -55,7 +55,7 @@ the workspace components).
 | Sequence | Toolkit owner | App/region policy | Verdict |
 |---|---|---|---|
 | `ctrl+w` | **composer Editor: delete-word-backward** | close-tab is gated to "not the chat composer" (fires while the editor, explorer or problems region owns focus); composer keeps delete-word | ok — gate implemented |
-| `ctrl+left`/`ctrl+right` | **composer Editor: word motion** (`tui.editor.cursorWordLeft/Right`) | panes toggle is EDITOR-REGION-GATED: the handler returns before the branch unless the editor region owns focus | ok — gate implemented |
+| `ctrl+left`/`ctrl+right` | **composer Editor: word motion** (`tui.editor.cursorWordLeft/Right`) | Editor-scoped except Ctrl+Left restores split from maximized chat; composer word motion remains in split mode | ok — maximize is reversible after focus moves |
 | `ctrl+t` | free in toolkit | explorer toggle global (composer does not use it) | ok |
 | `ctrl+p` | free in toolkit | Quick Open global | ok |
 | `ctrl+s` | free in toolkit (raw mode disables XOFF) | save (editor-gated today) | ok |

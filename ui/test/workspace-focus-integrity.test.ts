@@ -326,10 +326,9 @@ test("maximizing chat while the editor owns focus reconciles the region to the c
 	tui.press(CTRL_W);
 	assert.equal(integration.tabs.count(), 1, "Ctrl+W in the composer does not close the hidden editor's tab");
 
-	// Ctrl+Left now keeps the composer's word motion too: the layout stays
-	// maximized until the editor region (or a command) asks for the split.
+	// Ctrl+Left restores the split even after focus moves to the composer.
 	tui.press(CtrlLeft);
-	assert.equal(internals(app).workspaceLayout?.effectiveMode, "chat", "composer Ctrl+Left never restores the split");
+	assert.equal(internals(app).workspaceLayout?.effectiveMode, "split", "composer Ctrl+Left restores the split from maximized chat");
 	await app.exit();
 });
 

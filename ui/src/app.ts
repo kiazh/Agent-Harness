@@ -2477,11 +2477,17 @@ export class App implements FeatureHost {
 			this.cycleFocus(shiftedCycle ? -1 : 1);
 			return { consume: true };
 		}
+		// Maximizing chat moves focus to the composer; keep the return shortcut
+		// reachable there. In split mode the composer retains word motion.
+		if (ready && this.workspaceLayout?.effectiveMode === "chat" && matchesKey(data, Key.ctrl("left"))) {
+			this.workspaceHostSurface?.restoreSplit();
+			return { consume: true };
+		}
 		if (!ready || this.activeRegion !== "editor") return undefined;
 		// Ctrl+Right — toggle chat maximize; Ctrl+Left — always return to the
 		// 50/50 split (never a second toggle: after mode hops the split must
 		// stay reachable). These are EDITOR-scoped: while the composer owns
-		// focus, Ctrl+←/→ keep their standard word-motion meaning. When the
+		// focus in split mode, Ctrl+←/→ keep their standard word-motion meaning. When the
 		// editor region owns focus, the global bindings win there; editor word
 		// motion stays alt+arrows (help text).
 		if (matchesKey(data, Key.ctrl("right"))) {

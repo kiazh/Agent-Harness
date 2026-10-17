@@ -40,13 +40,14 @@ language servers.
 | F12 / Shift+F12 | Definition / References | command palette |
 | F2 | Rename preview (only where the server supports it; otherwise an honest notice) | — |
 | F6 / Shift+F6 | Cycle focus: chat → editor → explorer → problems | commands |
-| Ctrl+Left / Ctrl+Right | Editor-region only: `Ctrl+Right` toggles chat maximize, `Ctrl+Left` always returns to the 50/50 split (previous split restores). While the chat composer owns focus these keep word motion | `/workspace chat\|split` |
+| Ctrl+Left / Ctrl+Right | `Ctrl+Right` maximizes chat from the editor. `Ctrl+Left` returns to the 50/50 split from the editor or maximized chat. In split mode the chat composer keeps word motion | `/workspace chat\|split` |
 | Ctrl+T | Toggle explorer (some terminals use this for a new tab) | `/explorer` |
 | Ctrl+W | Close the active editor tab (dirty → Save/Discard/Cancel). **Not** bound in the chat composer, where it remains delete-word-backward | `/editor close` |
 | Esc | Dismisses the top editor popup first; a second Esc stops a running turn | — |
 
-`Ctrl+Left`/`Ctrl+Right` are gated to the editor region (commit `6f3131c`):
-the chat composer keeps its standard word motion. Editor word motion stays on
+`Ctrl+Right` is gated to the editor region. `Ctrl+Left` also restores the split
+from maximized chat, after focus moves to the composer. In split mode the chat
+composer keeps its standard word motion. Editor word motion stays on
 `alt+arrows`. Some terminals intercept `Ctrl+W` (close tab/window) or `Ctrl+T`
 (new tab) before the app sees them; the command fallbacks above always work.
 
