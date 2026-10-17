@@ -147,6 +147,7 @@ async def _stream_session(
         _stream_cancelled = False
         _release_failed = False
         _usage_emitted = 0
+        _emitted_approvals: set[str] = set()
         _stage = "turn_started"
 
         def _record_stage(stage: str) -> None:
@@ -334,6 +335,7 @@ async def _stream_session(
                     )
                     if req.protocolVersion == 2:
                         data = await approval_data(str(turn_event.payload["request_id"]))
+                    _emitted_approvals.add(str(turn_event.payload["request_id"]))
                     yield frame(data)
                 elif turn_event.kind == "usage":
                     # Transport shape preserved: SSE usage frames carry the
@@ -368,6 +370,12 @@ async def _stream_session(
                     # revalidates under a fresh fenced claim (never by
                     # continuing stale generator state).
                     for pause in engine.pauses:
+                        pause_id = str(pause.get("requestId", ""))
+                        if pause_id and pause_id in _emitted_approvals:
+                            # The live turn event already emitted this card;
+                            # emitting it again from the done summary produced
+                            # duplicate needs_approval frames (combined #29).
+                            continue
                         pause_event = StreamEvent(
                             type="needs_approval",
                             content=str(pause.get("requestId", "")),
