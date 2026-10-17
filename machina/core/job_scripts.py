@@ -301,6 +301,7 @@ async def _execute_script_command(command: list[str], cwd: Path) -> str:
         **process_options,
     )
     job_handle = None
+    io_tasks: list[asyncio.Task] = []
     try:
         if windows:
             from machina.core.windows_job import create_script_job
@@ -328,16 +329,27 @@ async def _execute_script_command(command: list[str], cwd: Path) -> str:
                 process.stdin.close()
             except (BrokenPipeError, OSError):
                 pass
+        io_tasks = [
+            asyncio.create_task(_read_capped(process.stdout)),
+            asyncio.create_task(_read_capped(process.stderr)),
+            asyncio.create_task(process.wait()),
+        ]
         stdout, stderr, _ = await asyncio.wait_for(
-            asyncio.gather(
-                _read_capped(process.stdout),
-                _read_capped(process.stderr),
-                process.wait(),
-            ),
+            asyncio.gather(*io_tasks),
             timeout=SCRIPT_TIMEOUT_SECONDS,
         )
     finally:
-        cleanup = asyncio.create_task(_terminate_tree(process, job_handle))
+
+        async def terminate_and_join() -> None:
+            try:
+                await _terminate_tree(process, job_handle)
+            finally:
+                for task in io_tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*io_tasks, return_exceptions=True)
+
+        cleanup = asyncio.create_task(terminate_and_join())
         try:
             await asyncio.shield(cleanup)
         except asyncio.CancelledError:

@@ -243,6 +243,7 @@ def run_bounded(
         pgid: int | None = None if os.name == "nt" else process.pid
         expired = threading.Event()
         exceeded = threading.Event()
+        stderr_truncated = threading.Event()
 
         def stop_on_timeout() -> None:
             if not group_members(pgid, process):
@@ -261,13 +262,16 @@ def run_bounded(
                     if is_stdout:
                         exceeded.set()
                         return
+                    stderr_truncated.set()
                     continue  # stderr past the cap: keep draining, discard
                 kept = chunk[:room]
                 parts.append(kept)
                 total += len(kept)
-                if is_stdout and len(chunk) > room:
-                    exceeded.set()
-                    return
+                if len(chunk) > room:
+                    if is_stdout:
+                        exceeded.set()
+                        return
+                    stderr_truncated.set()
 
         timer = threading.Timer(timeout, stop_on_timeout)
         timer.daemon = True
@@ -370,5 +374,5 @@ def run_bounded(
             stdout="".join(output_parts),
             stderr="".join(error_parts),
             timed_out=expired.is_set(),
-            truncated=exceeded.is_set(),
+            truncated=exceeded.is_set() or stderr_truncated.is_set(),
         )
