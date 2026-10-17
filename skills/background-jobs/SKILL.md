@@ -1,15 +1,65 @@
 ---
 name: background-jobs
-description: "Background jobs & task queues — workers, scheduling, retries with backoff, idempotency, dead-letter queues, at-least-once delivery"
+description: Background jobs & task queues — workers, scheduling, retries with backoff, idempotency, dead-letter
+  queues, at-least-once delivery
 triggers:
-  - "background jobs"
-  - "task queue"
-  - "job queue"
-  - "celery"
-  - "cron"
-  - "worker"
-  - "retry"
+- background jobs
+- task queue
+- job queue
+- celery
+- cron
+- worker
+- retry
 version: 1.0.0
+schema_version: 2
+skill_id: background-jobs
+task_families:
+- backend-api
+- deployment
+capabilities:
+- error-handling
+- observability
+aliases:
+- task-queues
+- job-queue
+- workers
+- celery
+- retries
+stack:
+  languages:
+  - python
+  frameworks:
+  - celery
+  - bullmq
+  independent: false
+preconditions:
+- A broker or queue backend (Redis, RabbitMQ, SQS)
+- Work that can move off the request path
+required_tools:
+- shell
+exclusions:
+- Sub-millisecond synchronous work inside a request
+- One-off manual maintenance scripts
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: pitfalls
+  heading: Pitfalls
+  stage: review
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+- id: key-resources
+  heading: Key Resources
+  stage: inspect
+  requires_sections: []
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Background Jobs & Task Queues

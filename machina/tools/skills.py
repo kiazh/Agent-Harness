@@ -58,10 +58,15 @@ def skill_list(query: str = "", offset: int = 0) -> str:
         has_more = offset + len(visible) < len(matches)
     if not visible:
         return "No matching skills on this page. Try an empty query or a smaller offset."
-    lines = [
-        f"{skill.name}: {skill.description.replace(chr(10), ' ').replace(chr(13), ' ')[:120]}"
-        for skill in visible
-    ]
+    lines = []
+    for skill in visible:
+        description = skill.description.replace(chr(10), " ").replace(chr(13), " ")[:120]
+        if skill.skill_metadata is None:
+            # Operators must see fail-closed skills; they are never returned by
+            # search or automatic selection and their content is refused.
+            reason = (skill.metadata_error or "metadata-missing").replace(chr(10), " ")[:160]
+            description += f" [UNUSABLE: {reason}]"
+        lines.append(f"{skill.name}: {description}")
     if has_more:
         lines.append(f"Next offset: {offset + len(visible)}")
     return "\n".join(lines)
@@ -128,7 +133,10 @@ def skill_read(
 ) -> str:
     skills = skills_module.skill_registry
     skills.load_all()
-    content = skills.get_skill_content(skill_name)
+    try:
+        content = skills.get_skill_content(skill_name)
+    except skills_module.SkillMetadataUnavailable as exc:
+        return f"Error: {exc}"
     if content is None:
         return "Error: skill not found or disabled"
     if section:

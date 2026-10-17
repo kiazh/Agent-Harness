@@ -59,7 +59,11 @@ class SkillSource(Protocol):
 
 
 def automatic_skills(
-    skills: SkillSource, query: str, *, weights: dict[str, float] | None = None
+    skills: SkillSource,
+    query: str,
+    *,
+    weights: dict[str, float] | None = None,
+    expansion: Any = None,
 ) -> list[Any]:
     """Canonical automatic ranking over a ``SkillSource``.
 
@@ -71,4 +75,4 @@ def automatic_skills(
     """
     from machina.skills.runtime import automatic_skills as _automatic
 
-    return _automatic(skills, query, weights=weights)
+    return _automatic(skills, query, weights=weights, expansion=expansion)

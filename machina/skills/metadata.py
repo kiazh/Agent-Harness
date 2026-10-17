@@ -9,12 +9,17 @@ bounded diagnostics through ``SkillRegistry.metadata_diagnostics()``.
 Explicit policy — every point below is pinned by tests
 (``tests/test_skills_metadata.py``):
 
-* **v1 untouched.** A front matter without ``schema_version`` is v1: no
-  metadata is invented (``skill_metadata is None``) and parsing is bit-for-bit
-  the old behavior.
+* **schema v2 is required; there is no v1 baseline fallback.** A front matter
+  without ``schema_version`` is not accepted: parsing returns ``None`` plus a
+  ``metadata-missing`` **error** diagnostic telling the operator to run
+  metadata generation (``machina skills enrich``). The registry keeps the skill
+  visible to operators but excludes it from search/automatic selection and
+  refuses to serve its content. Product decision (2026-10-17): a skill that
+  has no metadata, or invalid metadata, must fail closed rather than silently
+  behave like the retired v1 baseline.
 * **schema_version** must be the integer ``2``. Anything else (including
-  ``true``, ``2.0``, ``3``) degrades to baseline with a
-  ``metadata-unsupported-schema``/``metadata-invalid`` diagnostic.
+  ``true``, ``2.0``, ``3``) is rejected with a
+  ``metadata-unsupported-schema``/``metadata-invalid`` error diagnostic.
 * **Unknown top-level fields** are preserved verbatim as opaque
   ``extensions`` data — never interpreted as routing rules — with a
   ``metadata-unsupported-field`` diagnostic. Authority-shaped names
@@ -28,7 +33,7 @@ Explicit policy — every point below is pinned by tests
 * **Bounds.** List length ``MAX_LIST_ITEMS``/``MAX_SECTIONS``/
   ``MAX_REQUIRES_PER_SECTION``, field sizes, extension count/size, and the
   dependency depth ``MAX_DEPENDENCY_DEPTH`` are enforced. Oversize is a
-  rejection (baseline fallback) with ``metadata-oversized``.
+  rejection (unusable skill) with ``metadata-oversized``.
 * **Required-section graph.** Unknown targets are dropped with
   ``dependency-unknown`` (non-fatal). Cycles and over-depth chains reject the
   whole metadata (``dependency-cycle``/``dependency-depth``) so no consumer
@@ -41,7 +46,7 @@ Explicit policy — every point below is pinned by tests
 * **Sidecars** (spec §7.3). ``machina/skills/enrichment/<revision>.json``
   holds local routing enrichment for bundled ECC content, keyed by skill id
   and bound to the bundle revision. A mismatched revision/file name yields
-  ``stale-enrichment`` and baseline fallback. Sidecar entries accept only the
+  ``stale-enrichment`` and an unusable (unmetadata'd) skill. Sidecar entries accept only the
   closed v2 field set (no extensions); authority-shaped fields reject the
   entry with ``enrichment-authority-field``. Sidecars cannot alter
   provenance/trust and grant no permissions — they only produce the same inert
@@ -170,6 +175,7 @@ MAX_DIAGNOSTIC_MESSAGE = 300
 # ─── diagnostic codes (closed vocabulary) ───────────────────────────────────
 
 CODE_METADATA_INVALID = "metadata-invalid"
+CODE_METADATA_MISSING = "metadata-missing"
 CODE_UNSUPPORTED_SCHEMA = "metadata-unsupported-schema"
 CODE_UNSUPPORTED_FIELD = "metadata-unsupported-field"
 CODE_AUTHORITY_FIELD = "metadata-authority-field"
@@ -229,8 +235,8 @@ class MetadataDiagnostic:
     """One bounded, inspectable catalog diagnosis.
 
     ``severity`` is ``"warning"`` when the skill still loaded with usable
-    metadata and ``"error"`` when data was rejected (baseline fallback or the
-    skill was skipped entirely).
+    metadata and ``"error"`` when data was rejected (the skill is unusable or
+    was skipped entirely).
     """
 
     code: str
@@ -413,17 +419,29 @@ def parse_skill_metadata(
     content: str = "",
     file_path: str = "",
 ) -> tuple[SkillMetadata | None, list[MetadataDiagnostic]]:
-    """Parse front matter into validated metadata.
+    """Parse front matter into validated metadata (schema v2 is required).
 
-    Returns ``(None, [])`` for v1 documents (no ``schema_version``) so the old
-    behavior is untouched. Any invalid v2 document returns ``(None, diags)``:
-    the skill still loads with baseline metadata and one bad document never
-    raises (spec §7.2, §7.4). ``content`` anchors declared sections; pass
-    ``content=None`` to skip anchor binding when the body is not available
-    (sidecar enrichment for lazily-read bundle content).
+    A document without ``schema_version`` is **not** accepted as a v1 skill:
+    it returns ``(None, [metadata-missing error])``. Any invalid v2 document
+    also returns ``(None, diags)``. Callers must treat ``None`` as "this skill
+    is unusable" (excluded from search/automatic selection, content refused)
+    rather than falling back to a baseline. ``content`` anchors declared
+    sections; pass ``content=None`` to skip anchor binding when the body is not
+    available (sidecar enrichment for lazily-read bundle content).
     """
     if "schema_version" not in frontmatter:
-        return None, []
+        return None, [
+            MetadataDiagnostic(
+                code=CODE_METADATA_MISSING,
+                message=(
+                    "skill has no schema_version 2 metadata; run metadata generation "
+                    "(`machina skills enrich`) and reload; the skill stays unusable until then"
+                ),
+                skill_id=skill_name,
+                file_path=file_path,
+                severity="error",
+            )
+        ]
     return _build_metadata(
         frontmatter,
         skill_name=skill_name,

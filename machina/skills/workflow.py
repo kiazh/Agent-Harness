@@ -21,6 +21,7 @@ from machina.skills.planned_steps import (
     normalize_stage_state,
     task_revision_from,
 )
+from machina.skills.query_expansion import Expansion
 from machina.skills.registry import Skill, SkillRegistry
 from machina.skills.runtime import _words
 from machina.skills.search import catalog_revision
@@ -97,9 +98,13 @@ def plan_workflow(
     skill_weights: dict[str, float] | None = None,
     task_state: dict[str, Any] | None = None,
     task_revision: int = 0,
+    expansion: Expansion | None = None,
 ) -> SkillWorkflow:
+    from machina.skills.query_expansion import current_expansion
     from machina.skills.runtime import _TECHNOLOGIES, _words, automatic_skills
 
+    if expansion is None:
+        expansion = current_expansion(query)
     skills.load_all()
     words = set(_words(query))
     if not words or conversational(query):
@@ -138,7 +143,9 @@ def plan_workflow(
     # with the human browse path. ``automatic_skills`` applies the automatic
     # *scope* (disabled and hard-excluded skills are gone) and returns the
     # non-excluded candidates in canonical relevance order.
-    matches = automatic_skills(skills, routing_query, weights=skill_weights)
+    matches = automatic_skills(
+        skills, routing_query, weights=skill_weights, expansion=expansion
+    )
     # Weak single-word overlap never activates a specialist: without clear
     # evidence the agent stays a generalist (see _strong_match). An explicit
     # coding/research task still gets the generic pipeline below.
@@ -160,7 +167,15 @@ def plan_workflow(
 
     def add(stage: str, name: str) -> None:
         skill = skills.get(name)
-        if skill and skill.enabled and name not in chosen and len(chosen) < 6:
+        # Fail-closed: a named anchor without usable schema-v2 metadata is not
+        # planned at all. Selecting it would raise when its content is read.
+        if (
+            skill
+            and skill.enabled
+            and skill.skill_metadata is not None
+            and name not in chosen
+            and len(chosen) < 6
+        ):
             chosen[name] = skill
             specs.append((stage, name))
 

@@ -1,13 +1,47 @@
 ---
 name: web-search
-description: "Search the web and extract content. Use when user asks for current info, facts, or URLs."
+description: Search the web and extract content. Use when user asks for current info, facts, or URLs.
 triggers:
-  - "search for"
-  - "look up"
-  - "find information about"
-  - "what is"
-  - "who is"
+- search for
+- look up
+- find information about
+- what is
+- who is
 version: 1.0.0
+schema_version: 2
+skill_id: web-search
+task_families:
+- research
+capabilities: []
+aliases:
+- search
+- web-lookup
+- lookup
+- web-extract
+stack:
+  languages: []
+  frameworks: []
+  independent: true
+preconditions:
+- A reachable search backend such as local SearXNG
+- A question that needs current external information
+required_tools:
+- web_search
+- web_extract
+exclusions:
+- Searching local code (use grep or ripgrep)
+- Questions answerable from the repo or conversation
+sections:
+- id: procedure
+  heading: Procedure
+  stage: implement
+  requires_sections: []
+- id: pitfalls
+  heading: Pitfalls
+  stage: review
+  requires_sections: []
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Web Search

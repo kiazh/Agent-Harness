@@ -12,6 +12,7 @@ caches metadata ranking only. Skill bodies still load on demand through
 """
 
 import hashlib
+import inspect
 import re
 
 from machina.skills.ports import SkillSource, automatic_skills
@@ -31,6 +32,14 @@ class SkillPreselectCache:
         self._skills = skills
         self._cache: dict = {}
         self.rank_calls = 0
+        # The production ports seam predates query expansion; pass it only
+        # when the seam advertises the keyword (otherwise behavior is exactly
+        # the pre-expansion ranking).
+        try:
+            parameters = inspect.signature(automatic_skills).parameters
+        except (TypeError, ValueError):  # pragma: no cover - exotic callables
+            parameters = {}
+        self._supports_expansion = "expansion" in parameters
 
     def _key(self, query: str, weights) -> tuple:
         digest = hashlib.sha256(normalize_query(query).encode("utf-8")).hexdigest()
@@ -41,7 +50,16 @@ class SkillPreselectCache:
         """Ranked skills for *query*; identical queries rank exactly once."""
         key = self._key(query, weights)
         if key not in self._cache:
-            self._cache[key] = automatic_skills(self._skills, query, weights=weights)
+            extra = {}
+            if self._supports_expansion:
+                # Deferred: the controller's module graph reaches skills only
+                # through ``skills.ports`` (architecture pin).
+                from machina.skills.query_expansion import current_expansion
+
+                expansion = current_expansion(query)
+                if not expansion.is_empty:
+                    extra["expansion"] = expansion
+            self._cache[key] = automatic_skills(self._skills, query, weights=weights, **extra)
             self.rank_calls += 1
         return self._cache[key]
 

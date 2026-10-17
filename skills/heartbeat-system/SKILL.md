@@ -1,14 +1,63 @@
 ---
 name: heartbeat-system
-description: "Heartbeat system development — APScheduler, pg_cron, hybrid approach, outbox pattern, session liveness detection"
+description: Heartbeat system development — APScheduler, pg_cron, hybrid approach, outbox pattern, session
+  liveness detection
 triggers:
-  - "heartbeat"
-  - "idle"
-  - "scheduler"
-  - "apscheduler"
-  - "pg_cron"
-  - "outbox"
+- heartbeat
+- idle
+- scheduler
+- apscheduler
+- pg_cron
+- outbox
 version: 1.0.0
+schema_version: 2
+skill_id: heartbeat-system
+task_families:
+- backend-api
+- maintenance
+capabilities:
+- database
+- error-handling
+- configuration
+aliases:
+- heartbeat
+- idle-detection
+- scheduler
+- pg-cron
+- apscheduler
+- outbox
+stack:
+  languages:
+  - python
+  - sql
+  frameworks:
+  - apscheduler
+  - pg_cron
+  - postgresql
+  independent: false
+preconditions:
+- PostgreSQL with the pg_cron extension available
+- a Python service that can run APScheduler
+- a sessions table with activity timestamps
+required_tools:
+- python
+- postgresql
+exclusions:
+- generic cron authoring outside PostgreSQL
+- browser-side idle or presence detection
+- one-off background scripts with no delivery guarantee
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Heartbeat System

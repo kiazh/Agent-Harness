@@ -1,16 +1,68 @@
 ---
 name: observability-otel
-description: "Observability with OpenTelemetry — traces, spans, metrics, logs correlation, context propagation, sampling, SLOs, dashboards"
+description: Observability with OpenTelemetry — traces, spans, metrics, logs correlation, context propagation,
+  sampling, SLOs, dashboards
 triggers:
-  - "observability"
-  - "opentelemetry"
-  - "otel"
-  - "tracing"
-  - "spans"
-  - "metrics"
-  - "dashboards"
-  - "slo"
+- observability
+- opentelemetry
+- otel
+- tracing
+- spans
+- metrics
+- dashboards
+- slo
 version: 1.0.0
+schema_version: 2
+skill_id: observability-otel
+task_families:
+- debugging
+- maintenance
+capabilities:
+- observability
+- performance
+- error-handling
+aliases:
+- otel
+- opentelemetry
+- tracing
+- telemetry
+- slo
+- spans
+- dashboards
+stack:
+  languages: []
+  frameworks:
+  - opentelemetry
+  - otlp
+  - prometheus
+  independent: true
+preconditions:
+- a service handling requests to instrument
+- an OTLP collector or exporter endpoint
+- defined SLIs or SLO targets to alert on
+required_tools:
+- opentelemetry-sdk
+- otel-collector
+exclusions:
+- dashboard visual styling and layout
+- load testing or capacity benchmarking
+- application feature development
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: pitfalls
+  heading: Pitfalls
+  stage: review
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Observability with OpenTelemetry

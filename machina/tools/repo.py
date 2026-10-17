@@ -14,7 +14,7 @@ import logging
 import shutil
 
 from machina.skills import enrich, repo_install
-from machina.skills.registry import skill_registry
+from machina.skills.registry import log_skill_metadata_event, skill_registry
 from machina.tools.base import registry
 from machina.tools.file import _run_worker_joined
 
@@ -160,23 +160,70 @@ async def repo_activate(digest: str) -> str:
         return "Error: activation failed (filesystem error)"
 
 
-def _generate_installed_metadata(names: list[str]) -> None:
+def _generate_installed_metadata(names: list[str]) -> list[dict[str, object]]:
     """One-time v2 metadata generation for freshly installed skills.
 
     Runs in the activation worker thread (no event loop), so the sync bridge
-    is safe. Idempotent and fail-open: a failed generation is reported and
-    never fails the install or rolls it back.
+    is safe. Idempotent: a skill that already carries v2 metadata triggers no
+    provider call. Returns one structured outcome per skill; a failed
+    generation is reported to the caller and never turns the skill into a
+    normal success (it stays on disk but unusable, retryable via
+    ``machina skills enrich``).
     """
+    outcomes: list[dict[str, object]] = []
     for name in names:
         skill = skill_registry.get(name)
         if skill is None:
+            log_skill_metadata_event(name, "", status="failed", error_type="SkillMissing")
+            outcomes.append(
+                {
+                    "name": name,
+                    "metadataGenerated": False,
+                    "usable": False,
+                    "metadataError": "skill was not found after installation",
+                }
+            )
             continue
+        if skill.skill_metadata is not None:
+            log_skill_metadata_event(skill.name, skill.file_path, status="present")
+            outcomes.append(
+                {
+                    "name": name,
+                    "metadataGenerated": False,
+                    "usable": True,
+                    "metadataError": None,
+                }
+            )
+            continue
+        error_type = ""
         try:
             enrich.ensure_skill_metadata_sync(
                 skill, agent_seam=enrich.default_agent_seam(), registry=skill_registry
             )
-        except Exception:  # metadata generation never fails an install
+        except Exception as exc:  # reported below, never silent success
+            error_type = type(exc).__name__
             logger.warning("skill metadata generation failed for %s", name, exc_info=True)
+        usable = skill.skill_metadata is not None
+        log_skill_metadata_event(
+            skill.name,
+            skill.file_path,
+            status="generated" if usable else "failed",
+            error_type="" if usable else (error_type or "SkillMetadataUnavailable"),
+        )
+        outcomes.append(
+            {
+                "name": name,
+                "metadataGenerated": usable,
+                "usable": usable,
+                "metadataError": None
+                if usable
+                else (
+                    "metadata generation failed "
+                    f"({error_type or 'no schema-v2 metadata produced'})"
+                ),
+            }
+        )
+    return outcomes
 
 
 def _activate_result(detail, staged, skills_dir) -> str:
@@ -192,8 +239,30 @@ def _activate_result(detail, staged, skills_dir) -> str:
             "skill registry needs a reload before they are visible. "
             "No repo code was executed."
         )
-    _generate_installed_metadata(installed)
-    return (
+    outcomes = _generate_installed_metadata(installed)
+    lines = [
         f"Installed {len(installed)} skill(s): {', '.join(installed)}. "
         "No repo code was executed. MCP drafts (if any) still need human /mcp review."
-    )
+    ]
+    failed = [outcome for outcome in outcomes if not outcome["usable"]]
+    for outcome in outcomes:
+        if outcome["usable"]:
+            detail_text = (
+                "metadataGenerated: true"
+                if outcome["metadataGenerated"]
+                else "metadataGenerated: false; usable: true (metadata already present)"
+            )
+        else:
+            detail_text = (
+                "metadataGenerated: false; usable: false; "
+                f"metadataError: {_one_line(outcome['metadataError'], 200)}"
+            )
+        lines.append(f"- {_one_line(outcome['name'], 80)}: {detail_text}")
+    if failed:
+        names = ", ".join(_one_line(outcome["name"], 80) for outcome in failed)
+        lines.append(
+            f"METADATA FAILURE: {names} installed but UNUSABLE (excluded from search and "
+            "selection). Retry with `machina skills enrich "
+            f"{_one_line(failed[0]['name'], 80)}` or `machina skills enrich --all`."
+        )
+    return "\n".join(lines)

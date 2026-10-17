@@ -1,14 +1,57 @@
 ---
 name: research-writing
-description: "Research & paper writing — paper reading, experimental design, statistical analysis, LaTeX, reproducibility, citation verification"
+description: Research & paper writing — paper reading, experimental design, statistical analysis, LaTeX,
+  reproducibility, citation verification
 triggers:
-  - "paper"
-  - "research"
-  - "latex"
-  - "experiment"
-  - "citation"
-  - "reproducibility"
+- paper
+- research
+- latex
+- experiment
+- citation
+- reproducibility
 version: 1.0.0
+schema_version: 2
+skill_id: research-writing
+task_families:
+- research
+- documentation
+capabilities: []
+aliases:
+- paper-writing
+- academic-writing
+- latex
+- research-paper
+- citations
+stack:
+  languages:
+  - latex
+  - python
+  frameworks: []
+  independent: false
+preconditions:
+- A research question or experimental results
+- A venue template and page budget
+required_tools:
+- shell
+exclusions:
+- Internal engineering docs (use docs-communication)
+- Blog posts or marketing content
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: key-resources
+  heading: Key Resources
+  stage: inspect
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: deliver
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Research & Paper Writing

@@ -1,15 +1,62 @@
 ---
 name: incident-response
-description: "Incident response — severity levels, on-call triage, mitigation before diagnosis, communication cadence, blameless postmortems, runbooks"
+description: Incident response — severity levels, on-call triage, mitigation before diagnosis, communication
+  cadence, blameless postmortems, runbooks
 triggers:
-  - "incident"
-  - "on-call"
-  - "postmortem"
-  - "runbook"
-  - "sev"
-  - "outage"
-  - "escalation"
+- incident
+- on-call
+- postmortem
+- runbook
+- sev
+- outage
+- escalation
 version: 1.0.0
+schema_version: 2
+skill_id: incident-response
+task_families:
+- debugging
+- maintenance
+capabilities:
+- error-handling
+- observability
+aliases:
+- incident
+- oncall
+- on-call
+- postmortem
+- outage
+- sev
+- escalation
+stack:
+  languages: []
+  frameworks: []
+  independent: true
+preconditions:
+- an active or suspected production incident
+- an on-call roster with an escalation policy
+- access to a comms channel and status page
+required_tools:
+- pagerduty
+exclusions:
+- writing feature code
+- long-term reliability redesign work
+- pre-incident capacity planning
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: debug
+  requires_sections: []
+- id: pitfalls
+  heading: Pitfalls
+  stage: review
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: deliver
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Incident Response

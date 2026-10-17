@@ -14,6 +14,7 @@ security boundary. Skill installs still require human review elsewhere.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -69,6 +70,59 @@ def _metadata_module():
     from machina.skills import metadata
 
     return metadata
+
+
+def _report_unusable_skill(name: str, file_path: str, reason: str) -> None:
+    """Report a fail-closed skill through logger, record_failure and events.
+
+    The instrumentation module is an optional observability dependency: when
+    it is absent (or itself fails) the logger still records the failure, so a
+    missing metadata document is never silent.
+    """
+    message = f"skill {name!r} at {file_path or '<unknown>'} is unusable: {reason}"
+    logger.error("%s", message)
+    record_failure("skills.registry.metadata_unavailable", ValueError(message))
+    try:
+        from machina.observability.instrumentation import log_event
+    except ImportError:
+        return
+    try:
+        log_event(
+            "skills.metadata_unavailable",
+            level="error",
+            skill=name,
+            path=file_path,
+            reason=reason,
+        )
+    except Exception as exc:  # instrumentation must never hide the skill failure
+        record_failure("skills.registry.instrumentation", exc)
+
+
+def log_skill_metadata_event(
+    name: str, file_path: str, *, status: str, error_type: str = ""
+) -> None:
+    """Emit one structured install/learn metadata outcome record (never raises).
+
+    ``status`` is ``generated`` (metadata was produced and persisted now),
+    ``present`` (valid metadata already existed; generation was skipped) or
+    ``failed`` (the skill remains unusable). Fields carry identity and error
+    type only — never skill content.
+    """
+    try:
+        from machina.observability.instrumentation import log_event
+    except ImportError:  # observability is an optional dependency
+        return
+    try:
+        log_event(
+            "skills.metadata_generation",
+            level="error" if status == "failed" else "info",
+            skill=name,
+            path=file_path,
+            status=status,
+            error_type=error_type,
+        )
+    except Exception as exc:  # instrumentation must never hide the outcome
+        record_failure("skills.registry.metadata_event", exc)
 
 
 def _skill_key(name: Any) -> Any:
@@ -253,6 +307,15 @@ def default_hub_dir() -> Path:
     return Path(os.environ.get("MACHINA_SKILL_HUB_DIR") or _PROJECT_ROOT / ".skill-hub")
 
 
+class SkillMetadataUnavailable(ValueError):
+    """A loaded skill cannot be used because its schema-v2 metadata is missing.
+
+    Raised when content is read/served for a skill that failed metadata
+    validation or has no metadata at all (product decision 2026-10-17: no v1
+    baseline fallback). The message is operator-actionable.
+    """
+
+
 @dataclass
 class Skill:
     name: str
@@ -271,10 +334,14 @@ class Skill:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
     # Validated schema-v2 catalog metadata (front matter) or validated sidecar
-    # enrichment. ``None`` for v1 skills and for v2 documents that failed
-    # validation (baseline fallback). Inert data only — consumers must never
-    # treat it as authority. See machina.skills.metadata.
+    # enrichment. ``None`` means the skill is UNUSABLE: it stays visible to
+    # operators but is excluded from search/automatic selection and refuses to
+    # serve content. Inert data only — consumers must never treat it as
+    # authority. See machina.skills.metadata.
     skill_metadata: SkillMetadata | None = None
+    #: Operator-facing reason when ``skill_metadata is None`` (empty when the
+    #: skill is usable). Set from the metadata diagnostics at load time.
+    metadata_error: str = ""
 
 
 # Prompt-injection pattern sources. The compact variants replace `\s+` with
@@ -418,6 +485,20 @@ class SkillParser:
         if not frontmatter_match:
             content = SkillParser._validate_content(text)
             SkillParser._validate_metadata(path.parent.name, "", [])
+            if diagnostics is not None:
+                metadata_module = _metadata_module()
+                diagnostics.append(
+                    metadata_module.MetadataDiagnostic(
+                        code=metadata_module.CODE_METADATA_MISSING,
+                        message=(
+                            "skill has no front matter or schema_version 2 metadata; "
+                            "run `machina skills enrich`"
+                        ),
+                        skill_id=path.parent.name,
+                        file_path=str(path),
+                        severity="error",
+                    )
+                )
             return Skill(
                 name=path.parent.name,
                 description="",
@@ -425,6 +506,10 @@ class SkillParser:
                 content=content,
                 file_path=str(path),
                 created_at=datetime.fromtimestamp(path.stat().st_mtime, UTC),
+                metadata_error=(
+                    "metadata-missing: skill has no front matter or schema_version 2 "
+                    "metadata; run `machina skills enrich`"
+                ),
             )
 
         yaml_text = frontmatter_match.group(1)
@@ -498,6 +583,17 @@ class SkillParser:
                 )
         if diagnostics is not None:
             diagnostics.extend(metadata_diags)
+        metadata_error = ""
+        if skill_metadata is None:
+            error_diags = [item for item in metadata_diags if item.severity == "error"]
+            metadata_error = (
+                f"{error_diags[0].code}: {error_diags[0].message}"
+                if error_diags
+                else (
+                    "metadata-missing: skill has no schema_version 2 metadata; "
+                    "run `machina skills enrich`"
+                )
+            )
         return Skill(
             name=name,
             description=description,
@@ -510,6 +606,7 @@ class SkillParser:
             source_type=metadata.get("source_type", "local"),
             created_at=created_at,
             skill_metadata=skill_metadata,
+            metadata_error=metadata_error,
         )
 
 
@@ -811,6 +908,12 @@ class SkillRegistry(SkillSource):
                 enriched = enrichment.get(skill.name)
                 if enriched is not None:
                     skill.skill_metadata = enriched
+                else:
+                    skill.metadata_error = (
+                        "metadata-missing: bundled skill has no enrichment sidecar for the "
+                        "current bundle revision; run `machina skills enrich`"
+                    )
+                    _report_unusable_skill(skill.name, skill.file_path, skill.metadata_error)
                 self._skills[_skill_key(skill.name)] = skill
         for directory in self._skill_dirs():
             if not directory.exists():
@@ -835,6 +938,19 @@ class SkillRegistry(SkillSource):
                             )
                             continue
                         collector.extend(parse_diags)
+                        if skill.skill_metadata is None:
+                            if not skill.metadata_error:
+                                error_diags = [
+                                    item for item in parse_diags if item.severity == "error"
+                                ]
+                                skill.metadata_error = (
+                                    f"{error_diags[0].code}: {error_diags[0].message}"
+                                    if error_diags
+                                    else "metadata-missing: run `machina skills enrich`"
+                                )
+                            _report_unusable_skill(
+                                skill.name, skill.file_path, skill.metadata_error
+                            )
                         existing = self._skills.get(_skill_key(skill.name))
                         if not existing or existing.source_type != "builtin-ecc":
                             # Local provenance cannot claim the verified bundle's trust.
@@ -930,11 +1046,30 @@ class SkillRegistry(SkillSource):
         return matched
 
     def get_skill_content(self, name: str) -> str | None:
-        """Get the full content of a skill (for injection into prompt)."""
+        """Get the full content of a skill (for injection into prompt).
+
+        Returns ``None`` only when the skill does not exist or is disabled.
+        A skill without usable schema-v2 metadata raises
+        :class:`SkillMetadataUnavailable` with an operator-actionable message:
+        the fail-closed policy never serves a silently working v1 skill.
+        """
         skill = self._skills.get(_skill_key(name))
-        if skill and skill.source_type == "builtin-ecc":
+        if skill is None or not skill.enabled:
+            return None
+        if skill.skill_metadata is None:
+            reason = skill.metadata_error or (
+                "metadata-missing: skill has no schema_version 2 metadata; "
+                "run `machina skills enrich`"
+            )
+            _report_unusable_skill(skill.name, skill.file_path, reason)
+            raise SkillMetadataUnavailable(
+                f"skill {skill.name!r} at {skill.file_path} is unusable: {reason}. "
+                "Generate its metadata with `machina skills enrich` (or reinstall/learn it) "
+                "and reload the registry."
+            )
+        if skill.source_type == "builtin-ecc":
             return self._ecc_bundle.instructions(skill)
-        return skill.content if skill and skill.enabled else None
+        return skill.content
 
     # ─── Telemetry methods ─────────────────────────────────────────────────
 
@@ -1071,6 +1206,10 @@ class SkillRegistry(SkillSource):
             source=source,
             source_type=source_type,
             created_at=created_at,
+            metadata_error=(
+                "metadata-missing: newly created skill has no schema_version 2 metadata; "
+                "run `machina skills enrich`"
+            ),
         )
         self._skills[_skill_key(name)] = skill
         self._invalidate()
@@ -1134,7 +1273,54 @@ class SkillRegistry(SkillSource):
                 pass
             raise
 
-    def persist_skill_metadata(self, skill: Skill, metadata: SkillMetadata) -> None:
+    def _refresh_install_manifest(self, path: Path) -> None:
+        """Acknowledge a metadata rewrite in a repo-installed tree's manifest.
+
+        ``repo_install`` records a SHA-256 for every installed file. Persisting
+        generated metadata rewrites ``SKILL.md``, so the manifest must record
+        the new digest — otherwise every later reinstall refuses the (valid)
+        tree as diverged from its manifest. Skills without an install manifest
+        (learned/local/hub) are unaffected. Reporting is non-fatal: the
+        metadata write already succeeded.
+        """
+        manifest_file = path.parent / ".install-manifest.json"
+        if not manifest_file.is_file():
+            return
+        try:
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            files = manifest.get("files") if isinstance(manifest, dict) else None
+            key = f"{path.parent.name}/{path.name}"
+            if not isinstance(files, dict) or key not in files:
+                return
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if files.get(key) == digest:
+                return
+            files[key] = digest
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f"{manifest_file.name}.", suffix=".tmp", dir=str(manifest_file.parent)
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_name, manifest_file)
+            except BaseException:
+                try:
+                    os.unlink(temp_name)
+                except OSError:
+                    pass
+                raise
+        except (OSError, ValueError) as exc:
+            record_failure("skills.registry.manifest_refresh", exc)
+
+    def persist_skill_metadata(
+        self,
+        skill: Skill,
+        metadata: SkillMetadata,
+        *,
+        metadata_source: str = "generated",
+    ) -> None:
         """Merge validated v2 metadata into a skill's SKILL.md front matter.
 
         Only the front-matter block is re-serialized; the instruction body is
@@ -1175,7 +1361,7 @@ class SkillRegistry(SkillSource):
             body = text
         frontmatter.setdefault("name", skill.name)
         frontmatter.update(metadata.to_dict())
-        frontmatter["metadata_source"] = "generated"
+        frontmatter["metadata_source"] = metadata_source
         frontmatter["metadata_generated_at"] = datetime.now(UTC).isoformat()
         yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
         merged = f"---\n{yaml_text}---\n{body}"
@@ -1198,7 +1384,9 @@ class SkillRegistry(SkillSource):
             except OSError:
                 pass
             raise
+        self._refresh_install_manifest(path)
         skill.skill_metadata = metadata
+        skill.metadata_error = ""
         self._invalidate()
 
     def update_skill(
@@ -1446,7 +1634,10 @@ class SkillHub:
         skill = self.registry.get(name)
         if not skill:
             raise SkillHubError(f"Skill '{name}' not found")
-        content = self.registry.get_skill_content(skill.name)
+        try:
+            content = self.registry.get_skill_content(skill.name)
+        except SkillMetadataUnavailable as exc:
+            raise SkillHubError(str(exc)) from None
         if not isinstance(content, str) or not content:
             raise SkillHubError(
                 f"Skill '{name}' is disabled or has no readable content; enable it before publishing"
@@ -1464,6 +1655,12 @@ class SkillHub:
             "usage_count": skill.usage_count,
             "view_count": skill.view_count,
         }
+        # Carry validated v2 metadata through the hub so a reinstall does not
+        # force a fresh model generation (and so a hub-only install stays
+        # usable when the catalog is v2-only). Older hub entries simply omit
+        # this key; install falls back to one-time generation for those.
+        if getattr(skill, "skill_metadata", None) is not None:
+            hub_entry["metadata"] = skill.skill_metadata.to_dict()
 
         hub_file = self._hub_file(name)
         hub_file.write_text(json.dumps(hub_entry, indent=2), encoding="utf-8")
@@ -1562,16 +1759,59 @@ class SkillHub:
             source_type="hub",
             version=version,
         )
+        # Preserve v2 metadata carried by the hub entry instead of paying for a
+        # fresh generation (the entry was published from a validated skill).
+        # Invalid/stale payloads fall through to the one-time generation path.
+        metadata_payload = data.get("metadata")
+        if isinstance(metadata_payload, dict):
+            from machina.skills import metadata as metadata_module
+
+            candidate = dict(metadata_payload)
+            candidate.setdefault("schema_version", metadata_module.SCHEMA_VERSION)
+            candidate.setdefault("skill_id", entry_name)
+            parsed, diags = metadata_module.parse_skill_metadata(
+                candidate,
+                skill_name=entry_name,
+                content=content,
+                file_path=skill.file_path,
+            )
+            if parsed is not None and not any(d.severity == "error" for d in diags):
+                self.registry.persist_skill_metadata(skill, parsed, metadata_source="hub")
+                log_skill_metadata_event(skill.name, skill.file_path, status="present")
+                return skill
+            log_skill_metadata_event(
+                skill.name,
+                skill.file_path,
+                status="failed",
+                error_type="HubMetadataInvalid",
+            )
         # One-time v2 metadata generation for the freshly installed skill.
         # Deferred import keeps the registry's module-level machina edges pinned
-        # to the ports+observability seam (test_architecture_pairs); the sync
-        # bridge is fail-open and idempotent, so a failed generation never
-        # blocks or rolls back the install.
+        # to the ports+observability seam (test_architecture_pairs). Generation
+        # happens before this install reports success: a hub entry stores the
+        # instruction body only, so without metadata the skill would be
+        # unusable under the v2-only policy.
+        if skill.skill_metadata is not None:
+            log_skill_metadata_event(skill.name, skill.file_path, status="present")
+            return skill
         from machina.skills import enrich
 
         enrich.ensure_skill_metadata_sync(
             skill, agent_seam=enrich.default_agent_seam(), registry=self.registry
         )
+        if skill.skill_metadata is None:
+            # Fail closed: the file stays on disk (retryable), but this install
+            # is not a success and the skill is excluded from selection.
+            log_skill_metadata_event(
+                skill.name, skill.file_path, status="failed", error_type="SkillMetadataUnavailable"
+            )
+            raise SkillMetadataUnavailable(
+                f"Installed skill {skill.name!r} at {skill.file_path}, but metadata "
+                "generation failed: the skill is UNUSABLE (excluded from search and "
+                "selection). Retry with `machina skills enrich "
+                f"{skill.name}` and reload the registry."
+            )
+        log_skill_metadata_event(skill.name, skill.file_path, status="generated")
         return skill
 
     def get_hub_telemetry(self) -> list[dict[str, Any]]:

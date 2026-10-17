@@ -1,13 +1,53 @@
 ---
 name: prompt-engineering
-description: "Prompt engineering — system-instruction design, few-shot examples, context assembly, prompt templates, prompt testing"
+description: Prompt engineering — system-instruction design, few-shot examples, context assembly, prompt
+  templates, prompt testing
 triggers:
-  - "prompt"
-  - "system instructions"
-  - "few-shot"
-  - "context assembly"
-  - "template"
+- prompt
+- system instructions
+- few-shot
+- context assembly
+- template
 version: 1.0.0
+schema_version: 2
+skill_id: prompt-engineering
+task_families:
+- research
+capabilities:
+- test-authoring
+aliases:
+- prompts
+- system-prompts
+- few-shot
+- prompt-templates
+- prompt-testing
+stack:
+  languages: []
+  frameworks: []
+  independent: true
+preconditions:
+- An LLM or agent whose instructions you can edit
+- Example tasks or a benchmark to compare variants
+required_tools: []
+exclusions:
+- Fine-tuning or training model weights
+- Hardening against adversarial input (use prompt-injection-defense)
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: key-resources
+  heading: Key Resources
+  stage: inspect
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Prompt Engineering

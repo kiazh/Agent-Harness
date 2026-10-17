@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from machina import services
 from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, OPERATION_FAILED, RpcError
 from machina.gateway.features._common import _bool, _int, _skill, _str, _uuid
 from machina.observability.diagnostics import record_failure
+from machina.skills.registry import log_skill_metadata_event
 
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
@@ -118,24 +120,49 @@ def _registry():
     return skill_registry
 
 
-async def _generate_installed_metadata(gw: Gateway, skill: Any) -> None:
+async def _generate_installed_metadata(gw: Gateway, skill: Any) -> dict[str, Any]:
     """One-time v2 metadata generation for a freshly installed/learned skill.
 
     Install and learn surfaces call this once per new skill so the
     deterministic selector has metadata from first use. Idempotent (a skill
-    that already carries ``schema_version`` is skipped) and fail-open: a
-    provider or validation failure reports and leaves the skill on its
-    baseline path, never failing the install.
+    that already carries ``schema_version`` is skipped). Returns a structured
+    outcome — never a silent success: on failure the skill stays unusable and
+    ``metadataGenerated`` is ``False`` with an actionable ``metadataError``.
     """
     from machina.skills import enrich
 
+    if getattr(skill, "skill_metadata", None) is not None:
+        log_skill_metadata_event(skill.name, skill.file_path, status="present")
+        return {"metadataGenerated": False, "usable": True, "metadataError": None}
+    error_type = ""
     try:
         seam = enrich.default_agent_seam(
             provider=getattr(gw, "provider", None), model=getattr(gw, "model", None)
         )
-        await enrich.ensure_skill_metadata(skill, agent_seam=seam, registry=_registry())
-    except Exception as exc:  # metadata generation never fails an install
+        # Catalogue loading is CPU/IO-heavy; keep it off the event loop so a
+        # slow learn/install cannot stall unrelated turns.
+        registry = await asyncio.to_thread(_registry)
+        await enrich.ensure_skill_metadata(skill, agent_seam=seam, registry=registry)
+    except Exception as exc:  # reported, never swallowed as success
+        error_type = type(exc).__name__
         record_failure("gateway.skills.learn.metadata", exc)
+    usable = getattr(skill, "skill_metadata", None) is not None
+    if usable:
+        log_skill_metadata_event(skill.name, skill.file_path, status="generated")
+        return {"metadataGenerated": True, "usable": True, "metadataError": None}
+    log_skill_metadata_event(
+        skill.name,
+        skill.file_path,
+        status="failed",
+        error_type=error_type or "SkillMetadataUnavailable",
+    )
+    return {
+        "metadataGenerated": False,
+        "usable": False,
+        "metadataError": (
+            f"metadata generation failed ({error_type or 'no schema-v2 metadata produced'})"
+        ),
+    }
 
 
 async def skills_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -177,8 +204,14 @@ async def skills_learn(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         )
     except services.ServiceError as e:
         raise RpcError(OPERATION_FAILED, str(e)) from None
-    await _generate_installed_metadata(gw, skill)
-    return {"skill": _skill(skill)}
+    metadata = await _generate_installed_metadata(gw, skill)
+    result: dict[str, Any] = {"skill": _skill(skill), **metadata}
+    if not metadata["usable"]:
+        result["message"] = (
+            f"Skill {skill.name!r} was written but is UNUSABLE: {metadata['metadataError']}. "
+            f"Retry with `machina skills enrich {skill.name}` (or run it with --all)."
+        )
+    return result
 
 
 async def skills_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

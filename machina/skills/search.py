@@ -78,6 +78,14 @@ ALIAS_REPLACEMENTS = (
     ("c#", "csharp"),
     ("f#", "fsharp"),
     (".net", "dotnet"),
+    # Phrase folding runs before tokenization so multi-word web nouns reach the
+    # same deterministic expansions as their compound spellings. These are
+    # catalogue vocabulary, never model calls.
+    ("web-site", "website"),
+    ("web site", "website"),
+    ("web-app", "webapp"),
+    ("web app", "webapp"),
+    ("landing page", "landingpage"),
 )
 #: One-way synonym expansion; mirrors the legacy baseline so consumers see the
 #: same vocabulary ("pytest" reaches python-testing skills, etc.).
@@ -103,6 +111,20 @@ SYNONYM_EXPANSIONS = {
     "animate": "motion animation",
     "animation": "motion animation",
     "animations": "motion animation",
+    # Vague web-build requests ("make this website", "build a landing page")
+    # must reach the frontend catalogue deterministically. "web"/"frontend" are
+    # deliberately NOT technology markers: a vague request still has an
+    # unresolved stack (see machina.core.task_descriptor).
+    "website": "web frontend website",
+    "webpage": "web frontend website",
+    "webapp": "web frontend",
+    "landingpage": "landing page",
+    "html5": "html",
+    "htm": "html",
+    "xhtml": "html",
+    "css3": "css",
+    "scss": "css",
+    "sass": "css",
 }
 
 #: Technology markers used to infer a skill's stack from its name (legacy
@@ -114,7 +136,7 @@ TECHNOLOGY_MARKERS = frozenset(
     "python rust go react vue angular svelte solid solidjs django laravel kotlin swift swiftui "
     "java springboot quarkus perl cpp csharp fsharp dotnet rails redis postgres mysql clickhouse "
     "kubernetes docker fastapi nestjs nuxt nuxt4 vite bun flutter dart android nextjs pytorch "
-    "prisma netmiko cisco evm".split()
+    "prisma netmiko cisco evm html css javascript typescript".split()
 )
 #: Specialty markers behave like stacks: an unmentioned specialty keeps the
 #: skill visible but conditional (legacy parity with ``runtime._SPECIALTIES``).
@@ -474,13 +496,39 @@ def _is_distinguishing(index: Any, word: str) -> bool:
     return count / max(1, index.doc_count) <= _DISTINGUISHING_RATIO
 
 
+def _is_word_char(char: str) -> bool:
+    return bool(char) and char.isascii() and (char.isalnum() or char == "_")
+
+
+def _contains_whole_token(haystack: str, needle: str) -> bool:
+    """Plain-string, boundary-aware substring search (no regex compile).
+
+    Regex compilation dominated the warm search path (thousands of distinct
+    trigger/alias patterns per call), so boundary matching is done with
+    ``str.find``. Semantics match the previous lookarounds: neither flank may
+    be an ASCII word character, so ``c++``/``.net`` keep symmetric matching.
+    """
+
+    if not needle:
+        return False
+    start = 0
+    end_limit = len(haystack)
+    while True:
+        index = haystack.find(needle, start)
+        if index < 0:
+            return False
+        before = haystack[index - 1] if index else ""
+        after_index = index + len(needle)
+        after = haystack[after_index] if after_index < end_limit else ""
+        if not _is_word_char(before) and not _is_word_char(after):
+            return True
+        start = index + 1
+
+
 def _trigger_match(trigger: str, query: str) -> bool:
     """Boundary-aware trigger match; non-word characters (c++, .net) work."""
 
-    return (
-        re.search(r"(?<![A-Za-z0-9_])" + re.escape(trigger) + r"(?![A-Za-z0-9_])", query, re.I)
-        is not None
-    )
+    return _contains_whole_token(query.casefold(), trigger.casefold())
 
 
 def _contains_sequence(haystack: tuple[str, ...], needle: tuple[str, ...]) -> bool:
@@ -507,7 +555,7 @@ def _exact_name_match(
         if not spelling:
             continue
         folded = spelling.casefold()
-        if re.search(r"(?<![A-Za-z0-9_])" + re.escape(folded) + r"(?![A-Za-z0-9_])", raw):
+        if _contains_whole_token(raw, folded):
             return spelling
         tokens = tuple(normalize_tokens(folded))
         if tokens and _contains_sequence(descriptor.token_list, tokens):
@@ -931,6 +979,30 @@ def catalog_revision(skills: Iterable[Any]) -> str:
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
 
 
+def _cached_revision(index: Any, skill: Any) -> str:
+    """Revision from the index's registry-cached map, else hash on demand."""
+    revisions = getattr(index, "revisions", None)
+    if revisions:
+        cached = revisions.get(getattr(skill, "name", "").casefold())
+        if cached:
+            return cached
+    return content_revision(skill)
+
+
+def _cached_catalog_revision(index: Any) -> str:
+    """Catalog revision derived from the same cached per-skill revisions."""
+    revisions = getattr(index, "revisions", None)
+    if revisions:
+        lines = sorted(
+            f"{getattr(skill, 'name', '').casefold()}:{_cached_revision(index, skill)}:"
+            f"{int(bool(getattr(skill, 'enabled', True)))}:"
+            f"{getattr(skill, 'source_type', 'local')}"
+            for skill in index.skills
+        )
+        return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
+    return catalog_revision(index.skills)
+
+
 # ─── orchestration ───────────────────────────────────────────────────────────
 
 
@@ -1010,7 +1082,7 @@ def execute_search(
         candidate = SearchCandidate(
             skill_id=row.skill.name.casefold(),
             name=row.skill.name,
-            content_revision=content_revision(row.skill),
+            content_revision=_cached_revision(index, row.skill),
             score=sum(components.values()),
             score_components=components,
             matched_phrases=row.matched_phrases,
@@ -1049,7 +1121,7 @@ def execute_search(
         "weights_applied": bool(weights),
     }
     return SearchResult(
-        catalog_revision=catalog_revision(index.skills),
+        catalog_revision=_cached_catalog_revision(index),
         query_descriptor_revision=QUERY_DESCRIPTOR_REVISION,
         policy_revision=POLICY_REVISION,
         candidates=page,

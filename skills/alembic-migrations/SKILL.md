@@ -1,13 +1,58 @@
 ---
 name: alembic-migrations
-description: "Alembic migrations — schema versioning, migration scripts, rollback procedures, data migrations, migration testing"
+description: Alembic migrations — schema versioning, migration scripts, rollback procedures, data migrations,
+  migration testing
 triggers:
-  - "alembic"
-  - "migration"
-  - "schema change"
-  - "rollback"
-  - "version"
+- alembic
+- migration
+- schema change
+- rollback
+- version
 version: 1.0.0
+schema_version: 2
+skill_id: alembic-migrations
+task_families:
+- backend-api
+- maintenance
+capabilities:
+- database
+- migration
+aliases:
+- alembic
+- db-migrations
+- schema-migrations
+stack:
+  languages:
+  - python
+  - sql
+  frameworks:
+  - alembic
+  - sqlalchemy
+  independent: false
+preconditions:
+- SQLAlchemy models or an existing database schema
+- Alembic available or permission to initialize it
+required_tools:
+- shell
+exclusions:
+- Ad-hoc queries that do not change schema
+- NoSQL stores with no migration format
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: key-resources
+  heading: Key Resources
+  stage: inspect
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Alembic Migrations

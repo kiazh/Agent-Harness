@@ -1,14 +1,61 @@
 ---
 name: prompt-injection-defense
-description: "Prompt injection defense — trust boundaries, instruction hierarchy, indirect injection via tool output, input normalization, output handling, defense in depth"
+description: Prompt injection defense — trust boundaries, instruction hierarchy, indirect injection via
+  tool output, input normalization, output handling, defense in depth
 triggers:
-  - "prompt injection"
-  - "injection defense"
-  - "untrusted content"
-  - "indirect injection"
-  - "input hardening"
-  - "untrusted instructions"
+- prompt injection
+- injection defense
+- untrusted content
+- indirect injection
+- input hardening
+- untrusted instructions
 version: 1.0.0
+schema_version: 2
+skill_id: prompt-injection-defense
+task_families:
+- security-review
+capabilities:
+- error-handling
+aliases:
+- injection-defense
+- prompt-injection
+- untrusted-content
+- llm-security
+stack:
+  languages: []
+  frameworks: []
+  independent: true
+preconditions:
+- An LLM pipeline that ingests untrusted text or tool output
+- Visibility into prompt assembly and tool permissions
+required_tools: []
+exclusions:
+- Training-time safety alignment work
+- Classic web injection review such as SQLi or XSS
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: defense-in-depth
+  heading: Defense in Depth
+  stage: plan
+  requires_sections: []
+- id: pitfalls
+  heading: Pitfalls
+  stage: review
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+- id: key-resources
+  heading: Key Resources
+  stage: inspect
+  requires_sections: []
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Prompt Injection Defense

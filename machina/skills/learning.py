@@ -24,7 +24,14 @@ from machina.core.usage import usage_store
 from machina.db.connection import db
 from machina.memory.redaction import redact_secrets
 from machina.observability.diagnostics import record_failure
-from machina.skills.registry import Skill, SkillParser, SkillRegistry, skill_registry
+from machina.skills import enrich
+from machina.skills.registry import (
+    Skill,
+    SkillParser,
+    SkillRegistry,
+    log_skill_metadata_event,
+    skill_registry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,8 +211,51 @@ async def _auto_apply_capacity(executor: Any, agent_id: str) -> bool:
 class LearningReviewer:
     """Review a completed turn once and apply or stage a safe, read-before-write skill."""
 
-    def __init__(self, registry: SkillRegistry | None = None) -> None:
+    def __init__(self, registry: SkillRegistry | None = None, *, agent_seam: Any = None) -> None:
         self.registry = registry or skill_registry
+        # Injectable metadata-generation seam (tests use a fake; ``None``
+        # resolves the production provider seam lazily).
+        self._agent_seam = agent_seam
+
+    async def _generate_metadata(
+        self, name: str, content: str, *, file_path: str = ""
+    ) -> tuple[Any, str]:
+        """Generate validated v2 metadata for a learned skill, or ``(None, reason)``.
+
+        One model call per creation attempt. A failure is reported (structured
+        event) and returns the reason; callers keep the skill unusable rather
+        than pretending it can be selected.
+        """
+        diagnostics: list[Any] = []
+        seam = self._agent_seam or enrich.default_agent_seam()
+        metadata = await enrich.generate_skill_metadata(
+            content,
+            skill_name=name,
+            agent_seam=seam,
+            file_path=file_path,
+            diagnostics=diagnostics,
+        )
+        if metadata is None:
+            reason = (
+                diagnostics[0].message
+                if diagnostics
+                else "metadata generation produced no usable document"
+            )
+            log_skill_metadata_event(
+                name, file_path, status="failed", error_type="SkillMetadataUnavailable"
+            )
+            return None, reason
+        return metadata, ""
+
+    def _persist_metadata(self, skill: Skill, metadata: Any) -> str:
+        """Persist generated metadata; return an error string on failure."""
+        try:
+            self.registry.persist_skill_metadata(skill, metadata)
+        except OSError as exc:
+            record_failure("skills.learning.metadata.persist", exc)
+            return f"could not persist generated metadata ({type(exc).__name__})"
+        log_skill_metadata_event(skill.name, skill.file_path, status="generated")
+        return ""
 
     @staticmethod
     def _serialize(row: Any) -> dict[str, Any]:
@@ -346,11 +396,20 @@ class LearningReviewer:
             if config.get("learning_review_auto_apply") and await self._auto_apply_allowed(
                 agent_id
             ):
-                applied = await self._auto_publish(
+                applied, metadata_generated, metadata_error = await self._auto_publish(
                     row["id"], name, description, triggers, content, agent_id
                 )
                 if applied is not None:
-                    return self._serialize(applied)
+                    payload = self._serialize(applied)
+                    payload["metadataGenerated"] = metadata_generated
+                    payload["metadataError"] = metadata_error
+                    if not metadata_generated:
+                        payload["message"] = (
+                            f"Skill {name!r} was applied but is UNUSABLE: metadata "
+                            f"generation failed ({metadata_error}). Retry with "
+                            f"`machina skills enrich {name}`."
+                        )
+                    return payload
                 # The publish failed and its artifact was compensated; stage
                 # the proposal for manual approval instead of losing it.
             staged = await db.fetchrow(
@@ -431,15 +490,15 @@ class LearningReviewer:
         triggers: list[str],
         content: str,
         agent_id: str,
-    ) -> Any | None:
+    ) -> tuple[Any | None, bool, str]:
         """Publish a validated proposal as an enabled, source-tagged skill.
 
         Compensable like :meth:`approve`: the skill is written before the
         status commit, and any failure — a failed COMMIT included — removes
         the fresh artifact again, so a failed publish never leaves a live
-        skill behind. Returns the approved row, or ``None`` after
-        compensation (or a cap rejection; see below) so the caller can stage
-        the proposal for manual approval instead of losing it.
+        skill behind. Returns the approved row (plus metadata outcome), or
+        ``None`` after compensation (or a cap rejection; see below) so the
+        caller can stage the proposal for manual approval instead of losing it.
 
         The per-agent rolling 24h cap is rechecked inside the publication
         transaction under a transaction-scoped per-agent advisory lock: the
@@ -448,10 +507,17 @@ class LearningReviewer:
         the first's committed row and stage instead of publishing (review
         round 3, F7). The lock never spans the review's LLM call — that
         happened before this method — and is released on commit/rollback.
+
+        Metadata is generated (one call) before the transaction and persisted
+        after the skill is written. A generation failure keeps the skill on
+        disk but unusable (no v2 metadata ⇒ excluded from search/selection),
+        and the outcome is reported to the caller; it is never silent success.
         """
         source = f"learning-review:{review_id}"
         created = False
         applied = None
+        metadata, metadata_error = await self._generate_metadata(name, content)
+        metadata_generated = metadata is not None
         try:
             async with db.acquire() as conn:
                 async with conn.transaction():
@@ -460,8 +526,8 @@ class LearningReviewer:
                         f"learning_auto_apply:{agent_id}",
                     )
                     if not await _auto_apply_capacity(conn, agent_id):
-                        return None
-                    self.registry.create_skill(
+                        return None, False, ""
+                    skill = self.registry.create_skill(
                         name,
                         description,
                         content,
@@ -470,6 +536,9 @@ class LearningReviewer:
                         source_type="learned",
                     )
                     created = True
+                    if metadata is not None:
+                        metadata_error = self._persist_metadata(skill, metadata)
+                        metadata_generated = not metadata_error
                     applied = await conn.fetchrow(
                         "UPDATE learning_reviews SET status = 'approved', auto_applied = TRUE, "
                         "name = $2, description = $3, triggers = $4::jsonb, content = $5, "
@@ -490,12 +559,12 @@ class LearningReviewer:
             if isinstance(exc, asyncio.CancelledError):
                 raise
             record_failure("skills.learning.auto_apply", exc)
-            return None
+            return None, False, ""
         try:
             _audit("learning_auto_applied", review_id=str(review_id), skill=name)
         except Exception as _audit_error:  # pragma: no cover - audit is best-effort
             record_failure("skills.learning.auto_apply.audit", _audit_error)
-        return applied
+        return applied, metadata_generated, metadata_error
 
     @staticmethod
     def _validate(candidate: Any) -> tuple[str, str, list[str], str] | None:
@@ -612,12 +681,35 @@ class LearningReviewer:
                         # A crashed attempt left our artifact disabled; approval
                         # must publish it enabled.
                         self.registry.set_enabled(row["name"], True)
+                    # One metadata generation attempt per approval. A failure
+                    # keeps the published skill unusable and is reported in the
+                    # response; it never masquerades as a usable approval.
+                    metadata_generated = True
+                    metadata_error = ""
+                    target = self.registry.get(name)
+                    if target is not None and target.skill_metadata is None:
+                        metadata, metadata_error = await self._generate_metadata(
+                            name, row["content"], file_path=target.file_path
+                        )
+                        metadata_generated = metadata is not None
+                        if metadata is not None:
+                            metadata_error = self._persist_metadata(target, metadata)
+                            metadata_generated = not metadata_error
                     approved = await conn.fetchrow(
                         "UPDATE learning_reviews SET status = 'approved', reviewed_at = now() "
                         "WHERE id = $1 RETURNING *",
                         review_id,
                     )
-                    return self._serialize(approved)
+                    payload = self._serialize(approved)
+                    payload["metadataGenerated"] = metadata_generated
+                    payload["metadataError"] = metadata_error
+                    if not metadata_generated:
+                        payload["message"] = (
+                            f"Skill {name!r} was approved but is UNUSABLE: metadata "
+                            f"generation failed ({metadata_error}). Retry with "
+                            f"`machina skills enrich {name}`."
+                        )
+                    return payload
         except BaseException:
             # The review did not commit: the UPDATE, the transaction exit or
             # the COMMIT itself raised. Drop this review's artifact so it

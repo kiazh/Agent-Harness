@@ -1,15 +1,60 @@
 ---
 name: rate-limiting
-description: "Rate limiting & throttling — token bucket, leaky bucket, sliding window, quotas, backpressure, retry-after, fair sharing"
+description: Rate limiting & throttling — token bucket, leaky bucket, sliding window, quotas, backpressure,
+  retry-after, fair sharing
 triggers:
-  - "rate limit"
-  - "rate limiting"
-  - "throttling"
-  - "token bucket"
-  - "quota"
-  - "backpressure"
-  - "leaky bucket"
+- rate limit
+- rate limiting
+- throttling
+- token bucket
+- quota
+- backpressure
+- leaky bucket
 version: 1.0.0
+schema_version: 2
+skill_id: rate-limiting
+task_families:
+- backend-api
+capabilities:
+- performance
+- error-handling
+- api-design
+aliases:
+- rate-limit
+- throttling
+- quotas
+- backpressure
+- token-bucket
+stack:
+  languages: []
+  frameworks: []
+  independent: true
+preconditions:
+- an HTTP endpoint, gateway, or internal call path to protect
+- a shared counter store when running multiple instances
+- a traffic profile or load test to size limits
+required_tools:
+- redis
+exclusions:
+- CDN caching or static asset delivery
+- authentication and authorization design
+- database connection pool sizing
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: pitfalls
+  heading: Pitfalls
+  stage: review
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Rate Limiting & Throttling

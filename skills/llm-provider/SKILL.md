@@ -1,14 +1,69 @@
 ---
 name: llm-provider
-description: "LLM provider abstraction — OpenAI-compatible API, streaming, tool calling, token counting, retry logic, cost tracking, model fallback"
+description: LLM provider abstraction — OpenAI-compatible API, streaming, tool calling, token counting,
+  retry logic, cost tracking, model fallback
 triggers:
-  - "provider"
-  - "openrouter"
-  - "ollama"
-  - "streaming"
-  - "tool calling"
-  - "token count"
+- provider
+- openrouter
+- ollama
+- streaming
+- tool calling
+- token count
 version: 1.0.0
+schema_version: 2
+skill_id: llm-provider
+task_families:
+- backend-api
+- maintenance
+capabilities:
+- api-design
+- error-handling
+- observability
+- configuration
+aliases:
+- provider-abstraction
+- llm-client
+- openai-compatible
+- model-fallback
+- streaming-client
+- openrouter
+- provider-retry
+stack:
+  languages:
+  - python
+  - typescript
+  frameworks:
+  - openai
+  - litellm
+  - openrouter
+  - ollama
+  independent: true
+preconditions:
+- Provider API keys or a local runtime are configured
+- Target models and their context limits are known
+- A token counting library is available
+required_tools:
+- tiktoken
+exclusions:
+- Provider access is already fully abstracted and only prompt text changes
+- No outbound model calls are involved
+- Model quality benchmarking rather than client plumbing
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: key-resources
+  heading: Key Resources
+  stage: inspect
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # LLM Provider Abstraction

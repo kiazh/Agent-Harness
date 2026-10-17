@@ -39,6 +39,8 @@ from machina.core.session import session_manager
 from machina.db.connection import db
 from machina.observability.diagnostics import record_failure
 from machina.observability.tracing import span
+from machina.skills import enrich
+from machina.skills.registry import log_skill_metadata_event
 
 logger = logging.getLogger(__name__)
 
@@ -936,7 +938,20 @@ def compress(
     _run(_compress())
 
 
-@app.command(name="skills")
+skills_app = typer.Typer(
+    name="skills",
+    help="Inspect skills and backfill missing schema-v2 metadata.",
+    invoke_without_command=True,
+)
+
+
+@skills_app.callback()
+def skills(ctx: typer.Context):
+    """List all loaded skills (default when no subcommand is given)."""
+    if ctx.invoked_subcommand is None:
+        skills_list()
+
+
 def skills_list():
     """List all loaded skills."""
     from machina.skills.registry import skill_registry
@@ -947,6 +962,19 @@ def skills_list():
         console.print("[yellow]No skills found.[/yellow]")
         return
     output.skills_table(all_skills)
+    # Fail-closed skills stay visible to operators, but never work silently:
+    # report them and point at metadata generation.
+    unusable = [skill for skill in all_skills if skill.skill_metadata is None]
+    if unusable:
+        console.print(
+            f"[red]{len(unusable)} skill(s) unusable (no valid schema-v2 metadata):[/red] "
+            + ", ".join(escape(skill.name) for skill in unusable[:20])
+            + (" …" if len(unusable) > 20 else "")
+        )
+        console.print(
+            "[yellow]Run metadata generation (`machina skills enrich <name>` or "
+            "`machina skills enrich --all`) to make them usable.[/yellow]"
+        )
 
 
 @app.command(name="learn")
@@ -969,16 +997,121 @@ def learn(
     except services.ServiceError as e:
         output.error(str(e))
         raise typer.Exit(1) from None
+    generation_error = ""
     try:
-        from machina.skills import enrich
-
         enrich.ensure_skill_metadata_sync(skill, agent_seam=enrich.default_agent_seam())
-    except Exception as exc:  # metadata generation never fails a learn
+    except Exception as exc:  # reported below as a failed learn, never silent
+        generation_error = type(exc).__name__
         record_failure("cli.learn.metadata", exc)
+    if skill.skill_metadata is None:
+        log_skill_metadata_event(
+            skill.name,
+            skill.file_path,
+            status="failed",
+            error_type=generation_error or "SkillMetadataUnavailable",
+        )
+        output.error(
+            f"Skill '{skill.name}' was written to {skill.file_path} but is UNUSABLE: "
+            "metadata generation failed "
+            f"({generation_error or 'no schema-v2 metadata produced'}). "
+            f"Retry with `machina skills enrich {skill.name}`."
+        )
+        raise typer.Exit(1)
+    log_skill_metadata_event(skill.name, skill.file_path, status="generated")
     console.print(f"[green]Skill '{escape(skill.name)}' created successfully![/green]")
     console.print(f"  Description: {escape(skill.description)}")
     console.print(f"  Triggers: {escape(', '.join(skill.triggers))}")
     console.print(f"  Source: {escape(skill.source)}")
+
+
+@skills_app.command("enrich")
+def skills_enrich(
+    name: str | None = typer.Argument(None, help="Skill to enrich (omit with --all)"),
+    all_: bool = typer.Option(
+        False, "--all", help="Backfill metadata for every skill that lacks it"
+    ),
+):
+    """Generate missing schema-v2 metadata for installed/local skills.
+
+    This is the explicit operator retry path for a failed install/learn. It is
+    idempotent (valid metadata is never regenerated) and never runs at query
+    time. Exits nonzero when any requested skill remains unusable.
+    """
+    from machina.skills.registry import skill_registry
+
+    if not all_ and not name:
+        output.error("Provide a skill NAME or --all.")
+        raise typer.Exit(1)
+    skill_registry.load_all(refresh=True)
+    if all_:
+        # Bundled ECC content is package data: metadata lives in its revision-
+        # keyed sidecar, not in a writable SKILL.md.
+        targets = [
+            skill
+            for skill in sorted(skill_registry.list_skills(), key=lambda item: item.name)
+            if skill.source_type != "builtin-ecc"
+        ]
+    else:
+        target = skill_registry.get(name)
+        if target is None:
+            output.error(f"Skill '{name}' not found.")
+            raise typer.Exit(1)
+        if target.source_type == "builtin-ecc":
+            output.error(
+                f"Skill '{name}' is bundled ECC content; its metadata comes from the "
+                "revision-keyed enrichment sidecar and cannot be backfilled here."
+            )
+            raise typer.Exit(1)
+        targets = [target]
+
+    generated = 0
+    skipped = 0
+    failed: list[str] = []
+    for skill in targets:
+        if skill.skill_metadata is not None:
+            skipped += 1
+            console.print(f"  [dim]{escape(skill.name)}: already usable (skipped)[/dim]")
+            log_skill_metadata_event(skill.name, skill.file_path, status="present")
+            continue
+        error_type = ""
+        try:
+            enrich.ensure_skill_metadata_sync(
+                skill, agent_seam=enrich.default_agent_seam(), registry=skill_registry
+            )
+        except Exception as exc:  # reported per skill below
+            error_type = type(exc).__name__
+            record_failure("cli.skills.enrich", exc)
+        if skill.skill_metadata is not None:
+            generated += 1
+            console.print(f"  [green]{escape(skill.name)}: metadata generated[/green]")
+            log_skill_metadata_event(skill.name, skill.file_path, status="generated")
+        else:
+            failed.append(skill.name)
+            reason = skill.metadata_error or "no schema-v2 metadata produced"
+            console.print(
+                f"  [red]{escape(skill.name)}: FAILED — still UNUSABLE "
+                f"({escape(error_type or reason)})[/red]"
+            )
+            log_skill_metadata_event(
+                skill.name,
+                skill.file_path,
+                status="failed",
+                error_type=error_type or "SkillMetadataUnavailable",
+            )
+    console.print(
+        f"[bold]Metadata enrichment:[/bold] {generated} generated, "
+        f"{skipped} already usable, {len(failed)} failed."
+    )
+    if failed:
+        console.print(
+            "[red]Still unusable: "
+            + ", ".join(escape(item) for item in failed)
+            + "[/red] — check provider configuration and re-run `machina skills enrich`."
+        )
+        raise typer.Exit(1)
+
+
+app.add_typer(skills_app, name="skills")
 
 
 @app.command(name="curator")

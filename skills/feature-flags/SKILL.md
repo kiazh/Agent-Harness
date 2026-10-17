@@ -1,15 +1,63 @@
 ---
 name: feature-flags
-description: "Feature flags & progressive delivery — kill switches, staged rollout, targeting rules, flag lifecycle, experimentation, safe defaults"
+description: Feature flags & progressive delivery — kill switches, staged rollout, targeting rules, flag
+  lifecycle, experimentation, safe defaults
 triggers:
-  - "feature flag"
-  - "feature flags"
-  - "progressive rollout"
-  - "staged rollout"
-  - "kill switch"
-  - "unleash"
-  - "targeting rule"
+- feature flag
+- feature flags
+- progressive rollout
+- staged rollout
+- kill switch
+- unleash
+- targeting rule
 version: 1.0.0
+schema_version: 2
+skill_id: feature-flags
+task_families:
+- deployment
+- backend-api
+capabilities:
+- configuration
+- observability
+aliases:
+- feature-flag
+- flags
+- progressive-delivery
+- kill-switch
+- rollout
+- unleash
+stack:
+  languages: []
+  frameworks:
+  - openfeature
+  - unleash
+  - launchdarkly
+  independent: true
+preconditions:
+- a flag service or SDK available to the service
+- a release path that can read flag state at runtime
+- a primary metric to judge the rollout
+required_tools: []
+exclusions:
+- permanent application configuration values
+- statistical experiment analysis (use data-analysis)
+- authentication or authorization policy decisions
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: pitfalls
+  heading: Pitfalls
+  stage: review
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Feature Flags & Progressive Delivery

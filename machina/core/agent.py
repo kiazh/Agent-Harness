@@ -68,6 +68,7 @@ from machina.observability.diagnostics import record_failure
 from machina.observability.tracing import span
 from machina.plugins.registry import plugin_registry
 from machina.rag.pipeline import RAGPipeline
+from machina.skills import query_expansion
 from machina.tools.base import registry
 
 __all__ = [
@@ -724,6 +725,7 @@ class BaseReActAgent:
         # Prompt sections assemble in machina.core.prompt (moves-only): the
         # composition order below matches the previous inline version exactly,
         # so the assembled text is byte-identical.
+        await query_expansion.prepare_turn(user_message)
         system_prompt = build_system_prompt(
             self.soul_spec,
             self.allowed_tools,

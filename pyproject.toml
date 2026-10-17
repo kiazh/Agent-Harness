@@ -117,6 +117,7 @@ exclude = [
     "!skills/supply-chain-security/",
     "!skills/terraform-iac/",
     "!skills/testing-qa/",
+    "!skills/web-frontend/",
     "!skills/web-search/",
     "!skills/yaml-agent-config/",
     "!skills/alembic-migrations/**",
@@ -152,6 +153,7 @@ exclude = [
     "!skills/supply-chain-security/**",
     "!skills/terraform-iac/**",
     "!skills/testing-qa/**",
+    "!skills/web-frontend/**",
     "!skills/web-search/**",
     "!skills/yaml-agent-config/**",
 ]
@@ -204,6 +206,7 @@ exclude = [
     "!skills/supply-chain-security/",
     "!skills/terraform-iac/",
     "!skills/testing-qa/",
+    "!skills/web-frontend/",
     "!skills/web-search/",
     "!skills/yaml-agent-config/",
     "!skills/alembic-migrations/**",
@@ -239,6 +242,7 @@ exclude = [
     "!skills/supply-chain-security/**",
     "!skills/terraform-iac/**",
     "!skills/testing-qa/**",
+    "!skills/web-frontend/**",
     "!skills/web-search/**",
     "!skills/yaml-agent-config/**",
 ]

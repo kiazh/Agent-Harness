@@ -1,15 +1,67 @@
 ---
 name: redis-caching
-description: "Redis & caching — data structures, cache invalidation, TTLs, eviction policy, stampede protection, distributed locks, pub/sub"
+description: Redis & caching — data structures, cache invalidation, TTLs, eviction policy, stampede protection,
+  distributed locks, pub/sub
 triggers:
-  - "redis"
-  - "cache"
-  - "caching"
-  - "cache invalidation"
-  - "ttl"
-  - "cache stampede"
-  - "memoization"
+- redis
+- cache
+- caching
+- cache invalidation
+- ttl
+- cache stampede
+- memoization
 version: 1.0.0
+schema_version: 2
+skill_id: redis-caching
+task_families:
+- backend-api
+- maintenance
+capabilities:
+- performance
+- configuration
+- error-handling
+aliases:
+- redis
+- caching
+- cache
+- ttl
+- cache-invalidation
+- cache-stampede
+stack:
+  languages: []
+  frameworks:
+  - redis
+  independent: true
+preconditions:
+- Redis or a compatible cache is reachable from the service
+- Cache keys, value shapes, and TTL policy are under your control
+- A way to measure hit ratio and origin latency exists
+required_tools:
+- redis-cli
+exclusions:
+- Designing durable primary storage
+- Cache is managed externally and cannot be changed
+- SQL indexing or query tuning (use postgresql-pgvector)
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: pitfalls
+  heading: Pitfalls
+  stage: review
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+- id: key-resources
+  heading: Key Resources
+  stage: inspect
+  requires_sections: []
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Redis & Caching

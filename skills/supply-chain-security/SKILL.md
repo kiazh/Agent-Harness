@@ -1,15 +1,65 @@
 ---
 name: supply-chain-security
-description: "Software supply chain security — SBOMs, dependency provenance, artifact signing, SLSA levels, pinned versions, reproducible builds"
+description: Software supply chain security — SBOMs, dependency provenance, artifact signing, SLSA levels,
+  pinned versions, reproducible builds
 triggers:
-  - "supply chain"
-  - "sbom"
-  - "slsa"
-  - "artifact signing"
-  - "dependency provenance"
-  - "sigstore"
-  - "reproducible build"
+- supply chain
+- sbom
+- slsa
+- artifact signing
+- dependency provenance
+- sigstore
+- reproducible build
 version: 1.0.0
+schema_version: 2
+skill_id: supply-chain-security
+task_families:
+- security-review
+- deployment
+capabilities:
+- configuration
+- migration
+aliases:
+- sbom
+- slsa
+- supply-chain
+- sigstore
+- artifact-signing
+- provenance
+stack:
+  languages: []
+  frameworks:
+  - sigstore
+  - cyclonedx
+  - slsa
+  independent: true
+preconditions:
+- a build pipeline producing release artifacts
+- lock files or dependency manifests to pin
+- access to artifact registry and signing identity
+required_tools:
+- sigstore
+- cyclonedx
+exclusions:
+- runtime exploitation or penetration testing
+- license compliance auditing
+- application feature development
+sections:
+- id: core-skills
+  heading: Core Skills
+  stage: implement
+  requires_sections: []
+- id: pitfalls
+  heading: Pitfalls
+  stage: review
+  requires_sections: []
+- id: practice-project
+  heading: Practice Project
+  stage: verify
+  requires_sections:
+  - core-skills
+metadata_source: generated
+metadata_generated_at: '2026-10-17T05:24:37.333192+00:00'
 ---
 
 # Software Supply Chain Security

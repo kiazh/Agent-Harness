@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import weakref
 from collections import Counter
 from dataclasses import replace
@@ -19,10 +21,33 @@ from machina.skills.planned_steps import (
     plan_disclosure,
     task_revision_from,
 )
+from machina.skills.query_expansion import Expansion, current_expansion, merge_into_query
 from machina.skills.registry import Skill, SkillRegistry
 from machina.skills.revisions import RevisionRegistry, task_state_revision
 
 _INDEXES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+#: Per-registry content-revision cache: ``name -> (file_path, (mtime_ns, size) |
+#: None, version, metadata digest or None, revision)``. Hashing every skill body
+#: on every warm search was the measured warm-path cost (A6 ledger); the key is
+#: invalidated by a stat change, a version change, or a metadata change, while
+#: an out-of-band body edit with a changed mtime still recomputes (P0-8
+#: freshness). The metadata digest (not object identity) keeps unchanged skills
+#: cached across a reload, because reload re-parses every metadata object.
+_REVISION_CACHES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _metadata_digest(metadata: object | None) -> str | None:
+    if metadata is None:
+        return None
+    to_dict = getattr(metadata, "to_dict", None)
+    if callable(to_dict):
+        try:
+            return json.dumps(to_dict(), sort_keys=True, default=str)
+        except Exception:  # digest must never break search; fall back to repr
+            return repr(metadata)
+    return repr(metadata)
+
+
 # Alias normalization (stopwords, synonyms, C++/C#/.NET folding) lives in
 # ``machina.skills.search`` so the ranking and the explanations it builds use
 # one home. ``_TECHNOLOGIES`` is re-exported here because
@@ -35,9 +60,47 @@ def _words(text: str) -> list[str]:
     return search_module.normalize_tokens(text)
 
 
+def _skill_revision(registry: SkillRegistry, skill: Skill) -> str:
+    """Content revision for *skill*, cached across warm searches.
+
+    Cache identity follows the on-disk source (path, mtime, size), the declared
+    version, and the metadata object identity. A body edit changes the stat and
+    forces a fresh hash; a metadata generation/persist swaps the frozen object.
+    When the file cannot be stat'ed the revision is recomputed every call
+    (correct, just not cached).
+    """
+    path = getattr(skill, "file_path", "") or ""
+    try:
+        stat = os.stat(path)
+        stat_key: tuple[int, int] | None = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        stat_key = None
+    version = str(getattr(skill, "version", ""))
+    digest = _metadata_digest(getattr(skill, "skill_metadata", None))
+    cache = _REVISION_CACHES.setdefault(registry, {})
+    key = skill.name.casefold()
+    if stat_key is not None:
+        entry = cache.get(key)
+        if (
+            entry is not None
+            and entry[0] == path
+            and entry[1] == stat_key
+            and entry[2] == version
+            and entry[3] == digest
+        ):
+            return entry[4]
+    revision = search_module.content_revision(skill)
+    if stat_key is not None:
+        cache[key] = (path, stat_key, version, digest, revision)
+    return revision
+
+
 class SkillIndex:
     def __init__(self, skills: list[Skill], *, include_disabled: bool = False):
         self.skills = list(skills) if include_disabled else [s for s in skills if s.enabled]
+        # Filled by ``search_skills`` (revision identities are registry-cached,
+        # not re-hashed by ``execute_search`` on every call).
+        self.revisions: dict[str, str] = {}
         self.docs = []
         self.names = []
         df: Counter = Counter()
@@ -67,6 +130,7 @@ def search_skills(
     include_excluded: bool = False,
     available_tools: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
     typo_tolerance: bool = False,
+    expansion: Expansion | None = None,
 ) -> search_module.SearchResult:
     """Typed, deterministic skill search (spec §9) over this registry.
 
@@ -83,6 +147,10 @@ def search_skills(
     """
     skills.load_all()
     all_skills = skills.list_skills()
+    # Fail closed: a skill without usable schema-v2 metadata is never indexed,
+    # so it can never be selected automatically or returned by search. It stays
+    # visible to operators through ``skill_list`` browsing and diagnostics.
+    usable_skills = [skill for skill in all_skills if skill.skill_metadata is not None]
     # Registry replaces its objects on reload; telemetry changes retain them.
     # The signature must therefore cover what the cached index serves: the
     # routing fields AND the content-derived revision (body + version + bundle
@@ -91,6 +159,9 @@ def search_skills(
     # name/description/triggers/enabled unchanged would keep serving the stale
     # index: candidates would carry a ``content_revision`` that the very next
     # section read rejects as stale (P0-8 / spec §11 freshness contract).
+    # The revision itself is cached by stat/metadata identity (``_skill_revision``)
+    # so a warm search never re-hashes every body.
+    revisions = {skill.name.casefold(): _skill_revision(skills, skill) for skill in usable_skills}
     signature = tuple(
         (
             s.name,
@@ -98,19 +169,26 @@ def search_skills(
             tuple(s.triggers),
             s.enabled,
             getattr(s, "source_type", "local"),
-            search_module.content_revision(s),
+            revisions[s.name.casefold()],
         )
-        for s in all_skills
+        for s in usable_skills
     )
     cached = _INDEXES.get(skills)
     if cached is None or cached[0] != signature:
-        cached = (signature, SkillIndex(all_skills))
+        new_index = SkillIndex(usable_skills)
+        new_index.revisions = revisions
+        cached = (signature, new_index)
         _INDEXES[skills] = cached
     index = cached[1]
-    if include_excluded and any(not skill.enabled for skill in all_skills):
+    if include_excluded and any(not skill.enabled for skill in usable_skills):
         # Browsing is a rare, user-triggered path: build a one-shot full index
         # instead of growing the per-turn cache the automatic path shares.
-        index = SkillIndex(all_skills, include_disabled=True)
+        index = SkillIndex(usable_skills, include_disabled=True)
+        index.revisions = revisions
+    if expansion is not None:
+        # Expanded routing vocabulary only enriches the text the one scorer
+        # reads; exact name/id precedence and tie-breaks are untouched.
+        query = merge_into_query(query, expansion)
     return search_module.execute_search(
         index,
         query,
@@ -128,6 +206,7 @@ def automatic_skills(
     *,
     weights: dict[str, float] | None = None,
     available_tools: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+    expansion: Expansion | None = None,
 ) -> list[Skill]:
     """Canonical automatic-selection order: enabled, non-excluded skills.
 
@@ -154,12 +233,18 @@ def automatic_skills(
     technical skill must not crowd out a generic relevant one).
     """
 
+    # Load before sizing the page: a fresh registry has no skills until the
+    # first load, and computing the limit first would pin every automatic
+    # selection to a single candidate (found while adding v2 metadata to the
+    # shipped catalog).
+    skills.load_all()
     result = search_skills(
         skills,
         query,
         weights=weights,
         available_tools=available_tools,
         limit=max(1, len(skills.list_skills())),
+        expansion=expansion,
     )
     words = set(_words(query))
     eligible: list[tuple[search_module.SearchCandidate, Skill]] = []
@@ -231,6 +316,7 @@ def automatic_skill_context(
     activated: list[str] | None = None,
     task_state: dict | None = None,
     stage_state: object = None,
+    expansion: Expansion | None = None,
 ) -> str:
     """Activate relevant workflows before the first model call, never all bodies.
 
@@ -251,6 +337,8 @@ def automatic_skill_context(
         return ""
     from machina.skills.workflow import plan_workflow
 
+    if expansion is None:
+        expansion = current_expansion(query)
     workflow = plan_workflow(
         query,
         skills=skills,
@@ -258,6 +346,7 @@ def automatic_skill_context(
         goal=goal,
         skill_weights=skill_weights,
         task_state=task_state,
+        expansion=expansion,
     )
     # Selection is an observed event (spec §13): bounded, structured reasons
     # derived from the same planned steps the disclosure uses.
