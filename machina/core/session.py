@@ -146,7 +146,7 @@ class SessionManager:
             return cached
         row = await db.fetchrow(
             """
-            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, is_fork, delegation_authority, created_at, last_activity
             FROM sessions WHERE id = $1
             """,
             session_id,
@@ -167,7 +167,7 @@ class SessionManager:
         """
         row = await db.fetchrow(
             """
-            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, is_fork, delegation_authority, created_at, last_activity
             FROM sessions WHERE id = $1
             """,
             session_id,
@@ -182,7 +182,7 @@ class SessionManager:
         """Get the most recently active session."""
         row = await db.fetchrow(
             """
-            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, is_fork, delegation_authority, created_at, last_activity
             FROM sessions
             WHERE status = 'active'
             ORDER BY last_activity DESC
@@ -353,7 +353,7 @@ class SessionManager:
         """Full-text search over session titles."""
         rows = await db.fetch(
             """
-            SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
+            SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, parent_session_id, is_fork, delegation_authority, created_at, last_activity
             FROM sessions
             WHERE to_tsvector('english', COALESCE(title, '')) @@ plainto_tsquery('english', $1)
             ORDER BY ts_rank(to_tsvector('english', COALESCE(title, '')), plainto_tsquery('english', $1)) DESC, last_activity DESC
@@ -376,16 +376,22 @@ class SessionManager:
             raise ValueError(f"Session {session_id} not found")
 
         fork_title = title or f"Fork of {source.title or 'untitled'}"
-        state_msgpack = msgpack.packb(source.state or {}, use_bin_type=True)
+        # Internal cursors point at source-session chunk ids/state; a fork
+        # copies chunks under new ids, so carrying them would corrupt the
+        # branch's consolidation/compaction bookkeeping (combined #33).
+        fork_state = dict(source.state or {})
+        for key in ("mem_consolidated_up_to", "stagnation_stop", "last_auto_compact_tokens"):
+            fork_state.pop(key, None)
+        state_msgpack = msgpack.packb(fork_state, use_bin_type=True)
         async with db.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, ancestor_session_ids, ancestor_agent_ids)
-                    VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10,
+                    INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget, execution_mode, parent_session_id, is_fork, delegation_authority, ancestor_session_ids, ancestor_agent_ids)
+                    VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, TRUE, $10,
                         COALESCE((SELECT ARRAY[id] || ancestor_session_ids FROM sessions WHERE id = $11), '{}'),
                         COALESCE((SELECT ARRAY[agent_id] || ancestor_agent_ids FROM sessions WHERE id = $11), '{}'))
-                    RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
+                    RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, is_fork, delegation_authority, created_at, last_activity
                     """,
                     fork_title,
                     source.agent_id,
@@ -451,7 +457,7 @@ class SessionManager:
         if status:
             rows = await db.fetch(
                 """
-                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
+                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, parent_session_id, is_fork, delegation_authority, created_at, last_activity
                 FROM sessions
                 WHERE status = $1
                 ORDER BY last_activity DESC, id DESC
@@ -464,7 +470,7 @@ class SessionManager:
         else:
             rows = await db.fetch(
                 """
-                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
+                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, parent_session_id, is_fork, delegation_authority, created_at, last_activity
                 FROM sessions
                 ORDER BY last_activity DESC, id DESC
                 LIMIT $1 OFFSET $2
@@ -491,6 +497,7 @@ class SessionManager:
             context_budget=row["context_budget"],
             execution_mode=row.get("execution_mode", "ask"),
             parent_session_id=row.get("parent_session_id"),
+            is_fork=bool(row.get("is_fork", False)),
             delegation_authority=(
                 json.loads(row["delegation_authority"])
                 if isinstance(row.get("delegation_authority"), str)

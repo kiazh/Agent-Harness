@@ -38,6 +38,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_claim ON sessions(claim_expires_at) WHER
 -- Persist routing independently of live permission grants. Legacy sessions
 -- migrate to ask; changing the global default affects only new sessions.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'ask';
+-- User forks are independent conversation branches: the marker lets usage
+-- accounting skip ancestor budgets and lets the UI keep them out of the
+-- subagent family while parent_session_id/ancestor ids remain available for
+-- artifact ACL provenance.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS is_fork BOOLEAN NOT NULL DEFAULT FALSE;
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
                    WHERE conrelid = 'sessions'::regclass

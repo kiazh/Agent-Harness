@@ -119,7 +119,13 @@ class UsageStore:
                 raise
             except Exception as e:
                 raise DatabaseError("usage accounting unavailable") from e
-        call_kwargs = {"messages": messages, "tools": tools or [], **kwargs}
+        call_kwargs = {
+            "messages": messages,
+            "tools": tools or [],
+            "session_id": session_id,
+            "agent_id": agent_id,
+            **kwargs,
+        }
         if max_tokens != 4096:
             call_kwargs["max_tokens"] = max_tokens
         try:
@@ -135,10 +141,15 @@ class UsageStore:
         try:
             from machina.core.background_tasks import await_joined
 
+            usage = (
+                {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                if getattr(response, "cache_hit", False)
+                else getattr(response, "usage", {})
+            )
             await await_joined(
                 self.finish(
                     reservation,
-                    getattr(response, "usage", {}),
+                    usage,
                     model=getattr(response, "model", None),
                 )
             )
@@ -170,13 +181,20 @@ class UsageStore:
                 lineage = await conn.fetchrow(
                     """
                     SELECT ancestor_session_ids AS session_ids,
-                           ancestor_agent_ids AS agent_ids
+                           ancestor_agent_ids AS agent_ids,
+                           is_fork
                     FROM sessions WHERE id = $1
                     """,
                     session_id,
                 )
-                ancestor_sessions = list((lineage or {}).get("session_ids", []))
-                ancestor_agents = list((lineage or {}).get("agent_ids", []))
+                if (lineage or {}).get("is_fork"):
+                    # A user fork is an independent branch, not a delegated
+                    # child: its spend must not consume the source budgets.
+                    ancestor_sessions = []
+                    ancestor_agents = []
+                else:
+                    ancestor_sessions = list((lineage or {}).get("session_ids", []))
+                    ancestor_agents = list((lineage or {}).get("agent_ids", []))
                 session_scopes = sorted({session_id, *ancestor_sessions}, key=str)
                 agent_scopes = sorted({agent_id, *ancestor_agents})
                 scopes = [("agent", aid) for aid in agent_scopes] + [

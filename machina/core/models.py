@@ -40,6 +40,8 @@ class Session:
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
     execution_mode: str = "ask"
     parent_session_id: uuid.UUID | None = None
+    #: User-created fork (not a delegated subagent).
+    is_fork: bool = False
     delegation_authority: dict[str, Any] = field(default_factory=dict)
 
 
@@ -82,6 +84,9 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
     tool_calls: list[dict] = field(default_factory=list)
+    #: True when this response came from the local response cache rather than
+    #: a provider call. Accounting uses it to avoid billing a cache hit.
+    cache_hit: bool = False
 
 
 @dataclass

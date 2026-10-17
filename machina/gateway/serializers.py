@@ -31,8 +31,15 @@ def session_to_dict(session: Session) -> dict[str, Any]:
         # session that spawned them; root sessions carry null. The UI uses it
         # to build the agent tab strip (parent family grouping).
         "parentSessionId": (
-            str(session.parent_session_id) if getattr(session, "parent_session_id", None) else None
+            None
+            if getattr(session, "is_fork", False)
+            else (
+                str(session.parent_session_id)
+                if getattr(session, "parent_session_id", None)
+                else None
+            )
         ),
+        "isFork": bool(getattr(session, "is_fork", False)),
     }
 
 
