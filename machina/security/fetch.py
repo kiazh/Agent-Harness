@@ -16,7 +16,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 import ssl
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 MAX_BYTES = 200_000
 MAX_REDIRECTS = 3
@@ -217,10 +217,20 @@ def pinned_fetch(url: str, *, max_bytes: int = MAX_BYTES, timeout: float = CONNE
 
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        parsed = urlparse(current)
+        # urlparse silently strips some controls. Reject them before parsing,
+        # including on redirect hops, so they cannot change the wire request.
+        if any(ord(char) < 32 or ord(char) == 127 for char in current):
+            raise FetchError("URL contains control characters")
+        try:
+            parsed = urlparse(current)
+            hostname = (parsed.hostname or "").encode("idna").decode("ascii")
+            path = quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
+            if parsed.query:
+                path += "?" + quote(parsed.query, safe="/?%:@!$&'()*+,;=-._~")
+        except (ValueError, UnicodeError):
+            raise FetchError("invalid URL encoding or authority") from None
         if parsed.scheme not in ("http", "https"):
             raise FetchError(f"unsupported scheme in {current!r}")
-        hostname = parsed.hostname or ""
         if not hostname or hostname.lower() in ("localhost", "localhost.localdomain"):
             raise FetchError(f"rejected host {hostname!r}")
         try:
@@ -235,9 +245,6 @@ def pinned_fetch(url: str, *, max_bytes: int = MAX_BYTES, timeout: float = CONNE
         for ip in ips:
             _check_ip_public(ip)
         target_ip = ips[0]
-        path = parsed.path or "/"
-        if parsed.query:
-            path += "?" + parsed.query
         raw = socket.socket(
             socket.AF_INET6 if ":" in target_ip else socket.AF_INET, socket.SOCK_STREAM
         )
